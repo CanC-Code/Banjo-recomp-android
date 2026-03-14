@@ -1,0 +1,47 @@
+name: Automated Codebase Analysis
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  # This allows you to click a button in the GitHub UI to run it manually
+  workflow_dispatch: 
+
+jobs:
+  run-scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout pristine codebase
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 🚀 Execute Analyzer Scripts
+        run: |
+          # Ensure the directory exists just in case
+          mkdir -p scripts
+          
+          # Find and execute every Python file in the scripts folder
+          for script in scripts/*.py; do
+            if [ -f "$script" ]; then
+              echo "========================================"
+              echo "⚙️ RUNNING: $script"
+              echo "========================================"
+              python "$script"
+            fi
+          done
+
+      - name: 📦 Upload Output Artifacts
+        uses: actions/upload-artifact@v4
+        # We upload always, even if a script failed halfway through, 
+        # so you can see what it managed to output.
+        if: always() 
+        with:
+          name: analysis-results
+          path: |
+            *.json
+            *.log
+          retention-days: 5
