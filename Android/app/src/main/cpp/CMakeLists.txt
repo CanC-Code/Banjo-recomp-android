@@ -23,20 +23,27 @@ add_library(bkawrapper SHARED
 )
 
 # 3. Setup Include Paths
+# CRITICAL: Local Android bridge folders MUST be listed first. 
+# This ensures that when the compiler looks for "n64_types.h" or 
+# standard headers, it doesn't get diverted into the legacy /include folder.
 target_include_directories(bkawrapper PRIVATE 
-    ${GAME_INC}
-    ${GAME_INC}/2.0L
-    ${GAME_INC}/2.0L/PR
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
     ${CMAKE_CURRENT_SOURCE_DIR}/emulator
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
+    ${GAME_INC}
+    ${GAME_INC}/2.0L
+    ${GAME_INC}/2.0L/PR
 )
 
 # 4. Apply the Zero-Touch Porting Flag
-# This forces our bridge to load before ANY legacy header
+# "-include" forces n64_types.h to be injected into every file automatically.
+# -fcommon handles the N64 engine's use of global variable redefinitions.
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    -w -fcommon -O2 -fno-strict-aliasing
+    -w 
+    -fcommon 
+    -O2 
+    -fno-strict-aliasing
 )
 
 target_link_libraries(bkawrapper android log GLESv3 EGL)
