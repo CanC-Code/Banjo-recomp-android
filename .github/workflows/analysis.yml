@@ -1,10 +1,9 @@
 name: Automated Codebase Analysis
 
+
 on:
-  push:
-    branches: [ "main", "master" ]
-  # This allows you to click a button in the GitHub UI to run it manually
-  workflow_dispatch: 
+  # Trigger only manually from the "Actions" tab
+  workflow_dispatch:
 
 jobs:
   run-scripts:
