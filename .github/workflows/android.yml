@@ -1,7 +1,6 @@
 name: Android Build Pipeline
 
 on:
-  # Trigger only manually from the "Actions" tab
   workflow_dispatch: 
 
 jobs:
@@ -16,16 +15,10 @@ jobs:
 
       - name: 🖼️ Generate Android Icons
         run: |
-          # Ensure ImageMagick is ready (convert/magick)
           sudo apt-get update && sudo apt-get install -y imagemagick
-          
-          # Run your generator script. 
-          # Change 'icon_master.png' to the actual path of your high-res logo.
           if [ -f "icon_master.png" ]; then
             python3 scripts/generate_icons.py icon_master.png
           else
-            echo "⚠️ icon_master.png not found! Creating a placeholder to prevent AAPT error..."
-            # Create a 512x512 blue placeholder if you forgot to upload the master icon
             convert -size 512x512 xc:blue icon_master.png
             python3 scripts/generate_icons.py icon_master.png
           fi
@@ -42,12 +35,24 @@ jobs:
           gradle-version: 8.2 
           cache-overwrite-existing: true
 
-      - name: 🔨 Build APK
+      - name: 🔨 Build APK & Capture Logs
         run: |
+          # set -o pipefail ensures the step fails if gradle fails, even with the pipe
+          set -o pipefail
           cd Android
-          gradle assembleDebug --stacktrace
+          gradle assembleDebug --stacktrace 2>&1 | tee ../full_build_log.txt
+
+      - name: 📦 Upload Full Error Logs
+        # 'if: always()' ensures this runs even if the build step above fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-compilation-logs
+          path: full_build_log.txt
+          retention-days: 3
 
       - name: 📦 Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: banjo-android-debug
