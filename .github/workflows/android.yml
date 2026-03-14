@@ -23,6 +23,12 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
+      - name: 🧹 Sanitize Legacy Source Code
+        run: |
+          # Runs the Python script to rename clashing files and tokens
+          # Targetting the root of the repository
+          python3 scripts/sanitize_legacy_code.py .
+
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -37,13 +43,11 @@ jobs:
 
       - name: 🔨 Build APK & Capture Logs
         run: |
-          # set -o pipefail ensures the step fails if gradle fails, even with the pipe
           set -o pipefail
           cd Android
           gradle assembleDebug --stacktrace 2>&1 | tee ../full_build_log.txt
 
       - name: 📦 Upload Full Error Logs
-        # 'if: always()' ensures this runs even if the build step above fails
         if: always()
         uses: actions/upload-artifact@v4
         with:
