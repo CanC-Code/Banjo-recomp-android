@@ -1,7 +1,44 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-/** * 1. TRUE ATOMIC PRIMITIVES & N64 STRUCTURES */
+/**
+ * 1. THE ABSOLUTE BLOCKADE (Moved to top for safety)
+ */
+#define _ULTRA64_H_
+#define __ULTRA64_H__
+#define _OS_H_
+#define __OS_H__
+#define _GBI_H_
+#define __GBI_H__
+#define _PR_GBI_H_
+#define _GU_H_
+#define __GU_H__
+#define _PR_GU_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
+#define _SCHED_H_
+#define __SCHED_H__
+#define _REGION_H_
+#define __REGION_H__
+#define _OS_THREAD_H_
+#define _OS_MESSAGE_H_
+#define _OS_LIBC_H_
+#define _STRING_H_
+#define __STRING_H__
+#define _BOOL_H_      
+#define __BOOL_H__
+#define BOOL_H
+
+// Comprehensive blockade for osint.h
+#define _OSINT_H_
+#define __OSINT_H__
+#define _OS_OSINT_H_
+#define __OS_OSINT_H__
+#define _ULTRA64_OSINT_H_
+#define OSINT_H
+
+/** * 2. TRUE ATOMIC PRIMITIVES & N64 STRUCTURES */
 typedef signed char            s8;
 typedef unsigned char          u8;
 typedef short                  s16;
@@ -16,7 +53,6 @@ typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
 typedef u64 OSTime;
-
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef struct { s16 state[16]; } ADPCM_STATE;
@@ -69,15 +105,14 @@ typedef struct OSTimer_s {
     OSMesg msg;
 } OSTimer;
 
-// Fixed field names to match seteventmesg.c
-typedef struct {
+// Added tag name '__OSEventState' to match the original header style
+typedef struct __OSEventState {
     OSMesgQueue *messageQueue;
     OSMesg message;
 } __OSEventState;
 
 #define OS_NUM_EVENTS 15
 
-// Declarations for OS globals found in osint.h
 extern OSTime __osInsertTimer(OSTimer *);
 extern OSTimer *__osTimerList;
 extern OSTimer __osBaseTimer;
@@ -107,45 +142,6 @@ typedef struct {
 } CPUState;
 
 /**
- * 2. THE ABSOLUTE BLOCKADE
- */
-#define _ULTRA64_H_
-#define __ULTRA64_H__
-#define _OS_H_
-#define __OS_H__
-#define _GBI_H_
-#define __GBI_H__
-#define _PR_GBI_H_
-#define _GU_H_
-#define __GU_H__
-#define _PR_GU_H_
-#define _LIBAUDIO_H_
-#define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
-#define _SCHED_H_
-#define __SCHED_H__
-#define _REGION_H_
-#define __REGION_H__
-#define _OS_THREAD_H_
-#define _OS_MESSAGE_H_
-#define _OS_LIBC_H_
-#define _OSINT_H_    // <--- ADDED: Block the conflicting header
-#define __OSINT_H__  // <--- ADDED
-#define _STRING_H_
-#define __STRING_H__
-#define _BOOL_H_      
-#define __BOOL_H__
-#define BOOL_H
-
-#ifndef TRUE
-#define TRUE 1
-#endif
-
-#ifndef FALSE
-#define FALSE 0
-#endif
-
-/**
  * 3. SAFE SYSTEM INCLUDES (THE AIRLOCK)
  */
 #undef _STRING_H_
@@ -168,7 +164,6 @@ typedef struct {
 // 1990s NULL Reversion (vegetables.c fix)
 #undef NULL
 #define NULL 0
-
 
 #ifdef __cplusplus
 extern "C" {
