@@ -33,7 +33,8 @@
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES (Defined first to resolve circular dependencies)
+ * 2. CORE N64 TYPES & CPU STATE
+ * Defined first to resolve circular dependencies in model.h/structs.h
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -48,7 +49,6 @@ typedef double                 f64;
 typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
-// Matches project's bool.h expectations
 typedef int n64_bool;
 #ifndef TRUE
   #define TRUE 1
@@ -56,6 +56,15 @@ typedef int n64_bool;
 #ifndef FALSE
   #define FALSE 0
 #endif
+
+// Fix for exceptasm.cpp: unknown type name 'CPUState'
+typedef struct {
+    u64 registers[32];
+    u64 lo, hi;
+    u64 pc;
+} CPUState;
+
+extern CPUState __osThreadSave;
 
 #if defined(__GNUC__) || defined(__clang__)
   #define N64_ALIGN(x) __attribute__((aligned(x)))
@@ -96,7 +105,7 @@ typedef struct {
 
 typedef struct {
     u32 status;
-    u32 pc; // Changed to lowercase 'pc' to match exceptasm.cpp usage
+    u32 pc;
     u32 cause;
     u32 badvaddr;
     u64 sp;
@@ -110,9 +119,9 @@ typedef struct OSThread_s {
 } OSThread;
 
 /**
- * 3. GLOBAL NAMESPACE INJECTION (For C++ Compatibility)
- * Explicitly provides prototypes for standard functions in the global scope.
- * This satisfies C++ headers like <cstring> even if string.h is shadowed.
+ * 3. GLOBAL NAMESPACE INJECTION (For C++ Stability)
+ * Explicitly provides prototypes for missing standard functions in the global scope.
+ * This satisfies C++ headers like <cstring> when system headers are shadowed.
  */
 #ifdef __cplusplus
 extern "C" {
@@ -120,11 +129,17 @@ extern "C" {
 void* memcpy(void* dest, const void* src, size_t n);
 void* memmove(void* dest, const void* src, size_t n);
 char* strcpy(char* dest, const char* src);
+char* strncpy(char* dest, const char* src, size_t n);
 char* strcat(char* dest, const char* src);
+char* strncat(char* dest, const char* src, size_t n);
 size_t strlen(const char* s);
 int strcmp(const char* s1, const char* s2);
+int strncmp(const char* s1, const char* s2, size_t n);
 int memcmp(const void* s1, const void* s2, size_t n);
 void* memset(void* s, int c, size_t n);
+void* memchr(const void* s, int c, size_t n);
+char* strchr(const char* s, int c);
+char* strrchr(const char* s, int c);
 }
 #endif
 
@@ -140,7 +155,6 @@ void* memset(void* s, int c, size_t n);
 #undef _SCHED_H_
 #undef __SCHED_H__
 
-// Use include_next to bypass the local project wrapper if possible
 #ifdef __clang__
   #include_next <string.h>
   #include_next <math.h>
@@ -159,7 +173,6 @@ void* memset(void* s, int c, size_t n);
 
 /**
  * 5. COMPILER MACRO WRAPPERS
- * Disabled for C++ to prevent breaking standard library headers.
  */
 #ifndef __cplusplus
   #define memcpy  n64_memcpy
