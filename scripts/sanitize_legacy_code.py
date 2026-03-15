@@ -15,7 +15,7 @@ FILE_RENAMES = {
     "stdio.h": "n64_stdio.h"
 }
 
-# Add the conflicting string functions to the replacement dictionary
+# Added the memory management functions to completely isolate them
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "n64_true",
@@ -24,7 +24,11 @@ TOKEN_REPLACEMENTS = {
     r"\bFALSE\b": "N64_FALSE",
     r"\bstrcat\b": "n64_strcat",
     r"\bstrcpy\b": "n64_strcpy",
-    r"\bstrlen\b": "n64_strlen"
+    r"\bstrlen\b": "n64_strlen",
+    r"\bmemcpy\b": "n64_memcpy",     # NEW
+    r"\bmemmove\b": "n64_memmove",   # NEW
+    r"\bmalloc\b": "n64_malloc",     # NEW
+    r"\bfree\b": "n64_free"          # NEW
 }
 
 def sanitize_codebase(root_path):
