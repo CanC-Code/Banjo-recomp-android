@@ -33,7 +33,7 @@
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES
+ * 2. CORE N64 TYPES (Fully Restored)
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -61,6 +61,71 @@ typedef int n64_bool;
   #define M_PI 3.14159265358979323846
 #endif
 
+#if defined(__GNUC__) || defined(__clang__)
+  #define N64_ALIGN(x) __attribute__((aligned(x)))
+#else
+  #define N64_ALIGN(x)
+#endif
+
+typedef u64 OSTime;
+typedef u64 Gfx;
+typedef u64 Acmd;
+typedef s32 OSPri;
+typedef s32 OSEvent;
+typedef void* OSMesg;
+typedef void* OSTask;
+typedef void* ALHeap;
+
+typedef struct { s16 state[16]; } ADPCM_STATE;
+
+typedef union N64_ALIGN(8) { 
+    struct { s32 m[4][4]; }; 
+    long long force_align; 
+} Mtx;
+
+typedef struct {
+    short ob[3];         
+    unsigned short flag; 
+    short tc[2];         
+    unsigned char cn[4]; 
+} Vtx_t;
+typedef union N64_ALIGN(8) { Vtx_t v; long long force_align; } Vtx;
+
+typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
+
+typedef struct {
+    OSMesgQueue *messageQueue;
+    OSMesg message;
+} __OSEventState;
+
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errnum;
+} OSContPad;
+
+typedef struct {
+    u16 type;
+    u8  status;
+    u8  errnum;
+} OSContStatus;
+
+typedef struct {
+    u32 status;
+    u32 pc;
+    u32 cause;
+    u32 badvaddr;
+    u64 sp;
+    u8 padding[512 - 24]; 
+} __OSThreadContext;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri priority;
+    __OSThreadContext context;
+} OSThread;
+
 typedef struct {
     u64 registers[32];
     u64 lo, hi;
@@ -77,7 +142,6 @@ extern CPUState __osThreadSave;
 
 /**
  * 3. POSIX COMPATIBILITY LAYER
- * Explicitly define timespec and sched_yield for the NDK C++ STL
  */
 #include <sys/types.h>
 
@@ -97,7 +161,6 @@ extern "C" {
 
 /**
  * 4. C++ HYGIENE & MACRO PROTECTION
- * Prevents project-level macros from breaking the C++ Standard Library.
  */
 #ifdef __cplusplus
   #undef vector 
@@ -106,37 +169,17 @@ extern "C" {
 #endif
 
 /**
- * 5. GLOBAL NAMESPACE INJECTION (For C++ Stability)
+ * 5. SYSTEM INCLUDES
+ * Temporarily lift the blockade so the system string and math headers 
+ * can populate the global namespace for C++ <cstring> to consume.
  */
-#ifdef __cplusplus
-#include <stddef.h>
-extern "C" {
-void* memcpy(void* dest, const void* src, size_t n);
-void* memmove(void* dest, const void* src, size_t n);
-char* strcpy(char* dest, const char* src);
-char* strncpy(char* dest, const char* src, size_t n);
-char* strcat(char* dest, const char* src);
-char* strncat(char* dest, const char* src, size_t n);
-size_t strlen(const char* s);
-int    strcmp(const char* s1, const char* s2);
-int    strncmp(const char* s1, const char* s2, size_t n);
-int    memcmp(const void* s1, const void* s2, size_t n);
-void* memset(void* s, int c, size_t n);
-char* strstr(const char* haystack, const char* needle);
-char* strerror(int errnum);
+#undef _STRING_H_
+#undef __STRING_H__
+#undef _SCHED_H_
+#undef __SCHED_H__
 
-struct tm; 
-clock_t clock(void);
-double difftime(time_t time1, time_t time0);
-time_t mktime(struct tm *timeptr);
-time_t time(time_t *timer);
-}
-#endif
-
-/**
- * 6. SYSTEM INCLUDES
- */
 #include <stdint.h>
+#include <stddef.h>
 #include <stdlib.h>
 
 #ifdef __clang__
@@ -147,20 +190,30 @@ time_t time(time_t *timer);
   #include <math.h>
 #endif
 
-#ifndef NULL
-  #define NULL 0
-#endif
+// Re-apply the blockade for any legacy C code included afterward
+#define _STRING_H_
+#define __STRING_H__
+#define _SCHED_H_
+#define __SCHED_H__
 
 /**
- * 7. COMPILER MACRO WRAPPERS
+ * 6. COMPILER MACRO WRAPPERS
  */
 #ifndef __cplusplus
   #define memcpy  n64_memcpy
   #define memmove n64_memmove
   #define malloc  n64_malloc
   #define free    n64_free
+  #define realloc n64_realloc 
+  #define calloc  n64_calloc  
+  #define strcat  n64_strcat
   #define strcpy  n64_strcpy
   #define strlen  n64_strlen
+  #define sprintf n64_sprintf
+  #define printf  n64_printf
+
+  #undef bcopy
+  #define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
 #endif
 
 #endif // N64_TYPES_H
