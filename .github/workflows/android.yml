@@ -34,23 +34,21 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
-      - name: 🧹 Static Pre-Patching
+      - name: 🧹 Pre-Patching
         run: |
           python3 scripts/sanitize_legacy_code.py .
           python3 scripts/patch_array_initializations.py .
 
       - name: 🤖 Automated Correction & Build Loop
-        # This script replaces the manual 'gradle assembleDebug' step
+        # This replaces the manual 'gradle' step and handles the Ninja errors
         run: python3 scripts/dynamic_corrector.py
 
-      - name: 📦 Upload Full Error Logs
+      - name: 📦 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: full-compilation-logs
-          # The script saves the log inside the Android folder
           path: Android/full_build_log.txt
-          retention-days: 3
 
       - name: 📦 Upload APK
         if: success()
