@@ -2,7 +2,20 @@
 #define N64_TYPES_H
 
 /**
- * 1. THE NUCLEAR BLOCKADE
+ * 1. POSIX & NDK CORE HEADERS
+ * These must be included FIRST before the blockade to ensure 
+ * we use the system's definition of timespec, time_t, etc.
+ */
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/**
+ * 2. THE NUCLEAR BLOCKADE
+ * Prevents legacy N64 header files from re-including standard C 
+ * headers that clash with the Android NDK.
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -10,28 +23,17 @@
 #define __OS_H__
 #define _GBI_H_
 #define __GBI_H__
-#define _PR_GBI_H_
-#define _GU_H_
-#define __GU_H__
-#define _PR_GU_H_
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
-#define _SCHED_H_
-#define __SCHED_H__
-#define _REGION_H_
-#define __REGION_H__
-#define _OS_THREAD_H_
-#define _OS_MESSAGE_H_
-#define _OS_LIBC_H_
-#define _BOOL_H_      
+#define _TIME_H_      // Blocks legacy time.h
+#define _SYS_TIME_H_  // Blocks legacy sys/time.h
+#define _STDLIB_H_
+#define _STRING_H_
+#define _BOOL_H_
 #define __BOOL_H__
-#define BOOL_H
-#define OSINT_H
-#define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES
+ * 3. CORE N64 SCALAR TYPES
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -54,10 +56,22 @@ typedef int n64_bool;
   #define FALSE 0
 #endif
 
+/**
+ * 4. THE "NULL" FIX (Crucial for vegetables.c)
+ * Modern NDK Clang defines NULL as ((void*)0).
+ * N64 Decomp projects often assign NULL to float variables.
+ * We redefine NULL to 0 so it can act as both a pointer and a float 0.0f.
+ */
+#undef NULL
+#define NULL 0
+
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
 #endif
 
+/**
+ * 5. N64 ENGINE TYPES & ALIGNMENT
+ */
 #if defined(__GNUC__) || defined(__clang__)
   #define N64_ALIGN(x) __attribute__((aligned(x)))
 #else
@@ -91,99 +105,44 @@ typedef union N64_ALIGN(8) { Vtx_t v; long long force_align; } Vtx;
 typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
 
 typedef struct {
-    OSMesgQueue *messageQueue;
-    OSMesg message;
-} __OSEventState;
-
-typedef struct {
     u16 button;
     s8  stick_x;
     s8  stick_y;
     u8  errnum;
 } OSContPad;
 
-typedef struct {
-    u16 type;
-    u8  status;
-    u8  errnum;
-} OSContStatus;
-
-typedef struct {
-    u32 status;
-    u32 pc;
-    u32 cause;
-    u32 badvaddr;
-    u64 sp;
-    u8 padding[512 - 24]; 
-} __OSThreadContext;
-
-typedef struct OSThread_s {
-    struct OSThread_s *next;
-    OSPri priority;
-    __OSThreadContext context;
-} OSThread;
-
-typedef struct {
-    u64 registers[32];
-    u64 lo, hi;
-    u64 pc;
-} CPUState;
-
-// Provide an opaque ALGlobals definition to satisfy NativeBridge allocation
+/**
+ * 6. AUDIO & THREADING GLOBALS
+ * satisfy NativeBridge and Audio HLE requirements
+ */
 #ifndef _AL_GLOBALS_DEFINED
 #define _AL_GLOBALS_DEFINED
 typedef struct {
-    u8 padding[0x1000]; // 4KB is safely over-allocated for N64 audio state
+    u8 padding[0x1000]; 
 } ALGlobals;
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-extern CPUState __osThreadSave;
-#ifdef __cplusplus
-}
-#endif
+typedef struct {
+    u64 registers[32];
+    u64 lo, hi, pc;
+} CPUState;
+
+// Forward declarations for common Actor types to prevent "Unknown type" errors
+// before the dynamic corrector can inject local typedefs.
+typedef struct Actor Actor;
+typedef struct sChVegetable sChVegetable;
 
 /**
- * 3. POSIX COMPATIBILITY LAYER
- */
-#include <sys/types.h>
-#include <time.h> // Includes native NDK struct timespec, avoiding redefinitions
-
-#ifdef __cplusplus
-extern "C" {
-  int sched_yield(void);
-}
-#endif
-
-/**
- * 4. C++ HYGIENE & MACRO PROTECTION
- */
-#ifdef __cplusplus
-  #undef vector 
-  #undef string
-  #undef list
-#endif
-
-/**
- * 5. COMPILER MACRO WRAPPERS
+ * 7. COMPILER MACRO WRAPPERS
+ * Scoped to C only to avoid breaking C++ standard libraries
  */
 #ifndef __cplusplus
   #define memcpy  n64_memcpy
-  #define memmove n64_memmove
   #define malloc  n64_malloc
   #define free    n64_free
-  #define realloc n64_realloc 
-  #define calloc  n64_calloc  
-  #define strcat  n64_strcat
-  #define strcpy  n64_strcpy
-  #define strlen  n64_strlen
-  #define sprintf n64_sprintf
   #define printf  n64_printf
-
   #undef bcopy
-  #define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
+  #define bcopy(src, dst, n) memmove((dst), (src), (n))
 #endif
 
 #endif // N64_TYPES_H
