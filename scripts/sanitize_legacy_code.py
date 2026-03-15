@@ -4,9 +4,6 @@ import sys
 
 TARGET_DIRS = ["src", "include"]
 
-# 1. EXPANDED FILE RENAMING MAPPING
-# Aggressively rename ALL legacy standard library headers to prevent 
-# any C++ system hijacks (like <ctime> finding the game's time.h).
 FILE_RENAMES = {
     "bool.h": "n64_bool.h",
     "string.h": "n64_string.h",
@@ -18,19 +15,21 @@ FILE_RENAMES = {
     "stdio.h": "n64_stdio.h"
 }
 
-# 2. TOKEN REPLACEMENT MAPPING
+# Add the conflicting string functions to the replacement dictionary
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "n64_true",
     r"\bfalse\b": "n64_false",
     r"\bTRUE\b": "N64_TRUE",
     r"\bFALSE\b": "N64_FALSE",
+    r"\bstrcat\b": "n64_strcat",
+    r"\bstrcpy\b": "n64_strcpy",
+    r"\bstrlen\b": "n64_strlen"
 }
 
 def sanitize_codebase(root_path):
     print("🧹 Starting Legacy Code Sanitization...")
 
-    # Phase 1: Rename Files
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path):
@@ -44,7 +43,6 @@ def sanitize_codebase(root_path):
                     os.rename(old_file, new_file)
                     print(f"  [Renamed] {old_file} -> {new_file}")
 
-    # Phase 2: Patch Includes and Tokens
     patch_count = 0
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
