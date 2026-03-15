@@ -32,37 +32,34 @@ def fix_decompiler_artifacts(content, filename):
     """
     Handles broken code patterns like 'u8 u8[tmp]' or 'u8 arr[6] = src'.
     """
-    # 1. Fix Shadowed Names AND Usages
-    # Finds declarations where name == type, renames the var and all standalone usages
-    shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[', re.MULTILINE)
+    # 1. Fix Shadowed Names AND Usages Safely
+    shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
-    
-    for indent, type_name, var_name in shadow_matches:
-        # Rename the declaration line specifically
+
+    for indent, type_name, var_name, size in shadow_matches:
         decl_line = rf'{indent}{type_name}\s+{var_name}\s*\['
         content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
         
-        # Rename standalone usages (not preceded by the type name or followed by [)
-        usage_pattern = rf'(?<!{type_name}\s)\b{var_name}\b(?!\s*\[)'
-        content = re.sub(usage_pattern, f'buffer_{var_name}', content)
+        # Rename safe array index usages
+        content = re.sub(rf'\b{var_name}\s*\[', f'buffer_{var_name}[', content)
+        # Rename in memory function targets
+        content = re.sub(rf'\b(memcpy|memset|memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
-    # 2. Fix Invalid Array Assignments (e.g., u8 arr[size] = identifier;)
+    # 2. Fix Invalid Array Assignments
     assign_pattern = re.compile(
         rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*;',
         re.MULTILINE
     )
-    
+
     def array_to_memcpy(match):
-        # match.groups() now returns exactly 5 groups due to non-capturing ?: in SHADOW_TYPES
         indent, dtype, name, size, src = match.groups()
-        # If we renamed it in step 1, use the new name
         final_name = f"buffer_{name}" if dtype == name else name
         return f"{indent}{dtype} {final_name}[{size}];\n{indent}memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
 
     # 3. Emergency 'tmp' array declaration for leafboat.c style errors
-    if ('[tmp]' in content or 'tmp[' in content) and 'int tmp' not in content:
+    if ('[tmp]' in content or 'tmp[' in content) and 'int tmp' not in content and 'u8 tmp' not in content:
         tmp_decl = "\n/* Emergency Decompiler Fix */\nstatic u8 tmp[1024] = {0};\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
