@@ -2,9 +2,10 @@ import os
 import re
 import sys
 
+# Directories to process within the root path
 TARGET_DIRS = ["src", "include"]
 
-# Expanded to include more standard types and common collision points
+# Symbols to namespace to avoid collisions with standard library and modern headers
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "TRUE",
@@ -25,7 +26,11 @@ TOKEN_REPLACEMENTS = {
 }
 
 def fix_linkage_conflicts(content):
-    # 1. Improved Regex for static function implementations
+    """
+    Ensures static functions have forward declarations and fixes linkage 
+    mismatches to avoid 'conflicting types' or 'missing prototype' errors.
+    """
+    # 1. Identify static function implementations
     static_func_pattern = re.compile(
         r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", 
         re.MULTILINE
@@ -36,7 +41,7 @@ def fix_linkage_conflicts(content):
         return content
 
     signatures = []
-    # Use a set to track already declared signatures to prevent duplicates
+    # Track existing declarations to avoid duplicate prototypes
     existing_decls = set(re.findall(r"^static\s+.*?;", content, re.MULTILINE))
 
     for full_sig, func_name in matches:
@@ -45,19 +50,17 @@ def fix_linkage_conflicts(content):
             signatures.append(decl)
             existing_decls.add(decl)
 
-    # 2. Fix mismatched non-static declarations
+    # 2. Convert non-static declarations of these functions to static
     for _, func_name in matches:
         mismatch_pattern = rf"^(?!\s)(?<!static\s)([\w\s\*]*?\b{func_name}\b\s*\([^)]*\)\s*;)"
         content = re.sub(mismatch_pattern, r"static \1", content, flags=re.MULTILINE)
 
-    # 3. SELF-REPAIR: Remove 'static' from accidental matches on calls/indented lines
+    # 3. Cleanup: Remove 'static' if it was accidentally prepended to indented calls
     content = re.sub(r"^[ \t]+static\s+", "    ", content, flags=re.MULTILINE)
 
-    # 4. Smart Forward Declaration Placement
+    # 4. Insert Forward Declarations after the last #include
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
-
-        # Prefer placing after the last #include, otherwise at the top
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
             last_include_pos = includes[-1].end()
@@ -68,7 +71,10 @@ def fix_linkage_conflicts(content):
     return content
 
 def sanitize_codebase(root_path):
-    print(f"扫 Scanning: {root_path}")
+    """
+    Walks the codebase and applies token replacements and linkage fixes.
+    """
+    print(f"🧹 Scanning for sanitization: {root_path}")
     patch_count = 0
 
     for dir_name in TARGET_DIRS:
@@ -94,8 +100,8 @@ def sanitize_codebase(root_path):
                 modified_tokens = False
 
                 for line in lines:
-                    # 🛡️ PROTECTION: Do not apply replacements to include directives
-                    # This prevents #include "bool.h" from becoming #include "n64_bool.h"
+                    # 🛡️ PROTECTION: Skip renaming if the line is an include directive.
+                    # This prevents #include "bool.h" from becoming #include "n64_bool.h".
                     if line.strip().startswith("#include"):
                         new_lines.append(line)
                         continue
@@ -110,7 +116,7 @@ def sanitize_codebase(root_path):
 
                 content = "".join(new_lines)
 
-                # Apply Linkage Fixes (C files only)
+                # Linkage repairs are primarily for implementation (.c) files
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
 
@@ -123,5 +129,6 @@ def sanitize_codebase(root_path):
     print(f"✅ Sanitization Complete! {patch_count} files modified.")
 
 if __name__ == "__main__":
+    # Use provided argument or default to current directory
     root_dir = sys.argv[1] if len(sys.argv) > 1 else "."
     sanitize_codebase(root_dir)
