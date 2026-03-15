@@ -23,11 +23,12 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
-      - name: 🧹 Sanitize Legacy Source Code
+      - name: 🧹 Sanitize & Patch Legacy Source Code
         run: |
-          # Runs the Python script to rename clashing files and tokens
-          # Targetting the root of the repository
+          # 1. Isolates Standard Libraries
           python3 scripts/sanitize_legacy_code.py .
+          # 2. Fixes Illegal Array Assignments
+          python3 scripts/patch_array_initializations.py .
 
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
