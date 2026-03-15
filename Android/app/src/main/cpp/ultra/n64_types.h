@@ -38,7 +38,7 @@ typedef struct {
 } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
 
-// --- Controller Data (NEW) ---
+// --- Controller Data ---
 typedef struct {
     u16 button;
     s8  stick_x;
@@ -119,6 +119,7 @@ typedef struct {
 
 /**
  * 3. SAFE SYSTEM INCLUDES
+ * Placed here so the system <string.h> loads BEFORE we hijack the functions.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -130,8 +131,25 @@ typedef struct {
 extern "C" {
 #endif
 
+/**
+ * 4. FOOLPROOF COMPILER MACRO HIJACK
+ * This forces the compiler to immediately rename the conflicting legacy C 
+ * functions in-memory before evaluating the game files. This ensures no conflicts
+ * with the system headers without relying on external python scripts.
+ */
+#define memcpy  n64_memcpy
+#define memmove n64_memmove
+#define malloc  n64_malloc
+#define free    n64_free
+#define strcat  n64_strcat
+#define strcpy  n64_strcpy
+#define strlen  n64_strlen
+#define sprintf n64_sprintf
+#define printf  n64_printf
+
 #undef bcopy
-#define bcopy(src, dst, n) memmove((dst), (src), (n))
+// We map the old N64 bcopy directly to the n64_memmove we just hijacked
+#define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
 
 #ifdef __cplusplus
 }
