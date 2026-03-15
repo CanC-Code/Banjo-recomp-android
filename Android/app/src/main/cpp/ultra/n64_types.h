@@ -34,7 +34,6 @@
 
 /**
  * 2. CORE N64 TYPES
- * DEFINED FIRST: To resolve the 'unknown type' errors in pfsmanager.h and functions.h.
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -57,7 +56,6 @@ typedef int n64_bool;
   #define FALSE 0
 #endif
 
-// Controller Data Structures (Moved here to fix pfsmanager.h errors)
 typedef struct {
     u16 button;
     s8  stick_x;
@@ -139,10 +137,15 @@ typedef struct OSThread_s {
 
 /**
  * 3. GLOBAL NAMESPACE INJECTION (For C++ Stability)
+ * We include <time.h> to retrieve time_t and clock_t from the legacy header,
+ * then inject the missing standard function prototypes to satisfy <ctime>.
  */
 #ifdef __cplusplus
-extern "C" {
 #include <stddef.h>
+#include <time.h>
+
+extern "C" {
+// String Functions
 void* memcpy(void* dest, const void* src, size_t n);
 void* memmove(void* dest, const void* src, size_t n);
 char* strcpy(char* dest, const char* src);
@@ -165,6 +168,18 @@ size_t strspn(const char* s, const char* accept);
 char* strstr(const char* haystack, const char* needle);
 char* strtok(char* str, const char* delim);
 char* strerror(int errnum);
+
+// Time Functions missing from legacy time.h
+struct tm; 
+clock_t clock(void);
+double difftime(time_t time1, time_t time0);
+time_t mktime(struct tm *timeptr);
+time_t time(time_t *timer);
+char *asctime(const struct tm *timeptr);
+char *ctime(const time_t *timer);
+struct tm *gmtime(const time_t *timer);
+struct tm *localtime(const time_t *timer);
+size_t strftime(char *s, size_t max, const char *format, const struct tm *timeptr);
 }
 #endif
 
