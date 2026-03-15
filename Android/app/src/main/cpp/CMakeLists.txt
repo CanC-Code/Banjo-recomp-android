@@ -21,6 +21,7 @@ add_library(bkawrapper SHARED
 
 # CRITICAL: Bridge folders must come FIRST to prevent header hijacking
 target_include_directories(bkawrapper PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}           # <--- ADDED: Allows resolving #include "tools/..."
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
     ${CMAKE_CURRENT_SOURCE_DIR}/emulator
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
