@@ -25,7 +25,10 @@ def patch_arrays(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
+                # 🛡️ Only touch C/H files. Skip CPP emulator code and core N64 types header.
                 if not filename.endswith(('.c', '.h')): continue
+                if filename == "n64_types.h": continue
+                
                 filepath = os.path.join(root, filename)
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -37,21 +40,16 @@ def patch_arrays(root_path):
                 # Fix Shadowed Names AND Usages Safely
                 shadow_matches = shadow_pattern.findall(content)
                 for indent, type_name, var_name, size in shadow_matches:
-                    # Rename the declaration
                     decl_pattern = rf'{indent}{type_name}\s+{var_name}\s*\['
                     content = re.sub(decl_pattern, f'{indent}{type_name} buffer_{var_name}[', content)
-                    
-                    # Rename safe array index usages (e.g., 'u8[' becomes 'buffer_u8[')
                     content = re.sub(rf'\b{var_name}\s*\[', f'buffer_{var_name}[', content)
-                    
-                    # Rename in memory function targets (e.g., 'memcpy(u8,' becomes 'memcpy(buffer_u8,')
                     content = re.sub(rf'\b(memcpy|memset|memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
                 # Fix Invalid Assignments
                 def replace_assignment(match):
-                    indent, type_name, var_name, size, src = match.groups()
-                    final_var = f"buffer_{var_name}" if type_name == var_name else var_name
-                    return f"{indent}{type_name} {final_var}[{size}];\n{indent}memcpy({final_var}, {src}, {size} * sizeof({type_name}));"
+                    indent, dtype, name, size, src = match.groups()
+                    final_name = f"buffer_{name}" if dtype == name else name
+                    return f"{indent}{dtype} {final_name}[{size}];\n{indent}memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
                 content = assignment_pattern.sub(replace_assignment, content)
 
