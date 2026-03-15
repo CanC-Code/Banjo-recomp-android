@@ -1,10 +1,7 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-/** * 1. TRUE ATOMIC PRIMITIVES & N64 STRUCTURES
- * These MUST be defined before any #include directives. If a legacy header 
- * hijacks the chain later, these types are already safely locked into the compiler.
- */
+/** * 1. TRUE ATOMIC PRIMITIVES & N64 STRUCTURES */
 typedef signed char            s8;
 typedef unsigned char          u8;
 typedef short                  s16;
@@ -18,7 +15,6 @@ typedef double                 f64;
 typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
-// Base N64 Types
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef struct { s16 state[16]; } ADPCM_STATE;
@@ -34,12 +30,11 @@ typedef union { Hilite_t h; long long force_align; } Hilite;
 typedef struct { s32 vp[4]; } Vp_t;
 typedef union { Vp_t v; long long force_align; } Vp;
 
-// --- N64 Vertex (Vtx) ---
 typedef struct {
-    short ob[3];         // x, y, z
+    short ob[3];         
     unsigned short flag; 
-    short tc[2];         // texture coords
-    unsigned char cn[4]; // color/normal
+    short tc[2];         
+    unsigned char cn[4]; 
 } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
 
@@ -47,19 +42,34 @@ typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef void* OSMesg;
 typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
 typedef s32 OSPri;
+
+// Expanded OSThreadContext to satisfy emulator/exceptasm.cpp
+typedef struct {
+    u32 status;
+    u32 pc;
+    u32 cause;
+    u32 badvaddr;
+    u64 sp;
+    u8 padding[512 - 24]; // Pad out the rest of the struct
+} __OSThreadContext;
+
 typedef struct OSThread_s {
     struct OSThread_s *next;
     OSPri priority;
-    u8 context[512];
+    __OSThreadContext context;
 } OSThread;
 
 typedef void* OSTask;
 typedef void* ALHeap;
 typedef struct { u8 d[1024]; } ALGlobals;
 
+// Missing CPUState from exceptasm.cpp
+typedef struct {
+    u64 registers[32];
+} CPUState;
+
 /**
  * 2. THE ABSOLUTE BLOCKADE
- * Expanding to cover bool.h which clashes with native C++ types.
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -83,7 +93,7 @@ typedef struct { u8 d[1024]; } ALGlobals;
 #define _OS_LIBC_H_
 #define _STRING_H_
 #define __STRING_H__
-#define _BOOL_H_      // Block legacy C bools
+#define _BOOL_H_      
 #define __BOOL_H__
 #define BOOL_H
 
@@ -97,7 +107,6 @@ typedef struct { u8 d[1024]; } ALGlobals;
 
 /**
  * 3. SAFE SYSTEM INCLUDES
- * Placed safely at the bottom where they can't interrupt the core types.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -109,7 +118,6 @@ typedef struct { u8 d[1024]; } ALGlobals;
 extern "C" {
 #endif
 
-// Android memmove shim
 #undef bcopy
 #define bcopy(src, dst, n) memmove((dst), (src), (n))
 
