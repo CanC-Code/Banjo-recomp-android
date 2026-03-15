@@ -2,7 +2,7 @@
 #define N64_TYPES_H
 
 /**
- * 1. THE NUCLEAR BLOCKADE (System header blocks removed)
+ * 1. THE NUCLEAR BLOCKADE
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -129,6 +129,14 @@ typedef struct {
     u64 pc;
 } CPUState;
 
+// Provide an opaque ALGlobals definition to satisfy NativeBridge allocation
+#ifndef _AL_GLOBALS_DEFINED
+#define _AL_GLOBALS_DEFINED
+typedef struct {
+    u8 padding[0x1000]; // 4KB is safely over-allocated for N64 audio state
+} ALGlobals;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -141,14 +149,7 @@ extern CPUState __osThreadSave;
  * 3. POSIX COMPATIBILITY LAYER
  */
 #include <sys/types.h>
-
-#ifndef _TIMESPEC_DEFINED
-#define _TIMESPEC_DEFINED
-struct timespec {
-    time_t tv_sec;
-    long   tv_nsec;
-};
-#endif
+#include <time.h> // Includes native NDK struct timespec, avoiding redefinitions
 
 #ifdef __cplusplus
 extern "C" {
