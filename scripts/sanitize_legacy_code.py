@@ -12,10 +12,10 @@ FILE_RENAMES = {
     "stdlib.h": "n64_stdlib.h",
     "stddef.h": "n64_stddef.h",
     "stdarg.h": "n64_stdarg.h",
-    "stdio.h": "n64_stdio.h"
+    "stdio.h": "n64_stdio.h",
+    "sched.h": "n64_sched.h"   # <--- ADDED: Fixes the POSIX sched_yield() hijack
 }
 
-# Added the memory management functions to completely isolate them
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "n64_true",
@@ -25,10 +25,10 @@ TOKEN_REPLACEMENTS = {
     r"\bstrcat\b": "n64_strcat",
     r"\bstrcpy\b": "n64_strcpy",
     r"\bstrlen\b": "n64_strlen",
-    r"\bmemcpy\b": "n64_memcpy",     # NEW
-    r"\bmemmove\b": "n64_memmove",   # NEW
-    r"\bmalloc\b": "n64_malloc",     # NEW
-    r"\bfree\b": "n64_free"          # NEW
+    r"\bmemcpy\b": "n64_memcpy",
+    r"\bmemmove\b": "n64_memmove",
+    r"\bmalloc\b": "n64_malloc",
+    r"\bfree\b": "n64_free"
 }
 
 def sanitize_codebase(root_path):
