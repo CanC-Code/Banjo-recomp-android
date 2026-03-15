@@ -3,6 +3,7 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
+ * Prevents legacy headers from being loaded later in the chain.
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -29,12 +30,14 @@
 #define _BOOL_H_      
 #define __BOOL_H__
 #define BOOL_H
+#define _N64_BOOL_H_ // Added extra potential guard
 #define OSINT_H
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 PRIMITIVES
- * Defined before includes to resolve circular dependencies in model.h/structs.h
+ * 2. ALL N64 TYPES (PRIMITIVES & OS)
+ * These MUST be defined before any #include to resolve the errors seen in 
+ * structs.h and sched.h.
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -49,7 +52,7 @@ typedef double                 f64;
 typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
-// Definition for the 'bool' replacement used by the sanitization script
+// Primitives for the sanitization script
 typedef u8 n64_bool;
 #ifndef TRUE
   #define TRUE 1
@@ -67,6 +70,13 @@ typedef u8 n64_bool;
 typedef u64 OSTime;
 typedef u64 Gfx;
 typedef u64 Acmd;
+typedef s32 OSPri;
+typedef s32 OSEvent;
+typedef void* OSMesg;
+typedef void* OSTask;
+typedef void* ALHeap;
+
+typedef struct { s16 state[16]; } ADPCM_STATE;
 
 typedef union N64_ALIGN(8) { 
     struct { s32 m[4][4]; }; 
@@ -81,11 +91,37 @@ typedef struct {
 } Vtx_t;
 typedef union N64_ALIGN(8) { Vtx_t v; long long force_align; } Vtx;
 
-/** * 3. SYSTEM INCLUDES */
+typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
+
+typedef struct {
+    OSMesgQueue *messageQueue;
+    OSMesg message;
+} __OSEventState;
+
+typedef struct {
+    u32 status;
+    u32 pc;
+    u32 cause;
+    u32 badvaddr;
+    u64 sp;
+    u8 padding[512 - 24]; 
+} __OSThreadContext;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri priority;
+    __OSThreadContext context;
+} OSThread;
+
+/**
+ * 3. SYSTEM & PROJECT INCLUDES
+ * Now that ALL types are defined, it is safe to load headers that reference them.
+ */
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 
+/* Temporarily lift blockade to load the real headers */
 #undef _STRING_H_
 #undef __STRING_H__
 #undef _SCHED_H_
@@ -95,12 +131,13 @@ typedef union N64_ALIGN(8) { Vtx_t v; long long force_align; } Vtx;
 #include <math.h>
 #include <sched.h> 
 
+/* Re-establish blockade */
 #define _STRING_H_
 #define __STRING_H__
 #define _SCHED_H_
 #define __SCHED_H__
 
-// Fix for NULL issues in legacy C files
+// Final cleanup for legacy C null pointer issues
 #undef NULL
 #define NULL 0
 
