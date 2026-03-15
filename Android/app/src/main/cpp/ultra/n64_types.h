@@ -3,8 +3,6 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
- * We define every possible variation of the include guards for N64 headers
- * to prevent the original, conflicting headers from being processed.
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -31,50 +29,68 @@
 #define _BOOL_H_      
 #define __BOOL_H__
 #define BOOL_H
-
-// Comprehensive blockade for osint.h
 #define OSINT_H
-#define _OSINT_H
-#define __OSINT_H
-#define _OSINT_H_
-#define __OSINT_H__
-#define _OS_OSINT_H_
-#define __OS_OSINT_H__
-#define _ULTRA64_OSINT_H_
-#define OSINT_H_INCLUDED
 #define _OSINT_H_INCLUDED
-#define __OSINT_H_INCLUDED
 
-/** * 2. CORE N64 TYPES 
+/** * 2. SYSTEM INCLUDES (Load first, then blockade)
  */
-typedef signed char            s8;
-typedef unsigned char          u8;
-typedef short                  s16;
-typedef unsigned short         u16;
-typedef int                    s32;
-typedef unsigned int           u32;
-typedef long long              s64;
-typedef unsigned long long     u64;
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <sched.h> 
+
+// Re-establish blockade for string and sched to prevent later pollution
+#define _STRING_H_
+#define __STRING_H__
+#define _SCHED_H_
+#define __SCHED_H__
+
+/**
+ * 3. CORE N64 TYPES 
+ * Using <stdint.h> ensures these types are exactly the right size on 64-bit Android.
+ */
+typedef int8_t                 s8;
+typedef uint8_t                u8;
+typedef int16_t                s16;
+typedef uint16_t               u16;
+typedef int32_t                s32;
+typedef uint32_t               u32;
+typedef int64_t                s64;
+typedef uint64_t               u64;
 typedef float                  f32;
 typedef double                 f64;
 typedef unsigned char          uchar;
-typedef volatile unsigned int  vu32; 
+typedef volatile uint32_t      vu32; 
+
+// Alignment Macro for modern compilers
+#if defined(__GNUC__) || defined(__clang__)
+#define N64_ALIGN(x) __attribute__((aligned(x)))
+#else
+#define N64_ALIGN(x)
+#endif
 
 typedef u64 OSTime;
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef struct { s16 state[16]; } ADPCM_STATE;
-typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
+
+// Using N64_ALIGN(8) ensures the union is properly aligned for DMA-style access
+typedef union N64_ALIGN(8) { 
+    struct { s32 m[4][4]; }; 
+    long long force_align; 
+} Mtx;
 
 // --- Graphics & Lighting ---
 typedef struct { u8 col[3]; s8 dir[3]; } Light_t;
-typedef union { Light_t l; long long force_align; } Light;
+typedef union N64_ALIGN(8) { Light_t l; long long force_align; } Light;
 typedef struct { s16 x, y, z; } LookAt_t;
-typedef union { LookAt_t l; long long force_align; } LookAt;
+typedef union N64_ALIGN(8) { LookAt_t l; long long force_align; } LookAt;
 typedef struct { s16 x, y, z; } Hilite_t;
-typedef union { Hilite_t h; long long force_align; } Hilite;
+typedef union N64_ALIGN(8) { Hilite_t h; long long force_align; } Hilite;
 typedef struct { s32 vp[4]; } Vp_t;
-typedef union { Vp_t v; long long force_align; } Vp;
+typedef union N64_ALIGN(8) { Vp_t v; long long force_align; } Vp;
 
 typedef struct {
     short ob[3];         
@@ -82,21 +98,7 @@ typedef struct {
     short tc[2];         
     unsigned char cn[4]; 
 } Vtx_t;
-typedef union { Vtx_t v; long long force_align; } Vtx;
-
-// --- Controller Data ---
-typedef struct {
-    u16 button;
-    s8  stick_x;
-    s8  stick_y;
-    u8  errnum;
-} OSContPad;
-
-typedef struct {
-    u16 type;
-    u8  status;
-    u8  errnum;
-} OSContStatus;
+typedef union N64_ALIGN(8) { Vtx_t v; long long force_align; } Vtx;
 
 // --- OS & Threading ---
 typedef void* OSMesg;
@@ -113,17 +115,12 @@ typedef struct OSTimer_s {
     OSMesg msg;
 } OSTimer;
 
-// Fixed: Removed the internal struct tag to avoid "Redefinition of __OSEventState"
 typedef struct {
     OSMesgQueue *messageQueue;
     OSMesg message;
 } __OSEventState;
 
 #define OS_NUM_EVENTS 15
-
-extern OSTime __osInsertTimer(OSTimer *);
-extern OSTimer *__osTimerList;
-extern OSTimer __osBaseTimer;
 extern __OSEventState __osEventStateTab[OS_NUM_EVENTS];
 
 typedef struct {
@@ -141,53 +138,14 @@ typedef struct OSThread_s {
     __OSThreadContext context;
 } OSThread;
 
-typedef void* OSTask;
-typedef void* ALHeap;
-typedef struct { u8 d[1024]; } ALGlobals;
-
-typedef struct {
-    u64 registers[32];
-} CPUState;
-
 /**
- * 3. SYSTEM INCLUDES
+ * 4. COMPILER MACRO WRAPPERS
+ * These must remain at the bottom to ensure they redirect the sanitized code.
  */
-#undef _STRING_H_
-#undef __STRING_H__
-#undef _SCHED_H_
-#undef __SCHED_H__
-
-#include <stdint.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-#include <sched.h> 
-
-#define _STRING_H_
-#define __STRING_H__
-#define _SCHED_H_
-#define __SCHED_H__
-
-// Fix for vegetables.c NULL issue
+#ifndef __cplusplus
 #undef NULL
 #define NULL 0
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#undef bcopy
-#define bcopy(src, dst, n) memmove((dst), (src), (n))
-
-#ifdef __cplusplus
-}
-#endif
-
-/**
- * 4. COMPILER MACRO WRAPPERS
- */
-#ifndef __cplusplus
 #define memcpy  n64_memcpy
 #define memmove n64_memmove
 #define malloc  n64_malloc
@@ -199,6 +157,9 @@ extern "C" {
 #define strlen  n64_strlen
 #define sprintf n64_sprintf
 #define printf  n64_printf
+
+#undef bcopy
+#define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
 #endif
 
 #endif // N64_TYPES_H
