@@ -15,7 +15,6 @@ typedef double                 f64;
 typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
-// --- ADDED: Satisfies any remaining legacy sched.h checks ---
 typedef u64 OSTime;
 
 typedef u64 Gfx;
@@ -160,6 +159,8 @@ extern "C" {
 #define memmove n64_memmove
 #define malloc  n64_malloc
 #define free    n64_free
+#define realloc n64_realloc // <--- ADDED
+#define calloc  n64_calloc  // <--- ADDED (Preventative)
 #define strcat  n64_strcat
 #define strcpy  n64_strcpy
 #define strlen  n64_strlen
