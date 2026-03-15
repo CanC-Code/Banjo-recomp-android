@@ -58,6 +58,25 @@ typedef struct {
 typedef void* OSMesg;
 typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
 typedef s32 OSPri;
+typedef s32 OSEvent; // <--- ADDED
+
+// Timer structure required by osint.h
+typedef struct OSTimer_s {
+    struct OSTimer_s *next;
+    struct OSTimer_s *prev;
+    OSTime interval;
+    OSTime value;
+    OSMesgQueue *mq;
+    OSMesg msg;
+} OSTimer; // <--- ADDED
+
+// Event state structure for __osEventStateTab
+typedef struct {
+    OSMesgQueue *queue;
+    OSMesg msg;
+} __OSEventState; // <--- ADDED
+
+#define OS_NUM_EVENTS 15 // <--- ADDED
 
 typedef struct {
     u32 status;
@@ -139,12 +158,9 @@ typedef struct {
 #define _SCHED_H_
 #define __SCHED_H__
 
-// --- ADDED: The 1990s NULL Reversion ---
-// Modern <stddef.h> defines NULL as ((void*)0). By reverting it 
-// back to just 0, it becomes valid for both floats and pointers.
+// Revert NULL to 0 to allow it to be used for floats (vegetables.c fix)
 #undef NULL
 #define NULL 0
-
 
 #ifdef __cplusplus
 extern "C" {
