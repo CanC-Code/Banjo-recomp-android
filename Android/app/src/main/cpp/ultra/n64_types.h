@@ -33,7 +33,8 @@
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES
+ * 2. CORE TYPES & PRIMITIVES
+ * Defined first to resolve circular dependencies in model.h/structs.h
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -48,7 +49,7 @@ typedef double                 f64;
 typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
-// Matches the 'int' definition in your project's bool.h to prevent redefinition errors
+// Definition for n64_bool to satisfy code sanitized by your script
 typedef int n64_bool;
 #ifndef TRUE
   #define TRUE 1
@@ -96,7 +97,7 @@ typedef struct {
 
 typedef struct {
     u32 status;
-    u32 pc;
+    u32 PC;
     u32 cause;
     u32 badvaddr;
     u64 sp;
@@ -111,7 +112,7 @@ typedef struct OSThread_s {
 
 /**
  * 3. SYSTEM INCLUDES
- * We use include_next to bypass the project's 'string.h' and get the real NDK headers.
+ * Use include_next to bypass the project's local wrappers and reach NDK headers.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -141,29 +142,32 @@ typedef struct OSThread_s {
 #define NULL 0
 
 /**
- * 4. N64 NAMESPACED PROTOTYPES
- * Instead of macros, we provide external declarations for the namespaced functions
- * created by your sanitization script.
+ * 4. COMPILER MACRO WRAPPERS
+ * Disabled for C++ to prevent namespace pollution in standard headers.
  */
+#ifndef __cplusplus
+  #define memcpy  n64_memcpy
+  #define memmove n64_memmove
+  #define malloc  n64_malloc
+  #define free    n64_free
+  #define realloc n64_realloc 
+  #define calloc  n64_calloc  
+  #define strcat  n64_strcat
+  #define strcpy  n64_strcpy
+  #define strlen  n64_strlen
+  #define sprintf n64_sprintf
+  #define printf  n64_printf
+
+  #undef bcopy
+  #define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-extern void* n64_memcpy(void* dest, const void* src, size_t n);
-extern void* n64_memmove(void* dest, const void* src, size_t n);
-extern void* n64_malloc(size_t size);
-extern void  n64_free(void* ptr);
-extern void* n64_realloc(void* ptr, size_t size);
-extern void* n64_calloc(size_t nmemb, size_t size);
-extern char* n64_strcat(char* dest, const char* src);
-extern char* n64_strcpy(char* dest, const char* src);
-extern size_t n64_strlen(const char* s);
-extern int   n64_sprintf(char* str, const char* format, ...);
-extern int   n64_printf(const char* format, ...);
-
-#undef bcopy
-#define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
-
+  // Declarations for the n64_ symbols
+  extern void* n64_memcpy(void*, const void*, size_t);
+  extern void* n64_memmove(void*, const void*, size_t);
 #ifdef __cplusplus
 }
 #endif
