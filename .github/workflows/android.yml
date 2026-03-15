@@ -29,6 +29,9 @@ jobs:
           python3 scripts/sanitize_legacy_code.py .
           # 2. Fixes Illegal Array Assignments
           python3 scripts/patch_array_initializations.py .
+          # 3. dynamic corrector 
+          python3 scripts/dynamic_corrector.py
+
 
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
