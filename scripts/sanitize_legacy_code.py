@@ -18,7 +18,6 @@ TOKEN_REPLACEMENTS = {
     r"\bfree\b": "n64_free",
     r"\brealloc\b": "n64_realloc",
     r"\bcalloc\b": "n64_calloc",
-    # Added: common math and string collisions in legacy SDKs
     r"\bsprintf\b": "n64_sprintf",
     r"\bprintf\b": "n64_printf",
     r"\bsin\b": "n64_sin",
@@ -27,12 +26,11 @@ TOKEN_REPLACEMENTS = {
 
 def fix_linkage_conflicts(content):
     # 1. Improved Regex for static function implementations
-    # Added [^{]* to handle long parameter lists or multi-line signatures
     static_func_pattern = re.compile(
         r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", 
         re.MULTILINE
     )
-    
+
     matches = static_func_pattern.findall(content)
     if not matches:
         return content
@@ -48,7 +46,6 @@ def fix_linkage_conflicts(content):
             existing_decls.add(decl)
 
     # 2. Fix mismatched non-static declarations
-    # Added \b to ensure we don't accidentally match partial function names
     for _, func_name in matches:
         mismatch_pattern = rf"^(?!\s)(?<!static\s)([\w\s\*]*?\b{func_name}\b\s*\([^)]*\)\s*;)"
         content = re.sub(mismatch_pattern, r"static \1", content, flags=re.MULTILINE)
@@ -59,7 +56,7 @@ def fix_linkage_conflicts(content):
     # 4. Smart Forward Declaration Placement
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
-        
+
         # Prefer placing after the last #include, otherwise at the top
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
@@ -71,9 +68,9 @@ def fix_linkage_conflicts(content):
     return content
 
 def sanitize_codebase(root_path):
-    print(f"🧹 Scanning: {root_path}")
+    print(f"扫 Scanning: {root_path}")
     patch_count = 0
-    
+
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): 
@@ -86,18 +83,32 @@ def sanitize_codebase(root_path):
 
                 filepath = os.path.join(root, filename)
                 try:
-                    # Using 'replace' for errors to prevent script crash on binary/weird chars
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
+                        lines = f.readlines()
                 except Exception as e:
                     print(f"  [Error Reading] {filepath}: {e}")
                     continue
 
-                original_content = content
+                original_content = "".join(lines)
+                new_lines = []
+                modified_tokens = False
 
-                # Apply Token Replacements
-                for pattern, replacement in TOKEN_REPLACEMENTS.items():
-                    content = re.sub(pattern, replacement, content)
+                for line in lines:
+                    # 🛡️ PROTECTION: Do not apply replacements to include directives
+                    # This prevents #include "bool.h" from becoming #include "n64_bool.h"
+                    if line.strip().startswith("#include"):
+                        new_lines.append(line)
+                        continue
+                    
+                    original_line = line
+                    for pattern, replacement in TOKEN_REPLACEMENTS.items():
+                        line = re.sub(pattern, replacement, line)
+                    
+                    if line != original_line:
+                        modified_tokens = True
+                    new_lines.append(line)
+
+                content = "".join(new_lines)
 
                 # Apply Linkage Fixes (C files only)
                 if filename.endswith('.c'):
