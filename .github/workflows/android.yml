@@ -13,17 +13,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: ☕ Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: 🐘 Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: 8.2 
-
       - name: 🖼️ Generate Android Icons
         run: |
           sudo apt-get update && sudo apt-get install -y imagemagick
@@ -34,23 +23,37 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
-      - name: 🧹 Pre-Patch Source Code
+      - name: 🧹 Sanitize & Patch Legacy Source Code
         run: |
+          # 1. Isolates Standard Libraries
           python3 scripts/sanitize_legacy_code.py .
+          # 2. Fixes Illegal Array Assignments
           python3 scripts/patch_array_initializations.py .
 
-      - name: 🤖 Dynamic Correction & Build Loop
-        # This replaces the standard "gradle assembleDebug" step.
-        # It will iteratively fix "timespec" and type errors until the build passes.
-        run: python3 scripts/dynamic_corrector.py
+      - name: ☕ Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: 🐘 Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.2 
+          cache-overwrite-existing: true
+
+      - name: 🔨 Build APK & Capture Logs
+        run: |
+          set -o pipefail
+          cd Android
+          gradle assembleDebug --stacktrace 2>&1 | tee ../full_build_log.txt
 
       - name: 📦 Upload Full Error Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: full-compilation-logs
-          # The script saves the log inside the Android folder
-          path: Android/full_build_log.txt
+          path: full_build_log.txt
           retention-days: 3
 
       - name: 📦 Upload APK
