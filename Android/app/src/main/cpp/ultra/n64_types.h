@@ -15,6 +15,9 @@ typedef double                 f64;
 typedef unsigned char          uchar;
 typedef volatile unsigned int  vu32; 
 
+// --- ADDED: Satisfies any remaining legacy sched.h checks ---
+typedef u64 OSTime;
+
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef struct { s16 state[16]; } ADPCM_STATE;
@@ -119,8 +122,6 @@ typedef struct {
 
 /**
  * 3. SAFE SYSTEM INCLUDES (THE AIRLOCK)
- * Temporarily open the blockade to allow Android's Bionic C-library 
- * to load its native headers, then immediately slam it shut.
  */
 #undef _STRING_H_
 #undef __STRING_H__
@@ -132,7 +133,7 @@ typedef struct {
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <sched.h> // <-- Fixes the sched_yield() error
+#include <sched.h> 
 
 #define _STRING_H_
 #define __STRING_H__
@@ -153,7 +154,6 @@ extern "C" {
 
 /**
  * 4. C-ONLY COMPILER MACRO HIJACK
- * Wraps legacy C files securely but ignores modern C++ components.
  */
 #ifndef __cplusplus
 #define memcpy  n64_memcpy
