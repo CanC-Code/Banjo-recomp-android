@@ -119,7 +119,6 @@ typedef struct {
 
 /**
  * 3. SAFE SYSTEM INCLUDES
- * Placed here so the system <string.h> loads BEFORE we hijack the functions.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -131,12 +130,20 @@ typedef struct {
 extern "C" {
 #endif
 
+#undef bcopy
+#define bcopy(src, dst, n) memmove((dst), (src), (n))
+
+#ifdef __cplusplus
+}
+#endif
+
 /**
- * 4. FOOLPROOF COMPILER MACRO HIJACK
- * This forces the compiler to immediately rename the conflicting legacy C 
- * functions in-memory before evaluating the game files. This ensures no conflicts
- * with the system headers without relying on external python scripts.
+ * 4. C-ONLY COMPILER MACRO HIJACK
+ * By wrapping this in #ifndef __cplusplus, C++ standard libraries 
+ * (like <cstring>) are protected from the rename, while legacy C files
+ * get successfully mapped to the n64_ variations.
  */
+#ifndef __cplusplus
 #define memcpy  n64_memcpy
 #define memmove n64_memmove
 #define malloc  n64_malloc
@@ -146,13 +153,6 @@ extern "C" {
 #define strlen  n64_strlen
 #define sprintf n64_sprintf
 #define printf  n64_printf
-
-#undef bcopy
-// We map the old N64 bcopy directly to the n64_memmove we just hijacked
-#define bcopy(src, dst, n) n64_memmove((dst), (src), (n))
-
-#ifdef __cplusplus
-}
 #endif
 
 #endif // N64_TYPES_H
