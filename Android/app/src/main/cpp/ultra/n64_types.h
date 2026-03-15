@@ -2,7 +2,9 @@
 #define N64_TYPES_H
 
 /**
- * 1. THE ABSOLUTE BLOCKADE (Moved to top for safety)
+ * 1. THE NUCLEAR BLOCKADE
+ * We define every possible variation of the include guards for N64 headers
+ * to prevent the original, conflicting headers from being processed.
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -31,14 +33,20 @@
 #define BOOL_H
 
 // Comprehensive blockade for osint.h
+#define OSINT_H
+#define _OSINT_H
+#define __OSINT_H
 #define _OSINT_H_
 #define __OSINT_H__
 #define _OS_OSINT_H_
 #define __OS_OSINT_H__
 #define _ULTRA64_OSINT_H_
-#define OSINT_H
+#define OSINT_H_INCLUDED
+#define _OSINT_H_INCLUDED
+#define __OSINT_H_INCLUDED
 
-/** * 2. TRUE ATOMIC PRIMITIVES & N64 STRUCTURES */
+/** * 2. CORE N64 TYPES 
+ */
 typedef signed char            s8;
 typedef unsigned char          u8;
 typedef short                  s16;
@@ -105,8 +113,8 @@ typedef struct OSTimer_s {
     OSMesg msg;
 } OSTimer;
 
-// Added tag name '__OSEventState' to match the original header style
-typedef struct __OSEventState {
+// Fixed: Removed the internal struct tag to avoid "Redefinition of __OSEventState"
+typedef struct {
     OSMesgQueue *messageQueue;
     OSMesg message;
 } __OSEventState;
@@ -142,7 +150,7 @@ typedef struct {
 } CPUState;
 
 /**
- * 3. SAFE SYSTEM INCLUDES (THE AIRLOCK)
+ * 3. SYSTEM INCLUDES
  */
 #undef _STRING_H_
 #undef __STRING_H__
@@ -161,7 +169,7 @@ typedef struct {
 #define _SCHED_H_
 #define __SCHED_H__
 
-// 1990s NULL Reversion (vegetables.c fix)
+// Fix for vegetables.c NULL issue
 #undef NULL
 #define NULL 0
 
@@ -177,7 +185,7 @@ extern "C" {
 #endif
 
 /**
- * 4. C-ONLY COMPILER MACRO HIJACK
+ * 4. COMPILER MACRO WRAPPERS
  */
 #ifndef __cplusplus
 #define memcpy  n64_memcpy
