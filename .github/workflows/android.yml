@@ -24,9 +24,6 @@ jobs:
         with:
           gradle-version: 8.2 
 
-      - name: 🔑 Fix Permissions
-        run: chmod +x Android/gradlew
-
       - name: 🖼️ Generate Android Icons
         run: |
           sudo apt-get update && sudo apt-get install -y imagemagick
@@ -37,25 +34,20 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
-      - name: 🧹 Sanitize & Patch Legacy Source Code
+      - name: 🧹 Static Pre-Patching
         run: |
-          # Static patches (Header isolation & Array fixes)
           python3 scripts/sanitize_legacy_code.py .
           python3 scripts/patch_array_initializations.py .
 
-      - name: 🤖 Dynamic Compilation & Correction Loop
-        run: |
-          # This replaces the standard "gradle assembleDebug" step
-          # It will loop-build and self-correct the source code
-          python3 scripts/dynamic_corrector.py
+      - name: 🤖 Dynamic Correction Loop
+        run: python3 scripts/dynamic_corrector.py
 
-      - name: 📦 Upload Full Error Logs
+      - name: 📦 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-compilation-logs
+          name: compilation-logs
           path: Android/full_build_log.txt
-          retention-days: 3
 
       - name: 📦 Upload APK
         if: success()
