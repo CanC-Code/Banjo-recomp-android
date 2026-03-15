@@ -2,7 +2,7 @@
 #define N64_TYPES_H
 
 /**
- * 1. THE NUCLEAR BLOCKADE
+ * 1. THE NUCLEAR BLOCKADE (System header blocks removed)
  */
 #define _ULTRA64_H_
 #define __ULTRA64_H__
@@ -24,8 +24,6 @@
 #define _OS_THREAD_H_
 #define _OS_MESSAGE_H_
 #define _OS_LIBC_H_
-#define _STRING_H_
-#define __STRING_H__
 #define _BOOL_H_      
 #define __BOOL_H__
 #define BOOL_H
@@ -33,7 +31,7 @@
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES 
+ * 2. CORE N64 TYPES
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -168,35 +166,7 @@ extern "C" {
 #endif
 
 /**
- * 5. SYSTEM INCLUDES
- * Temporarily lift the blockade so the system string and math headers 
- * can populate the global namespace for C++ <cstring> to consume.
- */
-#undef _STRING_H_
-#undef __STRING_H__
-#undef _SCHED_H_
-#undef __SCHED_H__
-
-#include <stdint.h>
-#include <stddef.h>
-#include <stdlib.h>
-
-#ifdef __clang__
-  #include_next <string.h>
-  #include_next <math.h>
-#else
-  #include <string.h>
-  #include <math.h>
-#endif
-
-// Re-apply the blockade for any legacy C code included afterward
-#define _STRING_H_
-#define __STRING_H__
-#define _SCHED_H_
-#define __SCHED_H__
-
-/**
- * 6. COMPILER MACRO WRAPPERS
+ * 5. COMPILER MACRO WRAPPERS
  */
 #ifndef __cplusplus
   #define memcpy  n64_memcpy
