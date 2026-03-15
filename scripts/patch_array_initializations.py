@@ -34,13 +34,18 @@ def patch_arrays(root_path):
 
                 original_content = content
 
-                # Fix Shadowed Names AND Usages
+                # Fix Shadowed Names AND Usages Safely
                 shadow_matches = shadow_pattern.findall(content)
                 for indent, type_name, var_name, size in shadow_matches:
+                    # Rename the declaration
                     decl_pattern = rf'{indent}{type_name}\s+{var_name}\s*\['
                     content = re.sub(decl_pattern, f'{indent}{type_name} buffer_{var_name}[', content)
-                    usage_pattern = rf'(?<!{type_name}\s)\b{var_name}\b(?!\s*\[)'
-                    content = re.sub(usage_pattern, f'buffer_{var_name}', content)
+                    
+                    # Rename safe array index usages (e.g., 'u8[' becomes 'buffer_u8[')
+                    content = re.sub(rf'\b{var_name}\s*\[', f'buffer_{var_name}[', content)
+                    
+                    # Rename in memory function targets (e.g., 'memcpy(u8,' becomes 'memcpy(buffer_u8,')
+                    content = re.sub(rf'\b(memcpy|memset|memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
                 # Fix Invalid Assignments
                 def replace_assignment(match):
@@ -51,7 +56,7 @@ def patch_arrays(root_path):
                 content = assignment_pattern.sub(replace_assignment, content)
 
                 # Emergency 'tmp' array declaration
-                if ('[tmp]' in content or 'tmp[' in content) and 'int tmp' not in content:
+                if ('[tmp]' in content or 'tmp[' in content) and 'int tmp' not in content and 'u8 tmp' not in content:
                     tmp_decl = "\n/* Emergency Decompiler Fix: tmp used as array */\nstatic u8 tmp[1024] = {0};\n"
                     includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
                     if includes:
