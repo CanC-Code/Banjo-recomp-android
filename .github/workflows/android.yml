@@ -1,3 +1,8 @@
+name: Android Build Pipeline
+
+on:
+  workflow_dispatch: 
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,7 +23,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.2 
-          cache-overwrite-existing: true
+
+      - name: 🔑 Fix Permissions
+        run: chmod +x Android/gradlew
 
       - name: 🖼️ Generate Android Icons
         run: |
@@ -30,32 +37,24 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
-      - name: 🧹 Pre-Sanitize Legacy Source
+      - name: 🧹 Sanitize & Patch Legacy Source Code
         run: |
-          # Static patches that don't require the build environment
+          # Static patches (Header isolation & Array fixes)
           python3 scripts/sanitize_legacy_code.py .
-          if [ -f "scripts/patch_array_initializations.py" ]; then
-            python3 scripts/patch_array_initializations.py .
-          fi
+          python3 scripts/patch_array_initializations.py .
 
-      - name: 🔨 Iterative Build (Dynamic Corrector)
+      - name: 🤖 Dynamic Compilation & Correction Loop
         run: |
-          # 1. Critical: Grant execution permission to the Gradle wrapper
-          chmod +x Android/gradlew
-          
-          # 2. Run the dynamic corrector
-          # It will loop: Build -> Parse Errors -> Fix Source -> Rebuild
+          # This replaces the standard "gradle assembleDebug" step
+          # It will loop-build and self-correct the source code
           python3 scripts/dynamic_corrector.py
-          
-          # 3. Move the final log to the root for the upload step
-          mv Android/full_build_log.txt ./full_build_log.txt
 
       - name: 📦 Upload Full Error Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: full-compilation-logs
-          path: full_build_log.txt
+          path: Android/full_build_log.txt
           retention-days: 3
 
       - name: 📦 Upload APK
