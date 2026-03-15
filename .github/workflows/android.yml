@@ -34,20 +34,24 @@ jobs:
             python3 scripts/generate_icons.py icon_master.png
           fi
 
-      - name: 🧹 Static Pre-Patching
+      - name: 🧹 Pre-Patch Source Code
         run: |
           python3 scripts/sanitize_legacy_code.py .
           python3 scripts/patch_array_initializations.py .
 
-      - name: 🤖 Dynamic Correction Loop
+      - name: 🤖 Dynamic Correction & Build Loop
+        # This replaces the standard "gradle assembleDebug" step.
+        # It will iteratively fix "timespec" and type errors until the build passes.
         run: python3 scripts/dynamic_corrector.py
 
-      - name: 📦 Upload Logs
+      - name: 📦 Upload Full Error Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: compilation-logs
+          name: full-compilation-logs
+          # The script saves the log inside the Android folder
           path: Android/full_build_log.txt
+          retention-days: 3
 
       - name: 📦 Upload APK
         if: success()
