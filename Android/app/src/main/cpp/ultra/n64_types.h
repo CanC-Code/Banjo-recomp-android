@@ -110,7 +110,8 @@ typedef struct OSThread_s {
 
 /**
  * 3. SYSTEM INCLUDES
- * Bypass project-local 'string.h' to load NDK system headers first.
+ * include_next is critical here. It tells the compiler to skip your local 
+ * [span_6](start_span)include directory and find the actual NDK system headers[span_6](end_span).
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -141,8 +142,8 @@ typedef struct OSThread_s {
 
 /**
  * 4. N64 NAMESPACED SYMBOLS
- * We provide external declarations instead of macros to avoid 
- * namespace pollution in C++ headers.
+ * Only define these as macros for C code. Renaming them via macros in C++ 
+ * [span_7](start_span)causes the "no member in global namespace" errors in the STL[span_7](end_span).
  */
 #ifdef __cplusplus
 extern "C" {
@@ -165,6 +166,19 @@ extern int   n64_printf(const char* format, ...);
 
 #ifdef __cplusplus
 }
+#else
+  // Only use macro redefinition in pure C files
+  #define memcpy  n64_memcpy
+  #define memmove n64_memmove
+  #define malloc  n64_malloc
+  #define free    n64_free
+  #define realloc n64_realloc 
+  #define calloc  n64_calloc  
+  #define strcat  n64_strcat
+  #define strcpy  n64_strcpy
+  #define strlen  n64_strlen
+  #define sprintf n64_sprintf
+  #define printf  n64_printf
 #endif
 
 #endif // N64_TYPES_H
