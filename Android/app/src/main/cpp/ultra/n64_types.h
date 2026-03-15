@@ -139,6 +139,12 @@ typedef struct {
 #define _SCHED_H_
 #define __SCHED_H__
 
+// --- ADDED: The 1990s NULL Reversion ---
+// Modern <stddef.h> defines NULL as ((void*)0). By reverting it 
+// back to just 0, it becomes valid for both floats and pointers.
+#undef NULL
+#define NULL 0
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -159,8 +165,8 @@ extern "C" {
 #define memmove n64_memmove
 #define malloc  n64_malloc
 #define free    n64_free
-#define realloc n64_realloc // <--- ADDED
-#define calloc  n64_calloc  // <--- ADDED (Preventative)
+#define realloc n64_realloc 
+#define calloc  n64_calloc  
 #define strcat  n64_strcat
 #define strcpy  n64_strcpy
 #define strlen  n64_strlen
