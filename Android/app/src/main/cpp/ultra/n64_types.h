@@ -38,19 +38,32 @@ typedef struct {
 } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
 
+// --- Controller Data (NEW) ---
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errnum;
+} OSContPad;
+
+typedef struct {
+    u16 type;
+    u8  status;
+    u8  errnum;
+} OSContStatus;
+
 // --- OS & Threading ---
 typedef void* OSMesg;
 typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
 typedef s32 OSPri;
 
-// Expanded OSThreadContext to satisfy emulator/exceptasm.cpp
 typedef struct {
     u32 status;
     u32 pc;
     u32 cause;
     u32 badvaddr;
     u64 sp;
-    u8 padding[512 - 24]; // Pad out the rest of the struct
+    u8 padding[512 - 24]; 
 } __OSThreadContext;
 
 typedef struct OSThread_s {
@@ -63,7 +76,6 @@ typedef void* OSTask;
 typedef void* ALHeap;
 typedef struct { u8 d[1024]; } ALGlobals;
 
-// Missing CPUState from exceptasm.cpp
 typedef struct {
     u64 registers[32];
 } CPUState;
