@@ -7,9 +7,8 @@ TARGET_DIRS = ["src", "include"]
 def patch_arrays(root_path):
     print("🛠️ Starting Invalid Array Initialization Patch...")
     
-    # Matches patterns like: u8 tmp[6] = D_80390DA0;
-    # Groups: (1:Type) (2:VarName) (3:ArraySize) (4:DataSource)
-    pattern = re.compile(r'\b(u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\s+([a-zA-Z0-9_]+)\[(\d+)\]\s*=\s*([a-zA-Z0-9_]+)\s*;')
+    # Made regex much more robust to handle unpredictable spaces/tabs
+    pattern = re.compile(r'\b(u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\s+([a-zA-Z0-9_]+)\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*;')
     
     patch_count = 0
     for dir_name in TARGET_DIRS:
@@ -31,8 +30,7 @@ def patch_arrays(root_path):
                 
                 original_content = content
                 
-                # Rewrites "u8 tmp[6] = D_80390DA0;" 
-                # Into "u8 tmp[6]; memcpy(tmp, D_80390DA0, 6 * sizeof(u8));"
+                # Replace with declaration + memcpy
                 replacement = r'\1 \2[\3]; memcpy(\2, \4, \3 * sizeof(\1));'
                 content = pattern.sub(replacement, content)
                 
