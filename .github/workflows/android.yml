@@ -30,7 +30,7 @@ jobs:
           # 2. Fixes Illegal Array Assignments
           python3 scripts/patch_array_initializations.py .
           # 3. dynamic corrector 
-          python3 scripts/dynamic_corrector.py
+          python3 scripts/dynamic_corrector.py .
 
 
       - name: ☕ Set up JDK 17
