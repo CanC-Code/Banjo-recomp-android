@@ -58,9 +58,8 @@ typedef struct {
 typedef void* OSMesg;
 typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
 typedef s32 OSPri;
-typedef s32 OSEvent; // <--- ADDED
+typedef s32 OSEvent;
 
-// Timer structure required by osint.h
 typedef struct OSTimer_s {
     struct OSTimer_s *next;
     struct OSTimer_s *prev;
@@ -68,15 +67,21 @@ typedef struct OSTimer_s {
     OSTime value;
     OSMesgQueue *mq;
     OSMesg msg;
-} OSTimer; // <--- ADDED
+} OSTimer;
 
-// Event state structure for __osEventStateTab
+// Fixed field names to match seteventmesg.c
 typedef struct {
-    OSMesgQueue *queue;
-    OSMesg msg;
-} __OSEventState; // <--- ADDED
+    OSMesgQueue *messageQueue;
+    OSMesg message;
+} __OSEventState;
 
-#define OS_NUM_EVENTS 15 // <--- ADDED
+#define OS_NUM_EVENTS 15
+
+// Declarations for OS globals found in osint.h
+extern OSTime __osInsertTimer(OSTimer *);
+extern OSTimer *__osTimerList;
+extern OSTimer __osBaseTimer;
+extern __OSEventState __osEventStateTab[OS_NUM_EVENTS];
 
 typedef struct {
     u32 status;
@@ -124,6 +129,8 @@ typedef struct {
 #define _OS_THREAD_H_
 #define _OS_MESSAGE_H_
 #define _OS_LIBC_H_
+#define _OSINT_H_    // <--- ADDED: Block the conflicting header
+#define __OSINT_H__  // <--- ADDED
 #define _STRING_H_
 #define __STRING_H__
 #define _BOOL_H_      
@@ -158,9 +165,10 @@ typedef struct {
 #define _SCHED_H_
 #define __SCHED_H__
 
-// Revert NULL to 0 to allow it to be used for floats (vegetables.c fix)
+// 1990s NULL Reversion (vegetables.c fix)
 #undef NULL
 #define NULL 0
+
 
 #ifdef __cplusplus
 extern "C" {
