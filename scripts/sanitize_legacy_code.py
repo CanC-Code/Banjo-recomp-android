@@ -25,6 +25,15 @@ TOKEN_REPLACEMENTS = {
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
+def wrap_shadow_headers(content, filename):
+    # System headers that are often shadowed by N64 decompilations
+    shadow_headers = ['string.h', 'math.h', 'stdlib.h', 'stdio.h', 'stdarg.h', 'stddef.h', 'time.h', 'assert.h', 'stdint.h']
+    if filename in shadow_headers:
+        if '#include_next' not in content:
+            # For C++, bypass the N64 file completely and use the NDK system header
+            return f"#ifdef __cplusplus\n#include_next <{filename}>\n#else\n{content}\n#endif\n"
+    return content
+
 def fix_decompiler_artifacts(content, filename):
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
@@ -97,7 +106,7 @@ def sanitize_codebase(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                # 🛡️ Process C/H files, SKIP C++ AND core headers
+                # 🛡️ Process ONLY C/H files, SKIP C++ AND core headers
                 if not filename.endswith(('.c', '.h')): continue
                 if filename == "n64_types.h": continue
 
@@ -121,6 +130,9 @@ def sanitize_codebase(root_path):
                 content = fix_decompiler_artifacts(content, filename)
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
+                
+                # Wrap shadowed system headers
+                content = wrap_shadow_headers(content, filename)
 
                 if content != original_content:
                     with open(filepath, 'w', encoding='utf-8') as f:
