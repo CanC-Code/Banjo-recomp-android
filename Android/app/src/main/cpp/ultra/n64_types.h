@@ -137,12 +137,17 @@ typedef struct OSThread_s {
 
 /**
  * 3. GLOBAL NAMESPACE INJECTION (For C++ Stability)
- * We include <time.h> to retrieve time_t and clock_t from the legacy header,
- * then inject the missing standard function prototypes to satisfy <ctime>.
+ * Use include_next to bypass the legacy time.h and fetch real standard types 
+ * (like time_t and clock_t) before injecting the prototypes.
  */
 #ifdef __cplusplus
 #include <stddef.h>
-#include <time.h>
+
+#ifdef __clang__
+  #include_next <time.h>
+#else
+  #include <time.h>
+#endif
 
 extern "C" {
 // String Functions
