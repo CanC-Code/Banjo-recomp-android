@@ -118,13 +118,27 @@ typedef struct {
 #endif
 
 /**
- * 3. SAFE SYSTEM INCLUDES
+ * 3. SAFE SYSTEM INCLUDES (THE AIRLOCK)
+ * Temporarily open the blockade to allow Android's Bionic C-library 
+ * to load its native headers, then immediately slam it shut.
  */
+#undef _STRING_H_
+#undef __STRING_H__
+#undef _SCHED_H_
+#undef __SCHED_H__
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <sched.h> // <-- Fixes the sched_yield() error
+
+#define _STRING_H_
+#define __STRING_H__
+#define _SCHED_H_
+#define __SCHED_H__
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -139,9 +153,7 @@ extern "C" {
 
 /**
  * 4. C-ONLY COMPILER MACRO HIJACK
- * By wrapping this in #ifndef __cplusplus, C++ standard libraries 
- * (like <cstring>) are protected from the rename, while legacy C files
- * get successfully mapped to the n64_ variations.
+ * Wraps legacy C files securely but ignores modern C++ components.
  */
 #ifndef __cplusplus
 #define memcpy  n64_memcpy
