@@ -13,23 +13,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 🖼️ Generate Android Icons
-        run: |
-          sudo apt-get update && sudo apt-get install -y imagemagick
-          if [ -f "icon_master.png" ]; then
-            python3 scripts/generate_icons.py icon_master.png
-          else
-            convert -size 512x512 xc:blue icon_master.png
-            python3 scripts/generate_icons.py icon_master.png
-          fi
-
-      - name: 🧹 Sanitize & Patch Legacy Source Code
-        run: |
-          # 1. Isolates Standard Libraries
-          python3 scripts/sanitize_legacy_code.py .
-          # 2. Fixes Illegal Array Assignments
-          python3 scripts/patch_array_initializations.py .
-
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -40,20 +23,33 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.2 
-          cache-overwrite-existing: true
 
-      - name: 🔨 Build APK & Capture Logs
+      - name: 🖼️ Generate Android Icons
         run: |
-          set -o pipefail
-          cd Android
-          gradle assembleDebug --stacktrace 2>&1 | tee ../full_build_log.txt
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          if [ -f "icon_master.png" ]; then
+            python3 scripts/generate_icons.py icon_master.png
+          else
+            convert -size 512x512 xc:blue icon_master.png
+            python3 scripts/generate_icons.py icon_master.png
+          fi
+
+      - name: 🧹 Static Pre-Patching
+        run: |
+          python3 scripts/sanitize_legacy_code.py .
+          python3 scripts/patch_array_initializations.py .
+
+      - name: 🤖 Automated Correction & Build Loop
+        # This script replaces the manual 'gradle assembleDebug' step
+        run: python3 scripts/dynamic_corrector.py
 
       - name: 📦 Upload Full Error Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: full-compilation-logs
-          path: full_build_log.txt
+          # The script saves the log inside the Android folder
+          path: Android/full_build_log.txt
           retention-days: 3
 
       - name: 📦 Upload APK
