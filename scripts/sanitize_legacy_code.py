@@ -2,10 +2,8 @@ import os
 import re
 import sys
 
-# Directories to process within the root path
 TARGET_DIRS = ["src", "include"]
 
-# Symbols to namespace to avoid collisions
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "TRUE",
@@ -25,27 +23,18 @@ TOKEN_REPLACEMENTS = {
     r"\bcos\b": "n64_cos",
 }
 
-# Types that often shadow variables in decompiled code (using non-capturing ?: group)
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
 def fix_decompiler_artifacts(content, filename):
-    """
-    Handles broken code patterns like 'u8 u8[tmp]' or 'u8 arr[6] = src'.
-    """
-    # 1. Fix Shadowed Names AND Usages Safely
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
     for indent, type_name, var_name, size in shadow_matches:
         decl_line = rf'{indent}{type_name}\s+{var_name}\s*\['
         content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
-        
-        # Rename safe array index usages
         content = re.sub(rf'\b{var_name}\s*\[', f'buffer_{var_name}[', content)
-        # Rename in memory function targets
         content = re.sub(rf'\b(memcpy|memset|memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
-    # 2. Fix Invalid Array Assignments
     assign_pattern = re.compile(
         rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*;',
         re.MULTILINE
@@ -58,7 +47,6 @@ def fix_decompiler_artifacts(content, filename):
 
     content = assign_pattern.sub(array_to_memcpy, content)
 
-    # 3. Emergency 'tmp' array declaration for leafboat.c style errors
     if ('[tmp]' in content or 'tmp[' in content) and 'int tmp' not in content and 'u8 tmp' not in content:
         tmp_decl = "\n/* Emergency Decompiler Fix */\nstatic u8 tmp[1024] = {0};\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
@@ -68,7 +56,6 @@ def fix_decompiler_artifacts(content, filename):
         else:
             content = tmp_decl + content
 
-    # 4. Math Constant Protection (M_PI)
     if 'M_PI' in content and 'math.h' in content and '#define M_PI' not in content:
         pi_fix = "\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n"
         content = re.sub(r'^(#include <math\.h>)$', r'\1' + pi_fix, content, flags=re.MULTILINE)
@@ -110,7 +97,10 @@ def sanitize_codebase(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                if not filename.endswith(('.c', '.h', '.cpp')): continue
+                # 🛡️ Process C/H files, SKIP C++ AND core headers
+                if not filename.endswith(('.c', '.h')): continue
+                if filename == "n64_types.h": continue
+
                 filepath = os.path.join(root, filename)
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
