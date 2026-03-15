@@ -33,7 +33,7 @@
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES (Fully Restored)
+ * 2. CORE N64 TYPES 
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -56,7 +56,6 @@ typedef int n64_bool;
   #define FALSE 0
 #endif
 
-// Math constants fallback
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
 #endif
