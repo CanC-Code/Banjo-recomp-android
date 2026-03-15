@@ -33,7 +33,8 @@
 #define _OSINT_H_INCLUDED
 
 /**
- * 2. CORE N64 TYPES & CPU STATE
+ * 2. CORE N64 TYPES
+ * DEFINED FIRST: To resolve the 'unknown type' errors in pfsmanager.h and functions.h.
  */
 typedef signed char            s8;
 typedef unsigned char          u8;
@@ -56,13 +57,26 @@ typedef int n64_bool;
   #define FALSE 0
 #endif
 
+// Controller Data Structures (Moved here to fix pfsmanager.h errors)
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errnum;
+} OSContPad;
+
+typedef struct {
+    u16 type;
+    u8  status;
+    u8  errnum;
+} OSContStatus;
+
 typedef struct {
     u64 registers[32];
     u64 lo, hi;
     u64 pc;
 } CPUState;
 
-// Linkage Fix: Ensure this is wrapped for C++ compatibility
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -125,7 +139,6 @@ typedef struct OSThread_s {
 
 /**
  * 3. GLOBAL NAMESPACE INJECTION (For C++ Stability)
- * Added missing members reported in log: strcoll, strxfrm, strcspn, etc.
  */
 #ifdef __cplusplus
 extern "C" {
@@ -144,7 +157,6 @@ void* memset(void* s, int c, size_t n);
 void* memchr(const void* s, int c, size_t n);
 char* strchr(const char* s, int c);
 char* strrchr(const char* s, int c);
-// New additions from log
 int    strcoll(const char* s1, const char* s2);
 size_t strxfrm(char* dest, const char* src, size_t n);
 size_t strcspn(const char* s, const char* reject);
