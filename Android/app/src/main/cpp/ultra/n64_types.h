@@ -32,39 +32,24 @@
 #define OSINT_H
 #define _OSINT_H_INCLUDED
 
-/** * 2. SYSTEM INCLUDES (Load first, then blockade)
- */
-#include <stdint.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-#include <sched.h> 
-
-// Re-establish blockade for string and sched to prevent later pollution
-#define _STRING_H_
-#define __STRING_H__
-#define _SCHED_H_
-#define __SCHED_H__
-
 /**
- * 3. CORE N64 TYPES 
- * Using <stdint.h> ensures these types are exactly the right size on 64-bit Android.
+ * 2. CORE N64 PRIMITIVES & ALIGNMENT
+ * These MUST be defined before any #include to prevent circular dependency errors 
+ * in headers like model.h or structs.h.
  */
-typedef int8_t                 s8;
-typedef uint8_t                u8;
-typedef int16_t                s16;
-typedef uint16_t               u16;
-typedef int32_t                s32;
-typedef uint32_t               u32;
-typedef int64_t                s64;
-typedef uint64_t               u64;
+typedef signed char            s8;
+typedef unsigned char          u8;
+typedef short                  s16;
+typedef unsigned short         u16;
+typedef int                    s32;
+typedef unsigned int           u32;
+typedef long long              s64;
+typedef unsigned long long     u64;
 typedef float                  f32;
 typedef double                 f64;
 typedef unsigned char          uchar;
-typedef volatile uint32_t      vu32; 
+typedef volatile unsigned int  vu32; 
 
-// Alignment Macro for modern compilers
 #if defined(__GNUC__) || defined(__clang__)
 #define N64_ALIGN(x) __attribute__((aligned(x)))
 #else
@@ -74,15 +59,14 @@ typedef volatile uint32_t      vu32;
 typedef u64 OSTime;
 typedef u64 Gfx;
 typedef u64 Acmd;
+
 typedef struct { s16 state[16]; } ADPCM_STATE;
 
-// Using N64_ALIGN(8) ensures the union is properly aligned for DMA-style access
 typedef union N64_ALIGN(8) { 
     struct { s32 m[4][4]; }; 
     long long force_align; 
 } Mtx;
 
-// --- Graphics & Lighting ---
 typedef struct { u8 col[3]; s8 dir[3]; } Light_t;
 typedef union N64_ALIGN(8) { Light_t l; long long force_align; } Light;
 typedef struct { s16 x, y, z; } LookAt_t;
@@ -100,7 +84,32 @@ typedef struct {
 } Vtx_t;
 typedef union N64_ALIGN(8) { Vtx_t v; long long force_align; } Vtx;
 
-// --- OS & Threading ---
+/** * 3. SYSTEM INCLUDES
+ * Now that primitives are defined, it is safe to load system headers.
+ */
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+
+/* Temporarily lift blockade to allow the real string/math/sched headers to load */
+#undef _STRING_H_
+#undef __STRING_H__
+#undef _SCHED_H_
+#undef __SCHED_H__
+
+#include <string.h>
+#include <math.h>
+#include <sched.h> 
+
+/* Re-establish blockade */
+#define _STRING_H_
+#define __STRING_H__
+#define _SCHED_H_
+#define __SCHED_H__
+
+/**
+ * 4. OS & THREADING STRUCTURES
+ */
 typedef void* OSMesg;
 typedef struct { void* mt; void* full; s32 count; } OSMesgQueue;
 typedef s32 OSPri;
@@ -138,9 +147,15 @@ typedef struct OSThread_s {
     __OSThreadContext context;
 } OSThread;
 
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errnum;
+} OSContPad;
+
 /**
- * 4. COMPILER MACRO WRAPPERS
- * These must remain at the bottom to ensure they redirect the sanitized code.
+ * 5. COMPILER MACRO WRAPPERS
  */
 #ifndef __cplusplus
 #undef NULL
