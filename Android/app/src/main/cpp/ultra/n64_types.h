@@ -1,21 +1,18 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-// 1. POSIX FIRST: Get the system's timespec before any N64 headers clash
 #include <sys/types.h>
 #include <time.h>
 #include <stddef.h>
 #include <stdint.h>
 
-// 2. THE NUCLEAR BLOCKADE
+// 1. THE NUCLEAR BLOCKADE
 #define _TIME_H_
 #define _SYS_TIME_H_
 #define _ULTRA64_H_
 #define _OS_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
 
-// 3. SCALARS & NULL FIX
+// 2. CORE N64 TYPES
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -29,16 +26,30 @@ typedef double f64;
 typedef int n64_bool;
 
 #undef NULL
-#define NULL 0 // Allows NULL to act as both 0 (pointer) and 0.0f (float)
+#define NULL 0
 
-// 4. ENGINE STUBS
+// 3. FULL STRUCT DEFINITIONS (Required for C++ compilation)
+typedef struct {
+    u64 registers[32];
+    u64 lo, hi, pc;
+} CPUState;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    s32 priority;
+    CPUState context;
+    u8 padding[512]; // Opaque padding for OS-specific thread data
+} OSThread;
+
 typedef u64 OSTime;
 typedef void* OSMesg;
+
 #ifndef _AL_GLOBALS_DEFINED
-  #define _AL_GLOBALS_DEFINED
-  typedef struct { u8 padding[0x1000]; } ALGlobals;
+#define _AL_GLOBALS_DEFINED
+typedef struct { u8 padding[0x1000]; } ALGlobals;
 #endif
 
+// 4. FORWARD DECLARATIONS
 typedef struct Actor Actor;
 typedef struct sChVegetable sChVegetable;
 
