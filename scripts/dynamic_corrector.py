@@ -27,77 +27,81 @@ def apply_fixes():
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     null_errs = re.findall(file_regex + r":(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
-    # 🧹 The failed injection from Cycle 1 that we need to clean up
-    BAD_SCHED = "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint sched_yield(void);\n#ifdef __cplusplus\n}\n#endif\n"
+    # 🧹 Failed local injections to clean up
+    CLEANUP_STRINGS = [
+        "#include <unistd.h>\nstatic inline int sched_yield_poly(void) { return usleep(1); }\n#define sched_yield sched_yield_poly\n",
+        "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint sched_yield(void);\n#ifdef __cplusplus\n}\n#endif\n"
+    ]
 
-    # 🛡️ BULLETPROOF MAPPINGS
-    # Uses macros to hijack the tokens and route them to guaranteed standard functions
+    # Standard POSIX mapping for simple types
     ID_TO_HEADER = {
-        "sched_yield": "#include <unistd.h>\nstatic inline int sched_yield_poly(void) { return usleep(1); }\n#define sched_yield sched_yield_poly\n",
-        "M_PI": "#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n",
         "timespec": "#define _POSIX_C_SOURCE 199309L\n#include <time.h>\n",
         "uintptr_t": "#include <stdint.h>\n",
         "size_t": "#include <stddef.h>\n",
         "memcpy": "#include <string.h>\n"
     }
 
-    CORE_N64_TYPES = {"OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "OSContPad", "Vtx", "Mtx", "ALHeap"}
+    # Core N64 dependencies (Now includes sched_yield and M_PI)
+    CORE_N64 = {"OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "OSContPad", "Vtx", "Mtx", "ALHeap", "sched_yield", "M_PI"}
 
-    # Fix Unknown Types
-    for filepath, t_name in set(type_errs):
-        if os.path.exists(filepath):
-            with open(filepath, "r") as f: content = f.read()
-            if t_name in ID_TO_HEADER:
-                header = ID_TO_HEADER[t_name]
-                if header not in content:
-                    with open(filepath, "w") as f: f.write(header + content)
-                    print(f"  [+] Injected polyfill for type {t_name} into {os.path.basename(filepath)}")
-                    fixes += 1
-            elif t_name in CORE_N64_TYPES:
-                if 'include "ultra/n64_types.h"' not in content:
-                    with open(filepath, "w") as f: f.write('#include "ultra/n64_types.h"\n' + content)
-                    print(f"  [+] Injected n64_types.h into {os.path.basename(filepath)}")
-                    fixes += 1
-            else:
-                decl = f"typedef struct {t_name} {t_name};\n"
-                if decl not in content:
-                    with open(filepath, "w") as f: f.write(decl + content)
-                    print(f"  [+] Injected struct typedef: {t_name} into {os.path.basename(filepath)}")
-                    fixes += 1
+    # Process files found in logs
+    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in null_errs])
 
-    # Fix Undeclared Identifiers
-    for filepath, var_name in set(id_errs):
-        if os.path.exists(filepath):
-            with open(filepath, "r") as f: content = f.read()
-            
-            # 🧹 Clean up the bad cycle 1 injection if we find it
-            if var_name == "sched_yield" and BAD_SCHED in content:
-                content = content.replace(BAD_SCHED, "")
-                
-            if var_name in ID_TO_HEADER:
-                header = ID_TO_HEADER[var_name]
-                if header not in content:
-                    with open(filepath, "w") as f: f.write(header + content)
-                    print(f"  [+] Injected bulletproof polyfill for {var_name} into {os.path.basename(filepath)}")
-                    fixes += 1
-            elif var_name.startswith(("D_", "sCh")):
-                decl = f"extern u8 {var_name}[];\n"
-                if decl not in content:
-                    with open(filepath, "w") as f: f.write(decl + content)
-                    print(f"  [+] Injected extern: {var_name} into {os.path.basename(filepath)}")
-                    fixes += 1
+    for filepath in affected_files:
+        if not os.path.exists(filepath): continue
+        with open(filepath, "r") as f: content = f.read()
+        original_content = content
+        
+        # 1. CLEANUP: Remove old failed local patches
+        for s in CLEANUP_STRINGS:
+            if s in content:
+                content = content.replace(s, "")
+                print(f"  [-] Cleaned up old polyfill in {os.path.basename(filepath)}")
 
-    # Fix NULL-to-Float
-    for filepath, line_str in set(null_errs):
-        idx = int(line_str) - 1
-        if os.path.exists(filepath):
-            with open(filepath, "r") as f: lines = f.readlines()
-            if idx < len(lines) and "NULL" in lines[idx]:
-                lines[idx] = lines[idx].replace("NULL", "0")
-                with open(filepath, "w") as f: f.writelines(lines)
-                print(f"  [+] Fixed NULL float on line {line_str} in {os.path.basename(filepath)}")
+        # 2. FIX: Handle types and identifiers
+        file_errors = [t[1] for t in type_errs if t[0] == filepath] + [i[1] for i in id_errs if i[0] == filepath]
+        
+        needs_n64_header = any(err in CORE_N64 for err in file_errors)
+        if needs_n64_header:
+            if 'include "ultra/n64_types.h"' not in content:
+                content = '#include "ultra/n64_types.h"\n' + content
+                print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
-                
+        
+        for err in file_errors:
+            if err in ID_TO_HEADER:
+                h = ID_TO_HEADER[err]
+                if h not in content:
+                    content = h + content
+                    print(f"  [+] Injected {h.strip()} for {err}")
+                    fixes += 1
+            elif err.startswith(("D_", "sCh")):
+                decl = f"extern u8 {err}[];\n"
+                if decl not in content:
+                    content = decl + content
+                    print(f"  [+] Injected extern: {err}")
+                    fixes += 1
+            elif err not in CORE_N64 and not err.startswith(("D_", "sCh")) and err not in ID_TO_HEADER:
+                decl = f"typedef struct {err} {err};\n"
+                if decl not in content:
+                    content = decl + content
+                    print(f"  [+] Injected struct typedef: {err}")
+                    fixes += 1
+
+        # 3. FIX: NULL-to-Float
+        file_nulls = [n[1] for n in null_errs if n[0] == filepath]
+        if file_nulls:
+            lines = content.splitlines()
+            for line_str in file_nulls:
+                idx = int(line_str) - 1
+                if idx < len(lines) and "NULL" in lines[idx]:
+                    lines[idx] = lines[idx].replace("NULL", "0")
+                    fixes += 1
+            content = "\n".join(lines) + "\n"
+
+        if content != original_content:
+            with open(filepath, "w") as f: f.write(content)
+
     if fixes == 0:
         print("\n⚠️ Searching for new unhandled compiler errors...")
         unhandled = re.findall(r"error: (.*)", log_data)
@@ -117,7 +121,7 @@ def main():
         if applied_fixes == 0:
             print("\n🛑 Loop halted. No fixable patterns found.")
             break
-        print(f"🛠️ Applied {applied_fixes} fixes. Restarting...")
+        print(f"🛠️ Applied fixes. Restarting...")
         time.sleep(1)
 
 if __name__ == "__main__":
