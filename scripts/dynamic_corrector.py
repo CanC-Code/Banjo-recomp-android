@@ -21,9 +21,9 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Pattern 1: Unknown Types
+    # 1. Unknown Types
     type_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: unknown type name '([^']+)'", log_data)
-    # Pattern 2: NULL-to-Float
+    # 2. NULL-to-Float
     null_errs = re.findall(r"(/[^\s:]+\.c):(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
     for filepath, t_name in set(type_errs):
@@ -53,7 +53,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable errors found in Ninja log.")
+            print("\n🛑 No more fixable errors found.")
             break
         time.sleep(1)
 
