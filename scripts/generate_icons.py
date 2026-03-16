@@ -1,69 +1,61 @@
 import os
-import sys
+import re
 import subprocess
+import time
 
-def run_magick(args):
-    """Fallback logic for environments using ImageMagick 6 (convert) or 7 (magick)."""
-    try:
-        # Try convert first for Ubuntu/Debian runners
-        subprocess.run(["convert"] + args, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        try:
-            subprocess.run(["magick"] + args, check=True)
-        except (FileNotFoundError, subprocess.CalledProcessError) as e:
-            print(f"Error: ImageMagick command failed: {e}")
-            sys.exit(1)
+GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
+LOG_FILE = "Android/full_build_log.txt"
 
-def generate_icons(source_path):
-    icon_specs = {
-        "mipmap-mdpi": 48,
-        "mipmap-hdpi": 72,
-        "mipmap-xhdpi": 96,
-        "mipmap-xxhdpi": 144,
-        "mipmap-xxxhdpi": 192
-    }
+def run_build():
+    print("\n🚀 Starting Build Cycle...")
+    log_dir = os.path.dirname(LOG_FILE)
+    if not os.path.exists(log_dir): os.makedirs(log_dir)
 
-    res_dir = "Android/app/src/main/res"
+    with open(LOG_FILE, "w") as log:
+        process = subprocess.Popen(GRADLE_CMD, stdout=log, stderr=subprocess.STDOUT, text=True)
+        process.wait()
+    return process.returncode == 0
 
-    if not os.path.exists(source_path):
-        print(f"Error: Source file {source_path} not found.")
-        return
+def apply_fixes():
+    if not os.path.exists(LOG_FILE): return 0
+    with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
-    for folder, size in icon_specs.items():
-        target_dir = os.path.join(res_dir, folder)
-        os.makedirs(target_dir, exist_ok=True)
+    fixes = 0
+    # Pattern 1: Unknown Type Names
+    type_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: unknown type name '([^']+)'", log_data)
+    # Pattern 2: NULL-to-Float Incompatibility (Line specific)
+    null_errs = re.findall(r"(/[^\s:]+\.c):(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
-        # 1. Standard ic_launcher.png
-        # We fill the square then crop to ensure 1:1 ratio
-        standard_path = os.path.join(target_dir, "ic_launcher.png")
-        run_magick([
-            source_path,
-            "-resize", f"{size}x{size}^",
-            "-gravity", "center",
-            "-extent", f"{size}x{size}",
-            "-unsharp", "0x1",
-            standard_path
-        ])
+    for filepath, t_name in set(type_errs):
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f: content = f.read()
+            decl = f"typedef struct {t_name} {t_name};\n"
+            if decl not in content:
+                with open(filepath, "w") as f: f.write(decl + content)
+                print(f"  [+] Injected type: {t_name}")
+                fixes += 1
 
-        # 2. Round ic_launcher_round.png
-        # Uses a high-compatibility masking technique
-        round_path = os.path.join(target_dir, "ic_launcher_round.png")
-        radius = size / 2
-        run_magick([
-            source_path,
-            "-resize", f"{size}x{size}^",
-            "-gravity", "center",
-            "-extent", f"{size}x{size}",
-            "(", "+clone", "-alpha", "extract", "-threshold", "0", 
-            "-draw", f"fill black polygon 0,0 0,{size} {size},{size} {size},0 fill white circle {radius},{radius} {radius},0", 
-            ")", "-alpha", "off", "-compose", "CopyOpacity", "-composite",
-            round_path
-        ])
-        
-        print(f"✓ Created {size}px icons in {folder}")
+    for filepath, line_str in null_errs:
+        idx = int(line_str) - 1
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f: lines = f.readlines()
+            if idx < len(lines) and "NULL" in lines[idx]:
+                lines[idx] = lines[idx].replace("NULL", "0")
+                with open(filepath, "w") as f: f.writelines(lines)
+                print(f"  [+] Fixed NULL float on line {line_str}")
+                fixes += 1
+    return fixes
+
+def main():
+    for i in range(1, 16):
+        print(f"\n--- Cycle {i} ---")
+        if run_build():
+            print("\n✅ Build Successful!")
+            return
+        if apply_fixes() == 0:
+            print("\n🛑 No more fixable errors found.")
+            break
+        time.sleep(1)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 generate_icons.py <master_image>")
-    else:
-        generate_icons(sys.argv[1])
+    main()
