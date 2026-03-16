@@ -22,16 +22,12 @@ def apply_fixes():
 
     fixes = 0
     
-    # Pattern 1: Unknown Type Names
+    # Known Patterns
     type_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: unknown type name '([^']+)'", log_data)
-    
-    # Pattern 2: NULL-to-Float Incompatibility (Line specific)
     null_errs = re.findall(r"(/[^\s:]+\.c):(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
-
-    # Pattern 3: Undeclared Identifiers (Restored)
     id_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
 
-    # Apply Type Injections
+    # Apply Known Fixes
     for filepath, t_name in set(type_errs):
         if os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
@@ -41,7 +37,6 @@ def apply_fixes():
                 print(f"  [+] Injected type: {t_name}")
                 fixes += 1
 
-    # Apply Extern Injections (Restored)
     for filepath, var_name in set(id_errs):
         if var_name.startswith(("D_", "sCh")) and os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
@@ -51,7 +46,6 @@ def apply_fixes():
                 print(f"  [+] Injected extern: {var_name}")
                 fixes += 1
 
-    # Apply NULL-to-Float Patches
     for filepath, line_str in set(null_errs):
         idx = int(line_str) - 1
         if os.path.exists(filepath):
@@ -62,6 +56,19 @@ def apply_fixes():
                 print(f"  [+] Fixed NULL float on line {line_str}")
                 fixes += 1
                 
+    # DIAGNOSTIC MODE: If no fixes were applied, find out what the actual errors are
+    if fixes == 0:
+        print("\n⚠️ Build failed but no known fix patterns matched.")
+        print("🔍 Searching for unhandled compiler errors...")
+        unhandled_errors = re.findall(r"error: (.*)", log_data)
+        
+        if unhandled_errors:
+            print("\n🚨 UNHANDLED ERRORS DETECTED (Showing first 5):")
+            for err in list(dict.fromkeys(unhandled_errors))[:5]: # Deduplicate and show top 5
+                print(f"  - {err}")
+        else:
+            print("  - Could not parse specific C/C++ errors. The build might be failing at the linker stage.")
+
     return fixes
 
 def main():
@@ -73,7 +80,7 @@ def main():
         
         applied_fixes = apply_fixes()
         if applied_fixes == 0:
-            print("\n🛑 No more fixable errors found in Ninja log. Check the log manually if it still fails.")
+            print("\n🛑 Halting loop. Please share the UNHANDLED ERRORS printed above so we can write a fix pattern for them.")
             break
         
         print(f"🛠️ Applied {applied_fixes} fixes. Restarting compiler...")
