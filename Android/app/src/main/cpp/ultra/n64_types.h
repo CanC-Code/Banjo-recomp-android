@@ -1,10 +1,28 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-// 1. COMPLETE TYPE DEFINITIONS
-// Moved entirely above system includes so any hijacked headers
-// already have the full context they need to compile safely.
+// 1. THE NUCLEAR BLOCKADE (MOVED TO ABSOLUTE TOP)
+// We must block the legacy N64 headers *before* including any system headers.
+// This prevents hijacked headers from successfully chaining into libaudio.h
+#define _ULTRA64_H_
+#define _OS_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
 
+// 2. SYSTEM INCLUDES
+// Now safe to include. If local time.h hijacks, it hits the blockade above and stops safely.
+#include <sys/types.h>
+#include <time.h>
+#include <stddef.h>
+#include <stdint.h>
+
+// Lock out time headers to prevent further legacy clashes down the line
+#define _TIME_H_
+#define _SYS_TIME_H_
+
+// 3. COMPLETE TYPE DEFINITIONS
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -60,23 +78,5 @@ typedef struct OSMesgQueue_s {
 // Forward Declarations
 typedef struct Actor Actor;
 typedef struct sChVegetable sChVegetable;
-
-
-// 2. SYSTEM INCLUDES
-// Safe to call now; if it hijacks into local files, the types above satisfy them.
-#include <sys/types.h>
-#include <time.h>
-#include <stddef.h>
-#include <stdint.h>
-
-
-// 3. THE NUCLEAR BLOCKADE
-// Safely silences legacy N64 includes downstream
-#define _TIME_H_
-#define _SYS_TIME_H_
-#define _ULTRA64_H_
-#define _OS_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
 
 #endif
