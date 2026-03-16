@@ -3,7 +3,7 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
- * Defined first to lock out legacy engine files if hijacking occurs.
+ * Locked at the absolute top to stop project headers from hijacking standard types.
  */
 #define _ULTRA64_H_
 #define _OS_H_
