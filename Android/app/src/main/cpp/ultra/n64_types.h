@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
