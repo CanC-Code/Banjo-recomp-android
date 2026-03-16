@@ -1,13 +1,15 @@
-#define _POSIX_C_SOURCE 200809L
-#define _GNU_SOURCE
-#define _USE_MATH_DEFINES
-
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 /**
- * 1. CORE N64 SCALARS
- * Defined at the absolute top so they are available immediately.
+ * 1. MANDATORY FEATURE MACROS
+ */
+#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
+#define _USE_MATH_DEFINES
+
+/**
+ * 2. CORE N64 SCALARS
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -26,18 +28,21 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 2. THE NUCLEAR BLOCKADE
- * Prevents legacy headers from loading if system headers try to chain-include them.
+ * 3. THE NUCLEAR BLOCKADE
+ * Prevents legacy headers from loading. We define these BEFORE 
+ * any includes to ensure they are blocked immediately.
  */
-#define _ULTRA64_H_
 #define _OS_H_
+#define _ULTRA64_H_
 #define _GBI_H_
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
+#define _SCHED_H_  /* Specifically block PR/sched.h */
 
 /**
- * 3. SYSTEM INCLUDES & POLYFILLS
+ * 4. SYSTEM INCLUDES
+ * Using bracket notation <> to force standard library paths.
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -55,13 +60,13 @@ typedef s32 OSPri;
 extern "C" {
 #endif
 
+/**
+ * 5. POLYFILLS & N64 OS TYPES
+ */
 static inline int sched_yield_polyfill(void) { return usleep(1); }
 #undef sched_yield
 #define sched_yield sched_yield_polyfill
 
-/**
- * 4. N64 OS & AUDIO TYPES
- */
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
@@ -91,7 +96,7 @@ typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
 /**
- * 5. GRAPHICS
+ * 6. GRAPHICS
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
