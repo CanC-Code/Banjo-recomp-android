@@ -7,8 +7,6 @@
 
 /**
  * 1. CORE N64 SCALARS
- * Defined at the absolute top. If a hijacked system header is processed 
- * before this file finishes, it needs these types to avoid "unknown type" errors.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -27,47 +25,8 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 2. THE NUCLEAR BLOCKADE
- * Prevents legacy N64 headers from being loaded if hijacked system headers 
- * try to include them.
- */
-#define _ULTRA64_H_
-#define _OS_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
-#define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
-
-/**
- * 3. SYSTEM INCLUDES
- * Now safe to include. They will use the scalars above and respect the blockade.
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <sched.h> 
-#include <math.h>
-#include <unistd.h>
-
-/**
- * 4. THE BULLETPROOF POLYFILLS
- */
-#ifndef M_PI
-  #define M_PI 3.14159265358979323846
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// Global hijack for sched_yield to ensure compatibility with Android NDK
-static inline int sched_yield_polyfill(void) { return usleep(1); }
-#undef sched_yield
-#define sched_yield sched_yield_polyfill
-
-/**
- * 5. N64 OS TYPES
+ * 2. N64 OS TYPES
+ * Defined before system includes to prevent circular dependency issues.
  */
 typedef u64 OSTime;
 typedef void* OSMesg;
@@ -96,7 +55,7 @@ typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
 /**
- * 6. GRAPHICS & AUDIO
+ * 3. GRAPHICS & AUDIO TYPES
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -115,8 +74,43 @@ typedef struct { u8 padding[0x1000]; } ALGlobals;
 typedef struct actor_s Actor; 
 typedef struct sChVegetable sChVegetable;
 
+/**
+ * 4. SYSTEM INCLUDES & POLYFILLS
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <sched.h> 
+#include <math.h>
+#include <unistd.h>
+
+#ifndef M_PI
+  #define M_PI 3.14159265358979323846
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Global yield polyfill for Android compatibility
+static inline int sched_yield_polyfill(void) { return usleep(1); }
+#undef sched_yield
+#define sched_yield sched_yield_polyfill
+
 #ifdef __cplusplus
 }
 #endif
+
+/**
+ * 5. THE NUCLEAR BLOCKADE
+ * Defined last to stop any remaining legacy includes.
+ */
+#define _ULTRA64_H_
+#define _OS_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
 
 #endif
