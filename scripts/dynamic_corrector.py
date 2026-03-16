@@ -21,18 +21,17 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Flexible regex to match both relative and absolute paths in Ninja logs
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
-    # Error Patterns
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     null_errs = re.findall(file_regex + r":(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
-    # POSIX/System mapping with mandatory macros
+    # 🛠️ BRUTE-FORCE MAPPINGS
+    # Bypasses header guards by explicitly declaring the missing symbols
     ID_TO_HEADER = {
-        "sched_yield": "#define _GNU_SOURCE\n#include <sched.h>\n",
-        "M_PI": "#define _USE_MATH_DEFINES\n#include <math.h>\n",
+        "sched_yield": "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint sched_yield(void);\n#ifdef __cplusplus\n}\n#endif\n",
+        "M_PI": "#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n",
         "timespec": "#define _POSIX_C_SOURCE 199309L\n#include <time.h>\n",
         "uintptr_t": "#include <stdint.h>\n",
         "size_t": "#include <stddef.h>\n",
@@ -49,7 +48,7 @@ def apply_fixes():
                 header = ID_TO_HEADER[t_name]
                 if header not in content:
                     with open(filepath, "w") as f: f.write(header + content)
-                    print(f"  [+] Injected {header.strip()} for type {t_name}")
+                    print(f"  [+] Injected explicit definition for type {t_name}")
                     fixes += 1
             elif t_name in CORE_N64_TYPES:
                 if 'include "ultra/n64_types.h"' not in content:
@@ -71,7 +70,7 @@ def apply_fixes():
                 header = ID_TO_HEADER[var_name]
                 if header not in content:
                     with open(filepath, "w") as f: f.write(header + content)
-                    print(f"  [+] Injected {header.strip()} for identifier {var_name}")
+                    print(f"  [+] Injected explicit declaration for identifier {var_name}")
                     fixes += 1
             elif var_name.startswith(("D_", "sCh")):
                 decl = f"extern u8 {var_name}[];\n"
