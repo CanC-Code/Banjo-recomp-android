@@ -3,7 +3,6 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
- * Locked at the absolute top to stop project headers from hijacking standard types.
  */
 #define _ULTRA64_H_
 #define _OS_H_
@@ -41,12 +40,34 @@ typedef s32 OSPri;
 #include <stdint.h>
 
 /**
- * 4. ENGINE STRUCTURES
+ * 4. ENGINE STRUCTURES & ALIASES
  */
+// Graphics & Audio
 typedef u64 Gfx;
 typedef u64 Acmd;
+typedef void* ALHeap; // Fixed: Missing ALHeap type
+
 typedef struct { s16 state[16]; } ADPCM_STATE;
 
+// Fixed: Missing Vertex and Matrix types
+typedef struct {
+    short ob[3];
+    unsigned short flag;
+    short tc[2];
+    unsigned char cn[4];
+} Vtx_t;
+
+typedef union { 
+    Vtx_t v; 
+    long long force_align; 
+} Vtx;
+
+typedef union { 
+    struct { s32 m[4][4]; }; 
+    long long force_align; 
+} Mtx;
+
+// Threading & OS
 typedef struct {
     u64 registers[32];
     u64 lo, hi, pc;
@@ -77,7 +98,9 @@ typedef struct OSMesgQueue_s {
 typedef struct { u8 padding[0x1000]; } ALGlobals;
 #endif
 
-typedef struct Actor Actor;
+// Forward Declarations
+// Fixed: Changed from 'struct Actor' to 'struct actor_s' to prevent typedef redefinition
+typedef struct actor_s Actor; 
 typedef struct sChVegetable sChVegetable;
 
 #endif
