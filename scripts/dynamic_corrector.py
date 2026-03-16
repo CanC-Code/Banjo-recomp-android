@@ -21,21 +21,33 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
+    # Updated to catch .c, .cpp, and .h files
+    file_regex = r"(/[^\s:]+\.(?:c|cpp|h|hpp))"
     
-    # Known Patterns
-    type_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: unknown type name '([^']+)'", log_data)
-    null_errs = re.findall(r"(/[^\s:]+\.c):(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
-    id_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
+    type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
+    id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
+    null_errs = re.findall(file_regex + r":(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
-    # Apply Known Fixes
+    # Types that belong in n64_types.h
+    CORE_TYPES = {"OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "OSContPad", "Vtx", "Mtx", "ALHeap"}
+
     for filepath, t_name in set(type_errs):
         if os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
-            decl = f"typedef struct {t_name} {t_name};\n"
-            if decl not in content:
-                with open(filepath, "w") as f: f.write(decl + content)
-                print(f"  [+] Injected type: {t_name}")
-                fixes += 1
+            
+            if t_name in CORE_TYPES:
+                # Force include our master header
+                if 'include "ultra/n64_types.h"' not in content:
+                    with open(filepath, "w") as f: f.write('#include "ultra/n64_types.h"\n' + content)
+                    print(f"  [+] Injected n64_types.h into {os.path.basename(filepath)} (Fixes {t_name})")
+                    fixes += 1
+            else:
+                # Standard struct injection
+                decl = f"typedef struct {t_name} {t_name};\n"
+                if decl not in content:
+                    with open(filepath, "w") as f: f.write(decl + content)
+                    print(f"  [+] Injected type: {t_name} in {os.path.basename(filepath)}")
+                    fixes += 1
 
     for filepath, var_name in set(id_errs):
         if var_name.startswith(("D_", "sCh")) and os.path.exists(filepath):
@@ -56,19 +68,12 @@ def apply_fixes():
                 print(f"  [+] Fixed NULL float on line {line_str}")
                 fixes += 1
                 
-    # DIAGNOSTIC MODE: If no fixes were applied, find out what the actual errors are
     if fixes == 0:
-        print("\n⚠️ Build failed but no known fix patterns matched.")
-        print("🔍 Searching for unhandled compiler errors...")
-        unhandled_errors = re.findall(r"error: (.*)", log_data)
-        
-        if unhandled_errors:
-            print("\n🚨 UNHANDLED ERRORS DETECTED (Showing first 5):")
-            for err in list(dict.fromkeys(unhandled_errors))[:5]: # Deduplicate and show top 5
-                print(f"  - {err}")
-        else:
-            print("  - Could not parse specific C/C++ errors. The build might be failing at the linker stage.")
-
+        print("\n⚠️ Searching for new unhandled compiler errors...")
+        unhandled = re.findall(r"error: (.*)", log_data)
+        if unhandled:
+            print("\n🚨 NEW ERRORS:")
+            for err in list(dict.fromkeys(unhandled))[:5]: print(f"  - {err}")
     return fixes
 
 def main():
@@ -77,13 +82,9 @@ def main():
         if run_build():
             print("\n✅ Build Successful!")
             return
-        
-        applied_fixes = apply_fixes()
-        if applied_fixes == 0:
-            print("\n🛑 Halting loop. Please share the UNHANDLED ERRORS printed above so we can write a fix pattern for them.")
+        if apply_fixes() == 0:
+            print("\n🛑 Stopping loop. No fixable patterns found.")
             break
-        
-        print(f"🛠️ Applied {applied_fixes} fixes. Restarting compiler...")
         time.sleep(1)
 
 if __name__ == "__main__":
