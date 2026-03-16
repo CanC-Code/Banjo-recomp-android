@@ -1,9 +1,10 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-// 1. CORE N64 SCALARS
-// These MUST be at the very top so that if local headers (like include/time.h)
-// hijack the include paths, they already know what u8 and s32 are.
+// 1. COMPLETE TYPE DEFINITIONS
+// Moved entirely above system includes so any hijacked headers
+// already have the full context they need to compile safely.
+
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -20,21 +21,17 @@ typedef s32 OSPri;
 #undef NULL
 #define NULL 0
 
-// 2. SYSTEM INCLUDES
-#include <sys/types.h>
-#include <time.h>
-#include <stddef.h>
-#include <stdint.h>
+// Audio & Graphics Types
+typedef u64 Gfx;
+typedef u64 Acmd;
+typedef struct { s16 state[16]; } ADPCM_STATE;
 
-// 3. THE NUCLEAR BLOCKADE
-#define _TIME_H_
-#define _SYS_TIME_H_
-#define _ULTRA64_H_
-#define _OS_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
+#ifndef _AL_GLOBALS_DEFINED
+#define _AL_GLOBALS_DEFINED
+typedef struct { u8 padding[0x1000]; } ALGlobals;
+#endif
 
-// 4. CORE STRUCT DEFINITIONS
+// Threading & OS Types
 typedef struct {
     u64 registers[32];
     u64 lo, hi, pc;
@@ -60,13 +57,26 @@ typedef struct OSMesgQueue_s {
     s32 count;
 } OSMesgQueue;
 
-#ifndef _AL_GLOBALS_DEFINED
-#define _AL_GLOBALS_DEFINED
-typedef struct { u8 padding[0x1000]; } ALGlobals;
-#endif
-
-// 5. FORWARD DECLARATIONS
+// Forward Declarations
 typedef struct Actor Actor;
 typedef struct sChVegetable sChVegetable;
+
+
+// 2. SYSTEM INCLUDES
+// Safe to call now; if it hijacks into local files, the types above satisfy them.
+#include <sys/types.h>
+#include <time.h>
+#include <stddef.h>
+#include <stdint.h>
+
+
+// 3. THE NUCLEAR BLOCKADE
+// Safely silences legacy N64 includes downstream
+#define _TIME_H_
+#define _SYS_TIME_H_
+#define _ULTRA64_H_
+#define _OS_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
 
 #endif
