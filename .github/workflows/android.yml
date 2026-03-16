@@ -1,12 +1,10 @@
 name: Android Build Pipeline
-
 on:
   workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: 📥 Checkout Code
         uses: actions/checkout@v4
@@ -24,30 +22,20 @@ jobs:
         with:
           gradle-version: 8.2 
 
-      - name: 🖼️ Generate Android Icons
-        run: |
-          sudo apt-get update && sudo apt-get install -y imagemagick
-          if [ -f "icon_master.png" ]; then
-            python3 scripts/generate_icons.py icon_master.png
-          else
-            convert -size 512x512 xc:blue icon_master.png
-            python3 scripts/generate_icons.py icon_master.png
-          fi
-
       - name: 🧹 Pre-Patching
         run: |
           python3 scripts/sanitize_legacy_code.py .
           python3 scripts/patch_array_initializations.py .
 
       - name: 🤖 Automated Correction & Build Loop
-        # This replaces the manual 'gradle' step and handles the Ninja errors
+        # This script runs the build internally 15 times if needed
         run: python3 scripts/dynamic_corrector.py
 
       - name: 📦 Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-compilation-logs
+          name: compilation-logs
           path: Android/full_build_log.txt
 
       - name: 📦 Upload APK
