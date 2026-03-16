@@ -3,8 +3,7 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
- * Removed _TIME_H_ and _SYS_TIME_H_ to allow the Android NDK 
- * standard C library to load correctly for C++ wrappers.
+ * Prevents legacy N64 engine headers from clashing with the NDK.
  */
 #define _ULTRA64_H_
 #define _OS_H_
@@ -33,18 +32,25 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 3. NDK DEFINITIONS
- * Now safe to include without breaking the C++ <ctime> wrappers.
+ * 3. NDK & POSIX SYSTEM INCLUDES
+ * Added <sched.h> for sched_yield and <math.h> for trig operations.
  */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <time.h> 
+#include <time.h>
+#include <sched.h> 
+#include <math.h>
+
+// Manual fallback for M_PI if math.h doesn't define it in strict mode
+#ifndef M_PI
+  #define M_PI 3.14159265358979323846
+#endif
 
 /**
  * 4. ENGINE STRUCTURES
  */
-// Controller Hardware (Fix for 'unknown type name OSContPad')
+// Controller
 typedef struct {
     u16 button;
     s8  stick_x;
