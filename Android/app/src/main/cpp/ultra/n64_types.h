@@ -1,20 +1,9 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-#include <sys/types.h>
-#include <time.h>
-#include <stddef.h>
-#include <stdint.h>
-
-// 1. THE NUCLEAR BLOCKADE
-#define _TIME_H_
-#define _SYS_TIME_H_
-#define _ULTRA64_H_
-#define _OS_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
-
-// 2. CORE N64 SCALARS
+// 1. CORE N64 SCALARS
+// These MUST be at the very top so that if local headers (like include/time.h)
+// hijack the include paths, they already know what u8 and s32 are.
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -31,11 +20,25 @@ typedef s32 OSPri;
 #undef NULL
 #define NULL 0
 
-// 3. CORE STRUCT DEFINITIONS
+// 2. SYSTEM INCLUDES
+#include <sys/types.h>
+#include <time.h>
+#include <stddef.h>
+#include <stdint.h>
+
+// 3. THE NUCLEAR BLOCKADE
+#define _TIME_H_
+#define _SYS_TIME_H_
+#define _ULTRA64_H_
+#define _OS_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
+
+// 4. CORE STRUCT DEFINITIONS
 typedef struct {
     u64 registers[32];
     u64 lo, hi, pc;
-    u32 status; // <--- ADDED: Required by exceptasm.cpp
+    u32 status;
     u32 cause;
     u32 badvaddr;
 } CPUState;
@@ -47,7 +50,6 @@ typedef struct OSThread_s {
     u8 padding[512];
 } OSThread;
 
-// 4. MESSAGE & TASK TYPES (Required for sched.h)
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
