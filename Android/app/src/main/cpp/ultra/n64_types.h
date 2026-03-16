@@ -2,19 +2,12 @@
 #define _GNU_SOURCE
 #define _USE_MATH_DEFINES
 
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <sched.h> 
-#include <math.h>
-#include <unistd.h>
-
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 /**
  * 1. CORE N64 SCALARS
+ * Defined at the absolute top so they are available immediately.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -34,6 +27,7 @@ typedef s32 OSPri;
 
 /**
  * 2. THE NUCLEAR BLOCKADE
+ * Prevents legacy headers from loading if system headers try to chain-include them.
  */
 #define _ULTRA64_H_
 #define _OS_H_
@@ -42,15 +36,23 @@ typedef s32 OSPri;
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /**
- * 3. POLYFILLS
+ * 3. SYSTEM INCLUDES & POLYFILLS
  */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <sched.h> 
+#include <math.h>
+#include <unistd.h>
+
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
+#endif
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 static inline int sched_yield_polyfill(void) { return usleep(1); }
@@ -58,18 +60,13 @@ static inline int sched_yield_polyfill(void) { return usleep(1); }
 #define sched_yield sched_yield_polyfill
 
 /**
- * 4. N64 OS & AUDIO
- * Fixed: Using forward declarations for AL types to avoid redefinition clashes.
+ * 4. N64 OS & AUDIO TYPES
  */
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
-
-#ifndef _AL_TYPES_DEFINED
-#define _AL_TYPES_DEFINED
-typedef struct ALHeap ALHeap;
+typedef struct ALHeap ALHeap; 
 typedef struct ALGlobals ALGlobals;
-#endif
 
 typedef struct OSMesgQueue_s {
     void* mt;
