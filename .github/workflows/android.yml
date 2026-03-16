@@ -31,7 +31,7 @@ jobs:
           fi
           python3 scripts/generate_icons.py icon_master.png
 
-      - name: 🧹 Pre-Patching
+      - name: 🧹 Static Pre-Patching
         run: |
           python3 scripts/sanitize_legacy_code.py .
           python3 scripts/patch_array_initializations.py .
