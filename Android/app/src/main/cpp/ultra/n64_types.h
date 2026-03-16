@@ -5,11 +5,30 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
+/* 1. SYSTEM INCLUDES (Must come first for polyfills) */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <sched.h> 
+#include <math.h>
+#include <unistd.h>
+
+/* 2. THE BULLETPROOF POLYFILLS */
+#ifndef M_PI
+  #define M_PI 3.14159265358979323846
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* 1. THE NUCLEAR BLOCKADE */
+// Hijack sched_yield globally with a standard NDK substitute
+static inline int sched_yield_polyfill(void) { return usleep(1); }
+#undef sched_yield
+#define sched_yield sched_yield_polyfill
+
+/* 3. THE NUCLEAR BLOCKADE */
 #define _ULTRA64_H_
 #define _OS_H_
 #define _GBI_H_
@@ -17,7 +36,7 @@ extern "C" {
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
 
-/* 2. CORE N64 SCALARS */
+/* 4. CORE N64 SCALARS */
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -34,7 +53,7 @@ typedef s32 OSPri;
 #undef NULL
 #define NULL 0
 
-/* 3. N64 OS TYPES */
+/* 5. N64 OS TYPES */
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
@@ -61,7 +80,7 @@ typedef struct OSThread_s {
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
-/* 4. GRAPHICS & AUDIO */
+/* 6. GRAPHICS & AUDIO */
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef void* ALHeap;
@@ -81,18 +100,6 @@ typedef struct sChVegetable sChVegetable;
 
 #ifdef __cplusplus
 }
-#endif
-
-/* 5. SYSTEM INCLUDES */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <sched.h> 
-#include <math.h>
-
-#ifndef M_PI
-  #define M_PI 3.14159265358979323846
 #endif
 
 #endif
