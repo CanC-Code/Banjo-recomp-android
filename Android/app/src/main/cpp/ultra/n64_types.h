@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #define _GNU_SOURCE
+#define _USE_MATH_DEFINES
 
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -8,6 +9,7 @@
 extern "C" {
 #endif
 
+/* 1. THE NUCLEAR BLOCKADE */
 #define _ULTRA64_H_
 #define _OS_H_
 #define _GBI_H_
@@ -15,6 +17,7 @@ extern "C" {
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
 
+/* 2. CORE N64 SCALARS */
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -31,6 +34,7 @@ typedef s32 OSPri;
 #undef NULL
 #define NULL 0
 
+/* 3. N64 OS TYPES */
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
@@ -57,6 +61,7 @@ typedef struct OSThread_s {
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
+/* 4. GRAPHICS & AUDIO */
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef void* ALHeap;
@@ -78,6 +83,7 @@ typedef struct sChVegetable sChVegetable;
 }
 #endif
 
+/* 5. SYSTEM INCLUDES */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
