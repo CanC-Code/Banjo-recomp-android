@@ -21,9 +21,9 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # 1. Unknown Types
+    # Pattern 1: Unknown Type Names
     type_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: unknown type name '([^']+)'", log_data)
-    # 2. NULL-to-Float
+    # Pattern 2: NULL-to-Float Incompatibility (Line specific)
     null_errs = re.findall(r"(/[^\s:]+\.c):(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
     for filepath, t_name in set(type_errs):
