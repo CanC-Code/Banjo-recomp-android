@@ -2,9 +2,8 @@
 #define N64_TYPES_H
 
 /**
- * 1. THE NUCLEAR BLOCKADE (PRE-EMPTIVE)
- * We define these BEFORE including anything else to ensure that if 
- * standard headers are hijacked, the N64 engine files are already locked out.
+ * 1. THE NUCLEAR BLOCKADE
+ * Defined first to lock out legacy engine files if any hijacking occurs.
  */
 #define _ULTRA64_H_
 #define _OS_H_
@@ -17,7 +16,6 @@
 
 /**
  * 2. CORE N64 SCALARS
- * Defined before system includes to satisfy any local dependencies.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -36,16 +34,13 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 3. NDK SYSTEM INCLUDES
+ * 3. MINIMAL NDK DEFINITIONS
+ * We manually define time_t to bypass the problematic time.h include.
  */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* * We avoid #include <time.h> directly here because of the project's 
- * include path hijacking. We manually define the only type the 
- * N64 code actually needs from it:
- */
 typedef long n64_time_t;
 
 /**
@@ -88,4 +83,4 @@ typedef struct { u8 padding[0x1000]; } ALGlobals;
 typedef struct Actor Actor;
 typedef struct sChVegetable sChVegetable;
 
-#endif // N64_TYPES_H
+#endif
