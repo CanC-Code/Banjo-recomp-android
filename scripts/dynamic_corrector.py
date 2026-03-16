@@ -32,6 +32,7 @@ def apply_fixes():
     ID_TO_HEADER = {
         "sched_yield": "#include <sched.h>\n",
         "M_PI": "#include <math.h>\n",
+        "timespec": "#include <time.h>\n",
         "uintptr_t": "#include <stdint.h>\n",
         "size_t": "#include <stddef.h>\n",
         "memcpy": "#include <string.h>\n"
@@ -44,12 +45,22 @@ def apply_fixes():
     for filepath, t_name in set(type_errs):
         if os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
-            if t_name in CORE_N64_TYPES:
+            
+            # Check mapping first (e.g., timespec -> time.h)
+            if t_name in ID_TO_HEADER:
+                header = ID_TO_HEADER[t_name]
+                if header not in content:
+                    with open(filepath, "w") as f: f.write(header + content)
+                    print(f"  [+] Injected {header.strip()} for type {t_name}")
+                    fixes += 1
+            # Check for core N64 types
+            elif t_name in CORE_N64_TYPES:
                 if 'include "ultra/n64_types.h"' not in content:
                     with open(filepath, "w") as f: f.write('#include "ultra/n64_types.h"\n' + content)
                     print(f"  [+] Injected n64_types.h into {os.path.basename(filepath)}")
                     fixes += 1
             else:
+                # Standard struct injection
                 decl = f"typedef struct {t_name} {t_name};\n"
                 if decl not in content:
                     with open(filepath, "w") as f: f.write(decl + content)
@@ -86,6 +97,14 @@ def apply_fixes():
                 with open(filepath, "w") as f: f.writelines(lines)
                 print(f"  [+] Fixed NULL float on line {line_str}")
                 fixes += 1
+    
+    # Diagnostic Output if loop stalls
+    if fixes == 0:
+        print("\n⚠️ Searching for new unhandled compiler errors...")
+        unhandled = re.findall(r"error: (.*)", log_data)
+        if unhandled:
+            print("\n🚨 NEW ERRORS DETECTED:")
+            for err in list(dict.fromkeys(unhandled))[:5]: print(f"  - {err}")
                 
     return fixes
 
@@ -95,9 +114,13 @@ def main():
         if run_build():
             print("\n✅ Build Successful!")
             return
-        if apply_fixes() == 0:
+        
+        applied_fixes = apply_fixes()
+        if applied_fixes == 0:
             print("\n🛑 Loop halted. No fixable patterns found.")
             break
+        
+        print(f"🛠️ Applied {applied_fixes} fixes. Restarting compiler...")
         time.sleep(1)
 
 if __name__ == "__main__":
