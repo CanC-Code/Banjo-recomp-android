@@ -7,7 +7,7 @@ GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
 LOG_FILE = "Android/full_build_log.txt"
 
 def run_build():
-    print("\n🚀 Starting build cycle...")
+    print("\n🚀 Starting Build Cycle...")
     log_dir = os.path.dirname(LOG_FILE)
     if not os.path.exists(log_dir): os.makedirs(log_dir)
 
@@ -21,19 +21,18 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Fix 1: Unknown Types
+    # Pattern 1: Unknown Types
     type_errs = re.findall(r"(/[^\s:]+\.c):\d+:\d+: error: unknown type name '([^']+)'", log_data)
-    # Fix 2: NULL-to-Float (Line specific)
+    # Pattern 2: NULL-to-Float
     null_errs = re.findall(r"(/[^\s:]+\.c):(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
     for filepath, t_name in set(type_errs):
         if os.path.exists(filepath):
-            with open(filepath, "r") as f: lines = f.readlines()
+            with open(filepath, "r") as f: content = f.read()
             decl = f"typedef struct {t_name} {t_name};\n"
-            if decl not in lines:
-                lines.insert(0, decl)
-                with open(filepath, "w") as f: f.writelines(lines)
-                print(f"  [+] Added type: {t_name} in {os.path.basename(filepath)}")
+            if decl not in content:
+                with open(filepath, "w") as f: f.write(decl + content)
+                print(f"  [+] Injected type: {t_name}")
                 fixes += 1
 
     for filepath, line_str in null_errs:
@@ -43,7 +42,7 @@ def apply_fixes():
             if idx < len(lines) and "NULL" in lines[idx]:
                 lines[idx] = lines[idx].replace("NULL", "0")
                 with open(filepath, "w") as f: f.writelines(lines)
-                print(f"  [+] Fixed NULL-float on line {line_str}")
+                print(f"  [+] Fixed NULL float on line {line_str}")
                 fixes += 1
     return fixes
 
@@ -51,10 +50,10 @@ def main():
     for i in range(1, 16):
         print(f"\n--- Cycle {i} ---")
         if run_build():
-            print("\n✅ SUCCESS!")
+            print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable errors.")
+            print("\n🛑 No more fixable errors found in Ninja log.")
             break
         time.sleep(1)
 
