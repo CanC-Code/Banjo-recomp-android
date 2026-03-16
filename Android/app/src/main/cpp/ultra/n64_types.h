@@ -5,38 +5,11 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-/* 1. SYSTEM INCLUDES (Must come first for polyfills) */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <sched.h> 
-#include <math.h>
-#include <unistd.h>
-
-/* 2. THE BULLETPROOF POLYFILLS */
-#ifndef M_PI
-  #define M_PI 3.14159265358979323846
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// Hijack sched_yield globally with a standard NDK substitute
-static inline int sched_yield_polyfill(void) { return usleep(1); }
-#undef sched_yield
-#define sched_yield sched_yield_polyfill
-
-/* 3. THE NUCLEAR BLOCKADE */
-#define _ULTRA64_H_
-#define _OS_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
-#define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
-
-/* 4. CORE N64 SCALARS */
+/**
+ * 1. CORE N64 SCALARS
+ * Defined at the absolute top. If a hijacked system header is processed 
+ * before this file finishes, it needs these types to avoid "unknown type" errors.
+ */
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -53,7 +26,49 @@ typedef s32 OSPri;
 #undef NULL
 #define NULL 0
 
-/* 5. N64 OS TYPES */
+/**
+ * 2. THE NUCLEAR BLOCKADE
+ * Prevents legacy N64 headers from being loaded if hijacked system headers 
+ * try to include them.
+ */
+#define _ULTRA64_H_
+#define _OS_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
+
+/**
+ * 3. SYSTEM INCLUDES
+ * Now safe to include. They will use the scalars above and respect the blockade.
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <sched.h> 
+#include <math.h>
+#include <unistd.h>
+
+/**
+ * 4. THE BULLETPROOF POLYFILLS
+ */
+#ifndef M_PI
+  #define M_PI 3.14159265358979323846
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Global hijack for sched_yield to ensure compatibility with Android NDK
+static inline int sched_yield_polyfill(void) { return usleep(1); }
+#undef sched_yield
+#define sched_yield sched_yield_polyfill
+
+/**
+ * 5. N64 OS TYPES
+ */
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
@@ -80,7 +95,9 @@ typedef struct OSThread_s {
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
-/* 6. GRAPHICS & AUDIO */
+/**
+ * 6. GRAPHICS & AUDIO
+ */
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef void* ALHeap;
