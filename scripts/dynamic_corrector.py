@@ -21,45 +21,39 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
+    # Capture any file path reporting an error
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
-    linkage_errs = re.findall(file_regex + r":\d+:\d+: error: declaration of '([^']+)' has a different language linkage", log_data)
 
-    SCALARS = {
-        "u8": "typedef unsigned char u8;\n",
-        "s8": "typedef signed char s8;\n",
-        "u16": "typedef unsigned short u16;\n",
-        "s16": "typedef short s16;\n",
-        "u32": "typedef unsigned int u32;\n",
-        "s32": "typedef int s32;\n"
+    # All core types that indicate we need our master header
+    CORE_N64 = {
+        "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
+        "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE"
     }
 
-    CORE_N64 = {"OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ALHeap", "ADPCM_STATE"}
-
-    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in linkage_errs])
+    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs])
 
     for filepath in affected_files:
-        if not os.path.exists(filepath): continue
+        # Ignore actual system libraries, but process everything else
+        if not os.path.exists(filepath) or "/usr/include" in filepath: continue
+        
         with open(filepath, "r") as f: content = f.read()
         original_content = content
         
         file_errors = [t[1] for t in type_errs if t[0] == filepath] + [i[1] for i in id_errs if i[0] == filepath]
         
+        # If any file is missing N64 types, ensure n64_types.h is the VERY FIRST include
+        if any(err in CORE_N64 for err in file_errors):
+            if 'include "ultra/n64_types.h"' not in content:
+                content = '#include "ultra/n64_types.h"\n' + content
+                print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
+                fixes += 1
+
+        # Handle extern variables
         for err in set(file_errors):
-            if err in SCALARS:
-                decl = SCALARS[err]
-                if decl not in content:
-                    content = decl + content
-                    print(f"  [+] Injected scalar polyfill: {err} in {os.path.basename(filepath)}")
-                    fixes += 1
-            elif err in CORE_N64:
-                if 'include "ultra/n64_types.h"' not in content:
-                    content = '#include "ultra/n64_types.h"\n' + content
-                    print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
-                    fixes += 1
-            elif err.startswith(("D_", "sCh")):
+            if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
                 if decl not in content:
                     content = decl + content
@@ -72,13 +66,13 @@ def apply_fixes():
     return fixes
 
 def main():
-    for i in range(1, 30):
+    for i in range(1, 15):
         print(f"\n--- Cycle {i} ---")
         if run_build():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found.")
+            print("\n🛑 No more fixable patterns found. Check the log for unhandled errors.")
             break
         time.sleep(1)
 
