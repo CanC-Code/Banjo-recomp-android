@@ -21,7 +21,7 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Improved regex to handle relative and absolute paths
+    # Flexible regex to match both relative and absolute paths in Ninja logs
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
     # Error Patterns
@@ -29,7 +29,7 @@ def apply_fixes():
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     null_errs = re.findall(file_regex + r":(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
 
-    # Mappings for System/POSIX identifiers with mandatory macros
+    # POSIX/System mapping with mandatory macros
     ID_TO_HEADER = {
         "sched_yield": "#define _GNU_SOURCE\n#include <sched.h>\n",
         "M_PI": "#define _USE_MATH_DEFINES\n#include <math.h>\n",
@@ -39,10 +39,9 @@ def apply_fixes():
         "memcpy": "#include <string.h>\n"
     }
 
-    # Core N64 types
     CORE_N64_TYPES = {"OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "OSContPad", "Vtx", "Mtx", "ALHeap"}
 
-    # 1. Fix Unknown Types
+    # Fix Unknown Types
     for filepath, t_name in set(type_errs):
         if os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
@@ -64,7 +63,7 @@ def apply_fixes():
                     print(f"  [+] Injected struct typedef: {t_name}")
                     fixes += 1
 
-    # 2. Fix Undeclared Identifiers
+    # Fix Undeclared Identifiers
     for filepath, var_name in set(id_errs):
         if os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
@@ -81,7 +80,7 @@ def apply_fixes():
                     print(f"  [+] Injected extern: {var_name}")
                     fixes += 1
 
-    # 3. Fix NULL-to-Float
+    # Fix NULL-to-Float
     for filepath, line_str in set(null_errs):
         idx = int(line_str) - 1
         if os.path.exists(filepath):
