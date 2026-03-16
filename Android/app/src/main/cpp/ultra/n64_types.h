@@ -3,7 +3,7 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
- * Defined first to lock out legacy engine files if any hijacking occurs.
+ * Defined first to lock out legacy engine files if hijacking occurs.
  */
 #define _ULTRA64_H_
 #define _OS_H_
@@ -35,13 +35,10 @@ typedef s32 OSPri;
 
 /**
  * 3. MINIMAL NDK DEFINITIONS
- * We manually define time_t to bypass the problematic time.h include.
  */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
-
-typedef long n64_time_t;
 
 /**
  * 4. ENGINE STRUCTURES
