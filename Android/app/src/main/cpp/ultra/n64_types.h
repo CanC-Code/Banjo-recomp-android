@@ -3,6 +3,8 @@
 
 /**
  * 1. THE NUCLEAR BLOCKADE
+ * Removed _TIME_H_ and _SYS_TIME_H_ to allow the Android NDK 
+ * standard C library to load correctly for C++ wrappers.
  */
 #define _ULTRA64_H_
 #define _OS_H_
@@ -10,8 +12,6 @@
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
-#define _TIME_H_
-#define _SYS_TIME_H_
 
 /**
  * 2. CORE N64 SCALARS
@@ -33,23 +33,38 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 3. MINIMAL NDK DEFINITIONS
+ * 3. NDK DEFINITIONS
+ * Now safe to include without breaking the C++ <ctime> wrappers.
  */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h> 
 
 /**
- * 4. ENGINE STRUCTURES & ALIASES
+ * 4. ENGINE STRUCTURES
  */
+// Controller Hardware (Fix for 'unknown type name OSContPad')
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errnum;
+} OSContPad;
+
+typedef struct {
+    u16 type;
+    u8  status;
+    u8  errnum;
+} OSContStatus;
+
 // Graphics & Audio
 typedef u64 Gfx;
 typedef u64 Acmd;
-typedef void* ALHeap; // Fixed: Missing ALHeap type
+typedef void* ALHeap;
 
 typedef struct { s16 state[16]; } ADPCM_STATE;
 
-// Fixed: Missing Vertex and Matrix types
 typedef struct {
     short ob[3];
     unsigned short flag;
@@ -99,7 +114,6 @@ typedef struct { u8 padding[0x1000]; } ALGlobals;
 #endif
 
 // Forward Declarations
-// Fixed: Changed from 'struct Actor' to 'struct actor_s' to prevent typedef redefinition
 typedef struct actor_s Actor; 
 typedef struct sChVegetable sChVegetable;
 
