@@ -26,19 +26,17 @@ jobs:
       - name: 🖼️ Generate Android Icons
         run: |
           sudo apt-get update && sudo apt-get install -y imagemagick
-          # Ensure a master image exists
           if [ ! -f "icon_master.png" ]; then
             convert -size 512x512 xc:blue icon_master.png
           fi
           python3 scripts/generate_icons.py icon_master.png
 
-      - name: 🧹 Static Pre-Patching
+      - name: 🧹 Pre-Patching
         run: |
           python3 scripts/sanitize_legacy_code.py .
           python3 scripts/patch_array_initializations.py .
 
       - name: 🤖 Automated Correction & Build Loop
-        # This replaces the manual 'gradle' step to handle Ninja errors
         run: python3 scripts/dynamic_corrector.py
 
       - name: 📦 Upload Logs
