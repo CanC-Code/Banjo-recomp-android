@@ -23,36 +23,48 @@ def apply_fixes():
     fixes = 0
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
-    # Existing Patterns
+    # Core Patterns
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     null_errs = re.findall(file_regex + r":(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
     
-    # 🆕 Language Linkage Pattern (Fixes sinf/cosf errors)
+    # 🆕 Redefinition and Linkage Patterns
+    redef_errs = re.findall(file_regex + r":\d+:\d+: error: redefinition of '([^']+)'", log_data)
     linkage_errs = re.findall(file_regex + r":\d+:\d+: error: declaration of '([^']+)' has a different language linkage", log_data)
 
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", 
-        "OSContPad", "Vtx", "Mtx", "ALHeap", "sched_yield", "M_PI", "ADPCM_STATE"
+        "OSContPad", "Vtx", "Mtx", "ALHeap", "sched_yield", "M_PI", "ADPCM_STATE", "ALGlobals"
     }
 
-    # Handle Linkage Errors
+    # 1. Fix Linkage Errors (Math functions)
     for filepath, func_name in set(linkage_errs):
         if os.path.exists(filepath):
             with open(filepath, "r") as f: content = f.read()
             header = "#include <math.h>\n" if func_name in ["sinf", "cosf", "sqrtf", "atan2f"] else ""
             if header and header not in content:
                 with open(filepath, "w") as f: f.write(header + content)
-                print(f"  [+] Injected {header.strip()} at top to fix linkage of {func_name}")
+                print(f"  [+] Fixed math linkage for {func_name} in {os.path.basename(filepath)}")
                 fixes += 1
 
-    # Handle Standard Errors
+    # 2. Fix Redefinitions
+    for filepath, name in set(redef_errs):
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f: content = f.read()
+            if name in CORE_N64:
+                # Comment out the local redefinition to favor the master header
+                new_content = re.sub(rf"(typedef\s+[^;]+{name}\s*;)", r"/* \1 (Redefinition Fix) */", content)
+                if new_content != content:
+                    with open(filepath, "w") as f: f.write(new_content)
+                    print(f"  [-] Disabled redefinition of {name} in {os.path.basename(filepath)}")
+                    fixes += 1
+
+    # 3. Standard Project Fixes
     affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in null_errs])
     for filepath in [f for f in affected_files if os.path.exists(f) and "n64_types.h" not in f]:
         with open(filepath, "r") as f: content = f.read()
         original_content = content
-        
         file_errors = [t[1] for t in type_errs if t[0] == filepath] + [i[1] for i in id_errs if i[0] == filepath]
         
         if any(err in CORE_N64 for err in file_errors):
@@ -81,13 +93,13 @@ def apply_fixes():
     return fixes
 
 def main():
-    for i in range(1, 30):
+    for i in range(1, 40):
         print(f"\n--- Cycle {i} ---")
         if run_build():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found.")
+            print("\n🛑 No more fixable patterns found. Check the full_build_log.txt for UNHANDLED errors.")
             break
         time.sleep(1)
 
