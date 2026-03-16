@@ -23,68 +23,47 @@ def apply_fixes():
     fixes = 0
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
-    # Core Patterns
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
-    null_errs = re.findall(file_regex + r":(\d+):\d+: error: initializing 'f32' .* incompatible type 'void \*'", log_data)
-    
-    # 🆕 Redefinition and Linkage Patterns
-    redef_errs = re.findall(file_regex + r":\d+:\d+: error: redefinition of '([^']+)'", log_data)
     linkage_errs = re.findall(file_regex + r":\d+:\d+: error: declaration of '([^']+)' has a different language linkage", log_data)
 
-    CORE_N64 = {
-        "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
-        "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", 
-        "OSContPad", "Vtx", "Mtx", "ALHeap", "sched_yield", "M_PI", "ADPCM_STATE", "ALGlobals"
+    SCALARS = {
+        "u8": "typedef unsigned char u8;\n",
+        "s8": "typedef signed char s8;\n",
+        "u16": "typedef unsigned short u16;\n",
+        "s16": "typedef short s16;\n",
+        "u32": "typedef unsigned int u32;\n",
+        "s32": "typedef int s32;\n"
     }
 
-    # 1. Fix Linkage Errors (Math functions)
-    for filepath, func_name in set(linkage_errs):
-        if os.path.exists(filepath):
-            with open(filepath, "r") as f: content = f.read()
-            header = "#include <math.h>\n" if func_name in ["sinf", "cosf", "sqrtf", "atan2f"] else ""
-            if header and header not in content:
-                with open(filepath, "w") as f: f.write(header + content)
-                print(f"  [+] Fixed math linkage for {func_name} in {os.path.basename(filepath)}")
-                fixes += 1
+    CORE_N64 = {"OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ALHeap", "ADPCM_STATE"}
 
-    # 2. Fix Redefinitions
-    for filepath, name in set(redef_errs):
-        if os.path.exists(filepath):
-            with open(filepath, "r") as f: content = f.read()
-            if name in CORE_N64:
-                # Comment out the local redefinition to favor the master header
-                new_content = re.sub(rf"(typedef\s+[^;]+{name}\s*;)", r"/* \1 (Redefinition Fix) */", content)
-                if new_content != content:
-                    with open(filepath, "w") as f: f.write(new_content)
-                    print(f"  [-] Disabled redefinition of {name} in {os.path.basename(filepath)}")
-                    fixes += 1
+    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in linkage_errs])
 
-    # 3. Standard Project Fixes
-    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in null_errs])
-    for filepath in [f for f in affected_files if os.path.exists(f) and "n64_types.h" not in f]:
+    for filepath in affected_files:
+        if not os.path.exists(filepath): continue
         with open(filepath, "r") as f: content = f.read()
         original_content = content
+        
         file_errors = [t[1] for t in type_errs if t[0] == filepath] + [i[1] for i in id_errs if i[0] == filepath]
         
-        if any(err in CORE_N64 for err in file_errors):
-            if 'include "ultra/n64_types.h"' not in content:
-                content = '#include "ultra/n64_types.h"\n' + content
-                print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
-                fixes += 1
-        
         for err in set(file_errors):
-            if err.startswith(("D_", "sCh")):
+            if err in SCALARS:
+                decl = SCALARS[err]
+                if decl not in content:
+                    content = decl + content
+                    print(f"  [+] Injected scalar polyfill: {err} in {os.path.basename(filepath)}")
+                    fixes += 1
+            elif err in CORE_N64:
+                if 'include "ultra/n64_types.h"' not in content:
+                    content = '#include "ultra/n64_types.h"\n' + content
+                    print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
+                    fixes += 1
+            elif err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
                 if decl not in content:
                     content = decl + content
                     print(f"  [+] Injected extern: {err}")
-                    fixes += 1
-            elif err not in CORE_N64 and not err.startswith(("D_", "sCh")):
-                decl = f"typedef struct {err} {err};\n"
-                if decl not in content:
-                    content = decl + content
-                    print(f"  [+] Injected struct typedef: {err}")
                     fixes += 1
 
         if content != original_content:
@@ -93,13 +72,13 @@ def apply_fixes():
     return fixes
 
 def main():
-    for i in range(1, 40):
+    for i in range(1, 30):
         print(f"\n--- Cycle {i} ---")
         if run_build():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found. Check the full_build_log.txt for UNHANDLED errors.")
+            print("\n🛑 No more fixable patterns found.")
             break
         time.sleep(1)
 
