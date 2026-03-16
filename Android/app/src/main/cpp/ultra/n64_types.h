@@ -1,28 +1,24 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
-// 1. THE NUCLEAR BLOCKADE (MOVED TO ABSOLUTE TOP)
-// We must block the legacy N64 headers *before* including any system headers.
-// This prevents hijacked headers from successfully chaining into libaudio.h
+/**
+ * 1. THE NUCLEAR BLOCKADE (PRE-EMPTIVE)
+ * We define these BEFORE including anything else to ensure that if 
+ * standard headers are hijacked, the N64 engine files are already locked out.
+ */
 #define _ULTRA64_H_
 #define _OS_H_
 #define _GBI_H_
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
-
-// 2. SYSTEM INCLUDES
-// Now safe to include. If local time.h hijacks, it hits the blockade above and stops safely.
-#include <sys/types.h>
-#include <time.h>
-#include <stddef.h>
-#include <stdint.h>
-
-// Lock out time headers to prevent further legacy clashes down the line
 #define _TIME_H_
 #define _SYS_TIME_H_
 
-// 3. COMPLETE TYPE DEFINITIONS
+/**
+ * 2. CORE N64 SCALARS
+ * Defined before system includes to satisfy any local dependencies.
+ */
 typedef signed char s8;
 typedef unsigned char u8;
 typedef short s16;
@@ -39,17 +35,26 @@ typedef s32 OSPri;
 #undef NULL
 #define NULL 0
 
-// Audio & Graphics Types
+/**
+ * 3. NDK SYSTEM INCLUDES
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/* * We avoid #include <time.h> directly here because of the project's 
+ * include path hijacking. We manually define the only type the 
+ * N64 code actually needs from it:
+ */
+typedef long n64_time_t;
+
+/**
+ * 4. ENGINE STRUCTURES
+ */
 typedef u64 Gfx;
 typedef u64 Acmd;
 typedef struct { s16 state[16]; } ADPCM_STATE;
 
-#ifndef _AL_GLOBALS_DEFINED
-#define _AL_GLOBALS_DEFINED
-typedef struct { u8 padding[0x1000]; } ALGlobals;
-#endif
-
-// Threading & OS Types
 typedef struct {
     u64 registers[32];
     u64 lo, hi, pc;
@@ -75,8 +80,12 @@ typedef struct OSMesgQueue_s {
     s32 count;
 } OSMesgQueue;
 
-// Forward Declarations
+#ifndef _AL_GLOBALS_DEFINED
+#define _AL_GLOBALS_DEFINED
+typedef struct { u8 padding[0x1000]; } ALGlobals;
+#endif
+
 typedef struct Actor Actor;
 typedef struct sChVegetable sChVegetable;
 
-#endif
+#endif // N64_TYPES_H
