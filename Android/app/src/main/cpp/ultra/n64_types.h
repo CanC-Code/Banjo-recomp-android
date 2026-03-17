@@ -40,7 +40,6 @@ typedef s32 OSPri;
 
 /**
  * 4. N64 OS TYPES (FOUNDATION)
- * Added OS_NUM_EVENTS macro and OSEvent scalar to satisfy seteventmesg.c
  */
 #define OS_NUM_EVENTS 15
 typedef u32 OSEvent;
@@ -83,11 +82,16 @@ typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn
 typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 
-typedef struct actor_s Actor; 
-typedef struct sChVegetable sChVegetable;
+/**
+ * 6. RECOMPILATION SPECIFIC TYPES
+ * Fixed: Converted from forward declarations to dummy structs with size.
+ * This allows sizeof() to work in Actor and Vegetable logic.
+ */
+typedef struct { u8 padding[0x800]; } Actor; 
+typedef struct { u8 padding[0x400]; } sChVegetable;
 
 /**
- * 6. SYSTEM INCLUDES
+ * 7. SYSTEM INCLUDES
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -105,7 +109,7 @@ extern "C" {
 #endif
 
 /**
- * 7. POLYFILLS
+ * 8. POLYFILLS
  */
 static inline int sched_yield_polyfill(void) { return usleep(1); }
 #undef sched_yield
