@@ -41,12 +41,17 @@ def apply_fixes():
         with open(filepath, "r") as f: content = f.read()
         original_content = content
         
-        # 1. Redefinition Cleanup
+        # 1. Advanced Redefinition Cleanup
         file_redefs = [r[1] for r in redef_errs if r[0] == filepath]
         for name in file_redefs:
             if name in CORE_N64:
-                # Comment out local typedefs that clash with our master header
-                content = re.sub(rf"(typedef\s+[^;]+{name}\s*;)", r"/* \1 (Master Header Fix) */", content)
+                # Target multi-line structs safely
+                pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?{{.*?}}\s*{name}\s*;)"
+                content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
+                # Target single-line typedefs
+                pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
+                content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
+                
                 print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
                 fixes += 1
 
