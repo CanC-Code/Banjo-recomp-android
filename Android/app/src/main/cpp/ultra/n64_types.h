@@ -28,45 +28,10 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 3. THE NUCLEAR BLOCKADE
- * Explicitly define the guard for the legacy PR/sched.h to prevent it 
- * from being loaded by subsequent includes.
+ * 3. N64 OS TYPES (FOUNDATION)
+ * Defined BEFORE system includes. If a legacy header is hijacked,
+ * it will now find these types and won't throw "unknown type" errors.
  */
-#define _OS_H_
-#define _ULTRA64_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
-#define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
-#define _SCHED_H_ 
-
-/**
- * 4. SYSTEM INCLUDES
- * Using bracket notation <> to force standard Android NDK library paths.
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <sched.h> 
-#include <math.h>
-#include <unistd.h>
-
-#ifndef M_PI
-  #define M_PI 3.14159265358979323846
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/**
- * 5. POLYFILLS & N64 OS TYPES
- */
-static inline int sched_yield_polyfill(void) { return usleep(1); }
-#undef sched_yield
-#define sched_yield sched_yield_polyfill
-
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
@@ -96,7 +61,35 @@ typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
 /**
- * 6. GRAPHICS
+ * 4. SYSTEM INCLUDES
+ * Now safe to load. Removed _SCHED_H_ blockade to allow the NDK
+ * to provide real threading functions.
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <sched.h> 
+#include <math.h>
+#include <unistd.h>
+
+#ifndef M_PI
+  #define M_PI 3.14159265358979323846
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * 5. POLYFILLS
+ */
+static inline int sched_yield_polyfill(void) { return usleep(1); }
+#undef sched_yield
+#define sched_yield sched_yield_polyfill
+
+/**
+ * 6. GRAPHICS & AUDIO
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -112,5 +105,16 @@ typedef struct sChVegetable sChVegetable;
 #ifdef __cplusplus
 }
 #endif
+
+/**
+ * 7. THE NUCLEAR BLOCKADE
+ * Block legacy headers AFTER we have provided the foundation.
+ */
+#define _OS_H_
+#define _ULTRA64_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
 
 #endif
