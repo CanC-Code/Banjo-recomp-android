@@ -40,16 +40,15 @@ typedef s32 OSPri;
 
 /**
  * 4. N64 OS TYPES (FOUNDATION)
+ * Added OS_NUM_EVENTS macro and OSEvent scalar to satisfy seteventmesg.c
  */
+#define OS_NUM_EVENTS 15
+typedef u32 OSEvent;
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 typedef struct ALHeap ALHeap; 
 typedef struct { u8 padding[0x1000]; } ALGlobals;
-
-// Fixed: Explicitly defining event primitives so they aren't turned into structs
-typedef u32 OSEvent;
-#define OS_NUM_EVENTS 15
 
 typedef struct OSMesgQueue_s {
     void* mt;
