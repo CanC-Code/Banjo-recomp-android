@@ -21,13 +21,12 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Capture any file path reporting an error
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
 
-    # All core types that indicate we need our master header
+    # Core types that indicate a missing n64_types.h foundation
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE"
@@ -36,7 +35,7 @@ def apply_fixes():
     affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs])
 
     for filepath in affected_files:
-        # Ignore actual system libraries, but process everything else
+        # Skip actual system headers but process everything in the project tree
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
         
         with open(filepath, "r") as f: content = f.read()
@@ -44,14 +43,14 @@ def apply_fixes():
         
         file_errors = [t[1] for t in type_errs if t[0] == filepath] + [i[1] for i in id_errs if i[0] == filepath]
         
-        # If any file is missing N64 types, ensure n64_types.h is the VERY FIRST include
+        # Ensure n64_types.h is at the absolute top of any file missing OS primitives
         if any(err in CORE_N64 for err in file_errors):
             if 'include "ultra/n64_types.h"' not in content:
                 content = '#include "ultra/n64_types.h"\n' + content
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
 
-        # Handle extern variables
+        # Handle specific Banjo decompilation externals
         for err in set(file_errors):
             if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
@@ -72,7 +71,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found. Check the log for unhandled errors.")
+            print("\n🛑 No more fixable patterns found.")
             break
         time.sleep(1)
 
