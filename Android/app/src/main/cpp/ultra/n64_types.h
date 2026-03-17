@@ -9,7 +9,21 @@
 #define _USE_MATH_DEFINES
 
 /**
- * 2. CORE N64 SCALARS
+ * 2. THE NUCLEAR BLOCKADE
+ * Moved to the absolute top. If a hijacked system header (like time.h) 
+ * tries to include legacy N64 headers, they will be instantly blocked.
+ * Note: _SCHED_H_ is omitted so Android's system headers still work.
+ */
+#define _OS_H_
+#define _ULTRA64_H_
+#define _GBI_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
+#define _GU_H_
+
+/**
+ * 3. CORE N64 SCALARS
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -28,7 +42,7 @@ typedef s32 OSPri;
 #define NULL 0
 
 /**
- * 3. N64 OS TYPES (FOUNDATION)
+ * 4. N64 OS TYPES (FOUNDATION)
  */
 typedef u64 OSTime;
 typedef void* OSMesg;
@@ -59,9 +73,25 @@ typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
 /**
- * 4. SYSTEM INCLUDES
- * Notice: <sched.h> has been deliberately removed to prevent the 
- * compiler from hijacking it via the local -I paths!
+ * 5. GRAPHICS & AUDIO TYPES
+ * Moved ABOVE the system includes to guarantee they exist in memory 
+ * before any complex project headers are parsed.
+ */
+typedef u64 Gfx;
+typedef u64 Acmd;
+typedef struct { s16 state[16]; } ADPCM_STATE;
+
+typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
+typedef union { Vtx_t v; long long force_align; } Vtx;
+typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
+
+typedef struct actor_s Actor; 
+typedef struct sChVegetable sChVegetable;
+
+/**
+ * 6. SYSTEM INCLUDES
+ * Now safe to load. Any hijacked headers will see the blockade 
+ * above and safely skip legacy files.
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -79,42 +109,14 @@ extern "C" {
 #endif
 
 /**
- * 5. POLYFILLS
- * We don't need <sched.h> because usleep comes from <unistd.h>
+ * 7. POLYFILLS
  */
 static inline int sched_yield_polyfill(void) { return usleep(1); }
 #undef sched_yield
 #define sched_yield sched_yield_polyfill
 
-/**
- * 6. GRAPHICS & AUDIO
- */
-typedef u64 Gfx;
-typedef u64 Acmd;
-typedef struct { s16 state[16]; } ADPCM_STATE;
-
-typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
-typedef union { Vtx_t v; long long force_align; } Vtx;
-typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
-
-typedef struct actor_s Actor; 
-typedef struct sChVegetable sChVegetable;
-
 #ifdef __cplusplus
 }
 #endif
-
-/**
- * 7. THE NUCLEAR BLOCKADE
- * We can now safely block the PR/sched.h header without worrying 
- * about breaking the NDK since we no longer rely on it.
- */
-#define _OS_H_
-#define _ULTRA64_H_
-#define _GBI_H_
-#define _LIBAUDIO_H_
-#define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
-#define _SCHED_H_ 
 
 #endif
