@@ -29,8 +29,8 @@ typedef s32 OSPri;
 
 /**
  * 3. THE NUCLEAR BLOCKADE
- * Prevents legacy headers from loading. We define these BEFORE 
- * any includes to ensure they are blocked immediately.
+ * Explicitly define the guard for the legacy PR/sched.h to prevent it 
+ * from being loaded by subsequent includes.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -38,11 +38,11 @@ typedef s32 OSPri;
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
-#define _SCHED_H_  /* Specifically block PR/sched.h */
+#define _SCHED_H_ 
 
 /**
  * 4. SYSTEM INCLUDES
- * Using bracket notation <> to force standard library paths.
+ * Using bracket notation <> to force standard Android NDK library paths.
  */
 #include <sys/types.h>
 #include <stddef.h>
