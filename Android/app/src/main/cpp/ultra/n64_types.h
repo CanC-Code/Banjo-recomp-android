@@ -10,9 +10,6 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
- * Moved to the absolute top. If a hijacked system header (like time.h) 
- * tries to include legacy N64 headers, they will be instantly blocked.
- * Note: _SCHED_H_ is omitted so Android's system headers still work.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -43,12 +40,13 @@ typedef s32 OSPri;
 
 /**
  * 4. N64 OS TYPES (FOUNDATION)
+ * Fixed: Restored ALGlobals complete type so NativeBridge.cpp can use sizeof()
  */
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 typedef struct ALHeap ALHeap; 
-typedef struct ALGlobals ALGlobals;
+typedef struct { u8 padding[0x1000]; } ALGlobals;
 
 typedef struct OSMesgQueue_s {
     void* mt;
@@ -74,8 +72,6 @@ typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
 /**
  * 5. GRAPHICS & AUDIO TYPES
- * Moved ABOVE the system includes to guarantee they exist in memory 
- * before any complex project headers are parsed.
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -90,8 +86,6 @@ typedef struct sChVegetable sChVegetable;
 
 /**
  * 6. SYSTEM INCLUDES
- * Now safe to load. Any hijacked headers will see the blockade 
- * above and safely skip legacy files.
  */
 #include <sys/types.h>
 #include <stddef.h>
