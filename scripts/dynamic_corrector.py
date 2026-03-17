@@ -25,12 +25,14 @@ def apply_fixes():
     
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
-    redef_errs = re.findall(file_regex + r":\d+:\d+: error: redefinition of '([^']+)'", log_data)
+    
+    # 🆕 Improved regex to catch complex Clang typedef redefinitions
+    redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
 
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
-        "OSContPad", "OSContStatus", "Vtx", "Mtx"
+        "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals"
     }
 
     affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in redef_errs])
@@ -47,6 +49,7 @@ def apply_fixes():
             if name in CORE_N64:
                 # Comment out local typedefs that clash with our master header
                 content = re.sub(rf"(typedef\s+[^;]+{name}\s*;)", r"/* \1 (Master Header Fix) */", content)
+                print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
                 fixes += 1
 
         # 2. Foundation Injection
@@ -78,7 +81,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found.")
+            print("\n🛑 No more fixable patterns found. Check the full_build_log.txt for UNHANDLED errors.")
             break
         time.sleep(1)
 
