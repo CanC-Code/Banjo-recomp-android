@@ -21,12 +21,13 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
+    # Capture any file path reporting an error
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
 
-    # Core types that indicate a missing n64_types.h foundation
+    # Core types that indicate a missing foundation
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE"
@@ -35,7 +36,7 @@ def apply_fixes():
     affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs])
 
     for filepath in affected_files:
-        # Skip actual system headers but process everything in the project tree
+        # Skip actual system libraries, but process everything else in the project tree
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
         
         with open(filepath, "r") as f: content = f.read()
@@ -50,7 +51,7 @@ def apply_fixes():
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
 
-        # Handle specific Banjo decompilation externals
+        # Handle specific Banjo-Kazooie decompilation external variables
         for err in set(file_errors):
             if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
@@ -71,7 +72,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found.")
+            print("\n🛑 No more fixable patterns found. Check the log for unhandled errors.")
             break
         time.sleep(1)
 
