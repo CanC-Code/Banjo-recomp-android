@@ -25,14 +25,13 @@ def apply_fixes():
     
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
-    
-    # 🆕 Improved regex to catch complex Clang typedef redefinitions
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
 
+    # Added Gfx and Acmd to the core types list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
-        "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals"
+        "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals", "Gfx", "Acmd"
     }
 
     affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in redef_errs])
@@ -60,13 +59,19 @@ def apply_fixes():
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 3. Extern Injection
+        # 3. Extern and Struct Injection (Restored the missing generic struct fallback)
         for err in set(file_errors):
             if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
                 if decl not in content:
                     content = decl + content
                     print(f"  [+] Injected extern: {err}")
+                    fixes += 1
+            elif err not in CORE_N64 and not err.startswith(("D_", "sCh")):
+                decl = f"typedef struct {err} {err};\n"
+                if decl not in content:
+                    content = decl + content
+                    print(f"  [+] Injected struct typedef: {err}")
                     fixes += 1
 
         if content != original_content:
