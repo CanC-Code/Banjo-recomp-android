@@ -27,7 +27,6 @@ def apply_fixes():
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
 
-    # Added Gfx and Acmd to the core types list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
@@ -59,7 +58,7 @@ def apply_fixes():
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 3. Extern and Struct Injection (Restored the missing generic struct fallback)
+        # 3. Extern and Struct Injection
         for err in set(file_errors):
             if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
