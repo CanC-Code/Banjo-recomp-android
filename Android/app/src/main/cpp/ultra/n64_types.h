@@ -29,8 +29,6 @@ typedef s32 OSPri;
 
 /**
  * 3. N64 OS TYPES (FOUNDATION)
- * Defined BEFORE system includes. If a legacy header is hijacked,
- * it will now find these types and won't throw "unknown type" errors.
  */
 typedef u64 OSTime;
 typedef void* OSMesg;
@@ -62,14 +60,13 @@ typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 
 /**
  * 4. SYSTEM INCLUDES
- * Now safe to load. Removed _SCHED_H_ blockade to allow the NDK
- * to provide real threading functions.
+ * Notice: <sched.h> has been deliberately removed to prevent the 
+ * compiler from hijacking it via the local -I paths!
  */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
-#include <sched.h> 
 #include <math.h>
 #include <unistd.h>
 
@@ -83,6 +80,7 @@ extern "C" {
 
 /**
  * 5. POLYFILLS
+ * We don't need <sched.h> because usleep comes from <unistd.h>
  */
 static inline int sched_yield_polyfill(void) { return usleep(1); }
 #undef sched_yield
@@ -108,7 +106,8 @@ typedef struct sChVegetable sChVegetable;
 
 /**
  * 7. THE NUCLEAR BLOCKADE
- * Block legacy headers AFTER we have provided the foundation.
+ * We can now safely block the PR/sched.h header without worrying 
+ * about breaking the NDK since we no longer rely on it.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -116,5 +115,6 @@ typedef struct sChVegetable sChVegetable;
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _PR_LIBAUDIO_H_
+#define _SCHED_H_ 
 
 #endif
