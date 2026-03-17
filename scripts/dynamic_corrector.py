@@ -94,6 +94,15 @@ def apply_fixes():
         if content != original_content:
             with open(filepath, "w") as f: f.write(content)
 
+    # 🚨 NEW: Print unhandled errors if we couldn't fix anything!
+    if fixes == 0:
+        print("\n⚠️ Checking for unhandled errors...")
+        unhandled = re.findall(r"error: (.*)", log_data)
+        if unhandled:
+            print("\n🚨 UNHANDLED ERRORS DETECTED:")
+            for err in list(dict.fromkeys(unhandled))[:10]: 
+                print(f"  - {err}")
+
     return fixes
 
 def main():
@@ -103,7 +112,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found. Check the full_build_log.txt for UNHANDLED errors.")
+            print("\n🛑 Loop halted. Please share the UNHANDLED errors printed above.")
             break
         time.sleep(1)
 
