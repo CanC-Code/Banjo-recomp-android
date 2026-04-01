@@ -29,13 +29,23 @@ uint8_t* decompress_rare_asset(const uint8_t* src,
         (uint32_t(src[4]) << 8)  |
         (uint32_t(src[5]));
 
-    // Sanity limit (32 MB hard cap)
-    if (decompLen == 0 || decompLen > (32u * 1024u * 1024u)) {
+    // FIX: Sanity limit increased from 32 MB to 128 MB to support larger OTR assets
+    const uint32_t MAX_DECOMPRESSED_SIZE = 128u * 1024u * 1024u;
+    
+    if (decompLen == 0 || decompLen > MAX_DECOMPRESSED_SIZE) {
+        __android_log_print(
+            ANDROID_LOG_ERROR,
+            "BKA_DECOMP",
+            "Rare inflate aborted: invalid size (decompLen=%u). Cap is %u.",
+            decompLen,
+            MAX_DECOMPRESSED_SIZE
+        );
         return nullptr;
     }
 
     uint8_t* outBuf = static_cast<uint8_t*>(malloc(decompLen));
     if (!outBuf) {
+        __android_log_print(ANDROID_LOG_ERROR, "BKA_DECOMP", "Failed to allocate %u bytes", decompLen);
         return nullptr;
     }
 
