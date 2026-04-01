@@ -3,20 +3,24 @@ package com.bkawrapper;
 import android.content.res.AssetManager;
 
 public class NativeBridge {
+
+    // Load the native C++ library compiled by CMake
     static {
-        System.loadLibrary("bkawrapper");
+        System.loadLibrary("ultra"); 
     }
 
-    public static native void nativeInit(Object activity);
-    public static native void runOtrGeneration(int romFd, AssetManager assetManager, String outputDir);
+    /**
+     * Bootstraps the N64 environment and starts the game loop.
+     * * @param otrPath      The absolute path to the extracted assets directory.
+     * @param assetManager Android's AssetManager to read the manifest.
+     */
+    public static native void nativeGameBoot(String otrPath, AssetManager assetManager);
 
-    // Required by OtrService.java
-    public static void notifyFinished() {
-        android.util.Log.i("NativeBridge", "Extraction complete notification received.");
-    }
-
-    // Required by GLRenderer.java
-    public static void updateTexture(int textureId) {
-        // Stub for future rendering logic
-    }
+    /**
+     * Updates the N64 controller state.
+     * * @param buttonMask Bitmask of currently pressed buttons.
+     * @param stickX     Analog stick X-axis (-80 to 80).
+     * @param stickY     Analog stick Y-axis (-80 to 80).
+     */
+    public static native void nativeUpdateInput(int buttonMask, float stickX, float stickY);
 }
