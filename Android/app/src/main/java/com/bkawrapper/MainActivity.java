@@ -96,7 +96,20 @@ public class MainActivity extends AppCompatActivity {
         currentArtifactText.setText(fileName);
 
         if (percent >= 100) {
-            currentArtifactText.setText("Extraction Complete!");
+            currentArtifactText.setText("Extraction Complete! Booting Game...");
+
+            // Start the game engine in a background thread to prevent ANR (Application Not Responding) crashes
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    // The directory where OtrService just saved the assets
+                    String otrPath = getFilesDir().getAbsolutePath();
+                    
+                    // Call the C++ NativeBridge function to boot the engine
+                    // Passing the internal files path and the Android Asset Manager
+                    NativeBridge.nativeGameBoot(otrPath, getAssets());
+                }
+            }).start();
         }
     }
 }
