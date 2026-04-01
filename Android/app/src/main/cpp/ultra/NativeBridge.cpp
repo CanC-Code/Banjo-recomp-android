@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <malloc.h>
 
 #include "n64_types.h"
 
