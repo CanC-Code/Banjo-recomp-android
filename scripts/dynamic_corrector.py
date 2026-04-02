@@ -5,6 +5,46 @@ import time
 
 GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
 LOG_FILE = "Android/full_build_log.txt"
+TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
+
+def harvest_macro(macro_name, sdk_dir="include"):
+    """Crawls the N64 SDK headers to find and extract the missing macro definition."""
+    for root, _, files in os.walk(sdk_dir):
+        for file in files:
+            if not file.endswith('.h'): continue
+            filepath = os.path.join(root, file)
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+            except: continue
+
+            for i, line in enumerate(lines):
+                # Search for the exact macro definition
+                if re.match(rf'^[ \t]*#[ \t]*define[ \t]+{macro_name}\b', line):
+                    macro_block = line
+                    curr = i
+                    # Handle multi-line macros that end in a backslash '\'
+                    while macro_block.strip().endswith('\\') and curr + 1 < len(lines):
+                        curr += 1
+                        macro_block += lines[curr]
+                    return macro_block.strip()
+    return None
+
+def inject_macro_to_header(macro_block, macro_name):
+    """Safely injects the harvested macro into the master n64_types.h file."""
+    if not os.path.exists(TYPES_HEADER): return False
+    with open(TYPES_HEADER, "r") as f: content = f.read()
+    
+    # Don't inject if it's already there
+    if f"define {macro_name}" in content: return False
+
+    # Insert it right above the final #endif
+    pos = content.rfind('#endif')
+    if pos != -1:
+        new_content = content[:pos] + f"\n/* Auto-Harvested: {macro_name} */\n{macro_block}\n\n" + content[pos:]
+        with open(TYPES_HEADER, "w") as f: f.write(new_content)
+        return True
+    return False
 
 def run_build():
     print("\n🚀 Starting Build Cycle...")
@@ -29,7 +69,6 @@ def apply_fixes():
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
-    # FIX: Added OSIoMesg, OSPfs, LookAt, and Light to the core exclusion list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
@@ -39,6 +78,26 @@ def apply_fixes():
         "OSIoMesg", "OSPfs", "LookAt", "Light"
     }
 
+    # ====================================================================
+    # NEW: GLOBAL SDK MACRO HARVESTER
+    # ====================================================================
+    all_identifiers = set([i[1] for i in id_errs])
+    for err in all_identifiers:
+        if err in CORE_N64: continue
+        
+        # If it looks like an N64 Macro (Uppercase or prefixed)
+        if err.isupper() or err.startswith(("G_", "OS_", "GU_", "RM_")):
+            macro_block = harvest_macro(err)
+            if macro_block:
+                if inject_macro_to_header(macro_block, err):
+                    print(f"  [🤖] Auto-Harvested SDK Macro: {err}")
+                    fixes += 1
+                    # Remove from local file errors so we don't inject bad extern arrays for it
+                    id_errs = [e for e in id_errs if e[1] != err]
+
+    # ====================================================================
+    # LOCAL FILE CORRECTIONS
+    # ====================================================================
     affected_files = set(
         [e[0] for e in type_errs] + 
         [e[0] for e in id_errs] + 
@@ -54,7 +113,6 @@ def apply_fixes():
         original_content = content
 
         # 0. Active Sanitization
-        # FIX: Scrubbing out the dummy OSIoMesg, OSPfs, and LookAt
         for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
@@ -89,24 +147,19 @@ def apply_fixes():
 
         handled_errors = set()
 
-        # 2. Out-of-Order Struct Fixer (The mips2c Quirk)
+        # 2. Out-of-Order Struct Fixer
         for err in all_file_errors:
             pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{{.*?\}}\s*{err}\s*;)"
             match = re.search(pattern_struct, content, re.DOTALL)
             if match:
                 struct_def = match.group(1)
-
-                # Cut the struct from the bottom
                 content = content.replace(struct_def, "")
-
-                # Paste the struct at the top (right below includes)
                 include_idx = content.rfind('#include')
                 if include_idx != -1:
                     eol = content.find('\n', include_idx) + 1
                     content = content[:eol] + "\n/* Auto-moved struct */\n" + struct_def + "\n" + content[eol:]
                 else:
                     content = "/* Auto-moved struct */\n" + struct_def + "\n" + content
-
                 print(f"  [-] Auto-moved real definition of {err} to the top of {os.path.basename(filepath)}")
                 fixes += 1
                 handled_errors.add(err)
