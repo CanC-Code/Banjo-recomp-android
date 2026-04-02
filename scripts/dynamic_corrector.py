@@ -35,8 +35,9 @@ def inject_macro_to_header(macro_block, macro_name, is_polyfill=False):
     if not os.path.exists(TYPES_HEADER): return False
     with open(TYPES_HEADER, "r") as f: content = f.read()
     
-    # Don't inject if it's already there
-    if f"define {macro_name}" in content: return False
+    # FIX: Use Regex with word boundaries (\b) to prevent "G_RM_NOOP" from falsely matching "G_RM_NOOP2"!
+    if re.search(rf'^[ \t]*#[ \t]*define[ \t]+{macro_name}\b', content, re.MULTILINE): 
+        return False
 
     # Insert it right above the final #endif
     pos = content.rfind('#endif')
@@ -86,7 +87,6 @@ def apply_fixes():
     for err in all_identifiers:
         if err in CORE_N64: continue
         
-        # If it looks like an N64 Macro (Uppercase or prefixed)
         if err.isupper() or err.startswith(("G_", "OS_", "GU_", "RM_")):
             macro_block = harvest_macro(err)
             if macro_block:
@@ -95,7 +95,6 @@ def apply_fixes():
                     fixes += 1
                     id_errs = [e for e in id_errs if e[1] != err]
             else:
-                # NEW: If it fails to find the macro, safely polyfill it to 0
                 dummy_block = f"#ifndef {err}\n#define {err} 0\n#endif"
                 if inject_macro_to_header(dummy_block, err, is_polyfill=True):
                     print(f"  [🤖] Auto-Polyfilled Missing Token: {err}")
