@@ -43,7 +43,7 @@ def apply_fixes():
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # 0. Active Sanitization for Flawed Incomplete Types
+        # 0. Active Sanitization
         for name in ["Actor", "sChVegetable"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
@@ -51,18 +51,22 @@ def apply_fixes():
                 print(f"  [-] Sanitized incomplete type {name} in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 1. Advanced Redefinition Cleanup
+        # 1. Advanced Redefinition Cleanup (FIXED GHOST INCREMENT BUG)
         file_redefs = [r[1] for r in redef_errs if r[0] == filepath]
         for name in file_redefs:
             if name in CORE_N64:
+                old_c = content
                 pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?{{.*?}}\s*{name}\s*;)"
                 content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
                 pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
                 content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
-                fixes += 1
+                
+                # ONLY increment if we actually modified the file!
+                if content != old_c:
+                    print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
+                    fixes += 1
 
         # 2. Foundation Injection
-        # Check if ANY error in this file is a core missing type
         all_file_errors = ([t[1] for t in type_errs if t[0] == filepath] + 
                            [i[1] for i in id_errs if i[0] == filepath] +
                            [s[1] for s in sizeof_errs if s[0] == filepath])
@@ -73,7 +77,7 @@ def apply_fixes():
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 3a. Type Error Injection (Safe to inject structs)
+        # 3a. Type Error Injection 
         type_and_sizeof = set([t[1] for t in type_errs if t[0] == filepath] + [s[1] for s in sizeof_errs if s[0] == filepath])
         for err in type_and_sizeof:
             if err in CORE_N64: continue
@@ -83,7 +87,7 @@ def apply_fixes():
                 print(f"  [+] Injected struct typedef: {err}")
                 fixes += 1
 
-        # 3b. Identifier Error Injection (DANGER: Only inject known data arrays, NEVER structs)
+        # 3b. Identifier Error Injection 
         file_identifiers = set([i[1] for i in id_errs if i[0] == filepath])
         for err in file_identifiers:
             if err in CORE_N64: continue
