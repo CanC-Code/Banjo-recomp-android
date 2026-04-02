@@ -3,7 +3,7 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <stdint.h>
-#include <stdlib.h> // FIX: posix_memalign is standard here
+#include <stdlib.h> 
 #include <string.h>
 #include <string>
 
@@ -21,7 +21,9 @@ extern "C" {
 
     // Low-level OS symbols
     extern void initInterruptTables();
-    extern void* alGlobals;
+    
+    // FIX: Now that libaudio.h is working, we use the strict ALGlobals pointer type instead of void*
+    extern ALGlobals* alGlobals;
 }
 
 extern "C" {
@@ -34,14 +36,14 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     LOGI("Starting Native Game Boot...");
 
     // 1. Initialize Audio Globals
-    // FIX: Using posix_memalign for strict POSIX compliance across all NDK levels
     if (alGlobals == nullptr) {
         size_t allocSize = (sizeof(ALGlobals) + 15) & ~15; 
         void* ptr = nullptr;
         
         // posix_memalign returns 0 on success
         if (posix_memalign(&ptr, 16, allocSize) == 0) {
-            alGlobals = ptr;
+            // FIX: Explicitly cast the allocated void* memory to ALGlobals*
+            alGlobals = (ALGlobals*) ptr;
             memset(alGlobals, 0, allocSize);
             LOGI("Audio globals initialized and aligned at %p", alGlobals);
         } else {
