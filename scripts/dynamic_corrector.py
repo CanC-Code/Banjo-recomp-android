@@ -27,15 +27,14 @@ def apply_fixes():
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
-    
-    # FIX: Catch the static close collision!
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
+    # FIX: Removed LetterFloorTile from CORE_N64 so it can be handled locally by the new struct mover!
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
         "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals", "Gfx", "Acmd",
-        "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", "LetterFloorTile"
+        "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable"
     }
 
     affected_files = set(
@@ -60,8 +59,7 @@ def apply_fixes():
                 print(f"  [-] Sanitized incomplete type {name} in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # NEW 0.5: Internal 'close' Renaming
-        # This surgically renames the game's internal function without breaking POSIX tools!
+        # 0.5: Internal 'close' Renaming
         if filepath in close_errs:
             if "bka_close" not in content:
                 content = re.sub(r'\bclose\b', 'bka_close', content)
@@ -73,7 +71,7 @@ def apply_fixes():
         for name in file_redefs:
             if name in CORE_N64:
                 old_c = content
-                pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?{{.*?}}\s*{name}\s*;)"
+                pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{{.*?\}}\s*{name}\s*;)"
                 content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
                 pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
                 content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
@@ -82,31 +80,57 @@ def apply_fixes():
                     print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
                     fixes += 1
 
-        # 2. Foundation Injection
-        all_file_errors = ([t[1] for t in type_errs if t[0] == filepath] + 
-                           [i[1] for i in id_errs if i[0] == filepath] +
-                           [s[1] for s in sizeof_errs if s[0] == filepath])
+        all_file_errors = set([t[1] for t in type_errs if t[0] == filepath] + 
+                              [i[1] for i in id_errs if i[0] == filepath] +
+                              [s[1] for s in sizeof_errs if s[0] == filepath])
 
+        handled_errors = set()
+
+        # 2. Out-of-Order Struct Fixer (The mips2c Quirk)
+        # If the compiler complains about an unknown type, but we find its real definition lower in the file, move it to the top!
+        for err in all_file_errors:
+            pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{{.*?\}}\s*{err}\s*;)"
+            match = re.search(pattern_struct, content, re.DOTALL)
+            if match:
+                struct_def = match.group(1)
+                
+                # Cut the struct from the bottom
+                content = content.replace(struct_def, "")
+                
+                # Paste the struct at the top (right below includes)
+                include_idx = content.rfind('#include')
+                if include_idx != -1:
+                    eol = content.find('\n', include_idx) + 1
+                    content = content[:eol] + "\n/* Auto-moved struct */\n" + struct_def + "\n" + content[eol:]
+                else:
+                    content = "/* Auto-moved struct */\n" + struct_def + "\n" + content
+                
+                print(f"  [-] Auto-moved real definition of {err} to the top of {os.path.basename(filepath)}")
+                fixes += 1
+                handled_errors.add(err)
+
+        # 3. Foundation Injection
         if any(err in CORE_N64 for err in all_file_errors):
             if 'include "ultra/n64_types.h"' not in content:
                 content = '#include "ultra/n64_types.h"\n' + content
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
+                handled_errors.update(CORE_N64.intersection(all_file_errors))
 
-        # 3a. Type Error Injection 
+        # 4a. Type Error Injection 
         type_and_sizeof = set([t[1] for t in type_errs if t[0] == filepath] + [s[1] for s in sizeof_errs if s[0] == filepath])
         for err in type_and_sizeof:
-            if err in CORE_N64: continue
+            if err in CORE_N64 or err in handled_errors: continue
             decl = f"typedef struct {err} {err};\n"
             if decl not in content:
                 content = decl + content
                 print(f"  [+] Injected struct typedef: {err}")
                 fixes += 1
 
-        # 3b. Identifier Error Injection 
+        # 4b. Identifier Error Injection 
         file_identifiers = set([i[1] for i in id_errs if i[0] == filepath])
         for err in file_identifiers:
-            if err in CORE_N64: continue
+            if err in CORE_N64 or err in handled_errors: continue
             if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
                 if decl not in content:
