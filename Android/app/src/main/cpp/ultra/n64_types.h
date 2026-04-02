@@ -44,11 +44,18 @@ typedef void* OSTask;
 typedef u32 OSIntMask;
 #define OS_IM_NONE 0
 
-// FIX: Added missing PI/Message macros and globals
 #define OS_MESG_BLOCK 1
 #define OS_MESG_NOBLOCK 0
 
+// FIX: Shielded global variable from C++ name mangling!
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern u32 osTvType;
+#ifdef __cplusplus
+}
+#endif
+
 #define OS_TV_NTSC 0
 #define OS_TV_PAL 1
 #define OS_TV_MPAL 2
@@ -62,7 +69,6 @@ typedef struct OSMesgQueue_s {
     s32 count;
 } OSMesgQueue;
 
-// FIX: Added missing PI IO and Controller Pak (Pfs) structs
 typedef struct {
     u16 type;
     u8 pri;
@@ -135,7 +141,6 @@ typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn
 typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 
-// FIX: Added missing GU Light/LookAt structs
 typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed char dir[3], pad3; } Light_t;
 typedef union { Light_t l; long long force_align[2]; } Light;
 typedef struct { Light l[2]; } LookAt;
