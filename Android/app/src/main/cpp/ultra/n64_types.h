@@ -10,7 +10,6 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
- * FIX: Removed the libaudio blockades so the compiler can load the real audio structs!
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -41,8 +40,8 @@ typedef u32 OSEvent;
 typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
-typedef struct ALHeap ALHeap; 
-typedef struct { u8 padding[0x1000]; } ALGlobals;
+
+// FIX: Removed ALHeap and ALGlobals dummies to prevent redefinition loops with libaudio.h!
 
 typedef struct OSMesgQueue_s {
     void* mt;
@@ -80,15 +79,10 @@ typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 /**
  * 6. RECOMPILATION SPECIFIC TYPES
  */
-// FIX: Removed dummy Actor struct to prevent redefinition conflict with prop.h
-// typedef struct { u8 padding[0x800]; } Actor; 
-
-// FIX: Proper C forward declaration matching the actual game struct tag 
 typedef struct ch_vegatable sChVegetable;
 
 /**
  * 7. SYSTEM INCLUDES
- * (Must come BEFORE our NULL redefinition to prevent stddef.h from overwriting it)
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -99,7 +93,6 @@ typedef struct ch_vegatable sChVegetable;
 
 /**
  * FIX: Define NULL as 0 AFTER system headers. 
- * This prevents float initialization errors where the Android NDK uses ((void*)0)
  */
 #undef NULL
 #define NULL 0
