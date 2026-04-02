@@ -41,15 +41,57 @@ typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 
-// FIX: Added missing Interrupt Mask types
 typedef u32 OSIntMask;
 #define OS_IM_NONE 0
+
+// FIX: Added missing PI/Message macros and globals
+#define OS_MESG_BLOCK 1
+#define OS_MESG_NOBLOCK 0
+
+extern u32 osTvType;
+#define OS_TV_NTSC 0
+#define OS_TV_PAL 1
+#define OS_TV_MPAL 2
+
+#define PFS_ERR_DEVICE 11
+#define PFS_ERR_ID_FATAL 12
 
 typedef struct OSMesgQueue_s {
     void* mt;
     void* full;
     s32 count;
 } OSMesgQueue;
+
+// FIX: Added missing PI IO and Controller Pak (Pfs) structs
+typedef struct {
+    u16 type;
+    u8 pri;
+    u8 cmp;
+    OSMesgQueue *retQueue;
+} OSIoMesgHdr;
+
+typedef struct {
+    OSIoMesgHdr hdr;
+    void *dramAddr;
+    u32 devAddr;
+    u32 size;
+    void *piHandle; 
+} OSIoMesg;
+
+typedef struct {
+    int queue;
+    int channel;
+    u8 id[32];
+    u8 label[32];
+    int version;
+    int dir_size;
+    int inode_table;
+    int minode_table;
+    int dir_table;
+    int inode_start_page;
+    u8 banks;
+    u8 activebank;
+} OSPfs;
 
 typedef struct {
     u64 registers[32];
@@ -73,7 +115,6 @@ typedef struct { u16 type; u8 status, errnum; } OSContStatus;
 typedef u64 Gfx;
 typedef u64 Acmd;
 
-// FIX: Audio states are arrays, not structs. This fixes the void* pointer crashes!
 typedef s16 ADPCM_STATE[16];
 typedef s16 POLEF_STATE[16];
 typedef s16 RESAMPLE_STATE[16];
@@ -82,7 +123,6 @@ typedef s16 ENVMIX_STATE[40];
 #define ADPCMFSIZE 9
 #define ADPCMVSIZE 8
 
-// FIX: Missing N64 audio pitch & resampling macros
 #ifndef UNITY_PITCH
   #define UNITY_PITCH 0x8000
 #endif
@@ -94,6 +134,11 @@ typedef s16 ENVMIX_STATE[40];
 typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
+
+// FIX: Added missing GU Light/LookAt structs
+typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed char dir[3], pad3; } Light_t;
+typedef union { Light_t l; long long force_align[2]; } Light;
+typedef struct { Light l[2]; } LookAt;
 
 /**
  * 6. RECOMPILATION SPECIFIC TYPES
@@ -126,7 +171,6 @@ extern "C" {
 
 /**
  * 8. N64 SDK INCLUDES
- * FIX: Wrapped inside extern "C" so the C++ NativeBridge doesn't mangle its symbols!
  */
 #include <PR/libaudio.h>
 
