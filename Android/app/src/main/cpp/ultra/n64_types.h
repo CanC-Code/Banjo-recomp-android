@@ -185,7 +185,6 @@ typedef struct {
     OSPiHandle *piHandle; 
 } OSIoMesg;
 
-// FIX: Added 'status' member required by the game
 typedef struct {
     int queue;
     int channel;
@@ -250,11 +249,18 @@ extern "C" {
 #endif
 extern u32 osTvType;
 extern u32 osClockRate;
-// FIX: Added internal PI handle table reference
 extern OSPiHandle *__osPiTable;
+
+// FIX: Added ROM base address global
+extern u32 osRomBase;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
+
+// FIX: Added fundamental PI DMA prototypes
+extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
+extern s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
+
 #ifdef __cplusplus
 }
 #endif
