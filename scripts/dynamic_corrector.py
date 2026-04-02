@@ -8,7 +8,6 @@ LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
 def harvest_macro(macro_name, sdk_dir="include"):
-    """Crawls the N64 SDK headers to find and extract the missing macro definition."""
     for root, _, files in os.walk(sdk_dir):
         for file in files:
             if not file.endswith('.h'): continue
@@ -19,11 +18,9 @@ def harvest_macro(macro_name, sdk_dir="include"):
             except: continue
 
             for i, line in enumerate(lines):
-                # Search for the exact macro definition
                 if re.match(rf'^[ \t]*#[ \t]*define[ \t]+{macro_name}\b', line):
                     macro_block = line
                     curr = i
-                    # Handle multi-line macros that end in a backslash '\'
                     while macro_block.strip().endswith('\\') and curr + 1 < len(lines):
                         curr += 1
                         macro_block += lines[curr]
@@ -31,15 +28,10 @@ def harvest_macro(macro_name, sdk_dir="include"):
     return None
 
 def inject_macro_to_header(macro_block, macro_name, is_polyfill=False):
-    """Safely injects the harvested macro into the master n64_types.h file."""
     if not os.path.exists(TYPES_HEADER): return False
     with open(TYPES_HEADER, "r") as f: content = f.read()
-    
-    # Use Regex with word boundaries (\b) to prevent "G_RM_NOOP" from falsely matching "G_RM_NOOP2"
     if re.search(rf'^[ \t]*#[ \t]*define[ \t]+{macro_name}\b', content, re.MULTILINE): 
         return False
-
-    # Insert it right above the final #endif
     pos = content.rfind('#endif')
     if pos != -1:
         label = "Auto-Polyfilled Missing Token" if is_polyfill else "Auto-Harvested SDK Macro"
@@ -52,7 +44,6 @@ def run_build():
     print("\n🚀 Starting Build Cycle...")
     log_dir = os.path.dirname(LOG_FILE)
     if not os.path.exists(log_dir): os.makedirs(log_dir)
-
     with open(LOG_FILE, "w") as log:
         process = subprocess.Popen(GRADLE_CMD, stdout=log, stderr=subprocess.STDOUT, text=True)
         process.wait()
@@ -64,14 +55,12 @@ def apply_fixes():
 
     fixes = 0
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
-
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
-    # Added OSId to CORE_N64
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
@@ -82,13 +71,9 @@ def apply_fixes():
         "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult", "OSId"
     }
 
-    # ====================================================================
-    # GLOBAL SDK MACRO HARVESTER & POLYFILLER
-    # ====================================================================
     all_identifiers = set([i[1] for i in id_errs])
     for err in all_identifiers:
         if err in CORE_N64: continue
-        
         if err.isupper() or err.startswith(("G_", "OS_", "GU_", "RM_")):
             macro_block = harvest_macro(err)
             if macro_block:
@@ -103,24 +88,13 @@ def apply_fixes():
                     fixes += 1
                     id_errs = [e for e in id_errs if e[1] != err]
 
-    # ====================================================================
-    # LOCAL FILE CORRECTIONS
-    # ====================================================================
-    affected_files = set(
-        [e[0] for e in type_errs] + 
-        [e[0] for e in id_errs] + 
-        [e[0] for e in redef_errs] + 
-        [e[0] for e in sizeof_errs] +
-        [e for e in close_errs]
-    )
+    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in redef_errs] + [e[0] for e in sizeof_errs] + [e for e in close_errs])
 
     for filepath in affected_files:
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
-
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # Active Sanitization list
         for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt", "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult", "OSId"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
@@ -142,15 +116,11 @@ def apply_fixes():
                 content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
                 pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
                 content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
-
                 if content != old_c:
                     print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
                     fixes += 1
 
-        all_file_errors = set([t[1] for t in type_errs if t[0] == filepath] + 
-                              [i[1] for i in id_errs if i[0] == filepath] +
-                              [s[1] for s in sizeof_errs if s[0] == filepath])
-
+        all_file_errors = set([t[1] for t in type_errs if t[0] == filepath] + [i[1] for i in id_errs if i[0] == filepath] + [s[1] for s in sizeof_errs if s[0] == filepath])
         handled_errors = set()
 
         for err in all_file_errors:
@@ -204,11 +174,11 @@ def apply_fixes():
         if unhandled:
             print("\n🚨 UNHANDLED ERRORS DETECTED:")
             for err in list(dict.fromkeys(unhandled))[:10]: print(f"  - {err}")
-
     return fixes
 
 def main():
-    for i in range(1, 25):
+    # INCREASED TO 100 CYCLES
+    for i in range(1, 101):
         print(f"\n--- Cycle {i} ---")
         if run_build():
             print("\n✅ Build Successful!")
