@@ -29,13 +29,14 @@ def apply_fixes():
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
-    # FIX: Added the new audio and OS types to the core exclusion list
+    # FIX: Added OSIoMesg, OSPfs, LookAt, and Light to the core exclusion list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
         "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals", "Gfx", "Acmd",
         "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", 
-        "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIntMask"
+        "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIntMask",
+        "OSIoMesg", "OSPfs", "LookAt", "Light"
     }
 
     affected_files = set(
@@ -53,8 +54,8 @@ def apply_fixes():
         original_content = content
 
         # 0. Active Sanitization
-        # FIX: Added the audio types here to actively clean up broken injections from previous runs
-        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE"]:
+        # FIX: Scrubbing out the dummy OSIoMesg, OSPfs, and LookAt
+        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
                 content = content.replace(bad_struct, "")
