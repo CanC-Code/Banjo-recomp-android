@@ -41,8 +41,9 @@ def fix_decompiler_artifacts(content, filename):
     for indent, type_name, var_name, size in shadow_matches:
         decl_line = rf'{indent}{type_name}\s+{var_name}\s*\['
         content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
-        content = re.sub(rf'\b{var_name}\s*\[', f'buffer_{var_name}[', content)
-        content = re.sub(rf'\b(memcpy|memset|memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
+        # FIX 1: Negative lookahead so we don't break function signatures like void func(u8 [])
+        content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buffer_{var_name}[', content)
+        content = re.sub(rf'\b(memcpy|memset|memmove|n64_memcpy|n64_memset|n64_memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
     assign_pattern = re.compile(
         rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*;',
@@ -52,11 +53,16 @@ def fix_decompiler_artifacts(content, filename):
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         final_name = f"buffer_{name}" if dtype == name else name
-        return f"{indent}{dtype} {final_name}[{size}];\n{indent}memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
+        # FIX 2: Generate 'n64_memcpy' instead of 'memcpy' so it links properly after token replacement!
+        return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
 
-    if ('[tmp]' in content or 'tmp[' in content) and 'int tmp' not in content and 'u8 tmp' not in content:
+    # FIX 3: Robust regex check for ANY existing tmp declaration (f32, s16, etc.)
+    is_tmp_used = '[tmp]' in content or 'tmp[' in content
+    is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
+    
+    if is_tmp_used and not is_tmp_declared:
         tmp_decl = "\n/* Emergency Decompiler Fix */\nstatic u8 tmp[1024] = {0};\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
@@ -130,7 +136,7 @@ def sanitize_codebase(root_path):
                 content = fix_decompiler_artifacts(content, filename)
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
-                
+
                 # Wrap shadowed system headers
                 content = wrap_shadow_headers(content, filename)
 
