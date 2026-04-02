@@ -65,7 +65,8 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-typedef u32 OSIntMask;
+// FIX: Added 'volatile' to the typedef to force global consistency
+typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
 
 #define OS_MESG_BLOCK 1
@@ -271,15 +272,14 @@ typedef struct { u16 type; u8 status, errno; } OSContStatus;
 extern "C" {
 #endif
 extern u32 osTvType;
-// FIX: Aligned with the recompiled source's expectation for u64 time
 extern OSTime osClockRate;
 extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 
-// FIX: Aligned with the recompiled source's raw u32 usage
-extern u32 __OSGlobalIntMask;
+// FIX: Declared using the volatile OSIntMask type
+extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
