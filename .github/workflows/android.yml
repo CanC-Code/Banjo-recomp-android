@@ -19,7 +19,8 @@ jobs:
           distribution: 'temurin'
 
       - name: 🐘 Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        # FIX: Bumped to v4 to clear the Node.js 20 deprecation warning
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.2 
 
@@ -33,8 +34,8 @@ jobs:
 
       - name: 🧹 Pre-Patching
         run: |
-          python3 scripts/sanitize_legacy_code.py .
-          python3 scripts/patch_array_initializations.py .
+          # FIX: Replaced the old split scripts with our newly combined and patched super-script
+          python3 scripts/sanitize_codebase.py .
 
       - name: 🤖 Automated Correction & Build Loop
         run: python3 scripts/dynamic_corrector.py
