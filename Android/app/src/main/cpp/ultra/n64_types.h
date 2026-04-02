@@ -96,8 +96,6 @@ typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn
 typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 
-// Removed our conflicting MtxF array typedef.
-
 typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed char dir[3], pad3; } Light_t;
 typedef union { Light_t l; long long force_align[2]; } Light;
 typedef struct { Light l[2]; } LookAt;
@@ -108,9 +106,10 @@ extern "C" {
 extern u32 osTvType;
 extern u32 osClockRate;
 
-// FIX: Swapped MtxF parameter to 'void *' to bridge the N64 SDK with the game's custom struct
-extern void guMtxIdentF(void *mf);
-extern void guMtxF2L(void *mf, Mtx *m);
+// FIX: Dropped the void* bridge and used the strict N64 SDK float array signature
+// This perfectly matches the actual decompiled source code in the project.
+extern void guMtxIdentF(float mf[4][4]);
+extern void guMtxF2L(float mf[4][4], Mtx *m);
 
 #ifdef __cplusplus
 }
