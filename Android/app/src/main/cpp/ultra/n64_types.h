@@ -10,13 +10,11 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
+ * FIX: Removed the libaudio blockades so the compiler can load the real audio structs!
  */
 #define _OS_H_
 #define _ULTRA64_H_
 #define _GBI_H_
-#define _LIBAUDIO_H_
-#define __LIBAUDIO_H__
-#define _PR_LIBAUDIO_H_
 #define _GU_H_
 
 /**
@@ -86,7 +84,6 @@ typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 // typedef struct { u8 padding[0x800]; } Actor; 
 
 // FIX: Proper C forward declaration matching the actual game struct tag 
-// (Notice the original game code's typo: "ch_vegatable")
 typedef struct ch_vegatable sChVegetable;
 
 /**
