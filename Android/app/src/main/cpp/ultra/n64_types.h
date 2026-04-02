@@ -65,7 +65,6 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-// FIX: Removed 'volatile' to match recompiled source declarations
 typedef u32 OSIntMask;
 #define OS_IM_NONE 0
 
@@ -272,15 +271,14 @@ typedef struct { u16 type; u8 status, errno; } OSContStatus;
 extern "C" {
 #endif
 extern u32 osTvType;
-// FIX: Aligned with the recompiled source's definitions
-extern OSTime osClockRate;
+extern u32 osClockRate;
 extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 
-// FIX: Aligned strictly with source 'u32' definitions
-extern OSIntMask __OSGlobalIntMask;
+// FIX: Strictly matching 'volatile uint32_t' found in recompiled source
+extern volatile u32 __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
