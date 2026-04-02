@@ -71,6 +71,7 @@ def apply_fixes():
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
+    # Added OSId to CORE_N64
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
@@ -78,7 +79,7 @@ def apply_fixes():
         "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", 
         "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIntMask",
         "OSIoMesg", "OSPfs", "LookAt", "Light",
-        "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult"
+        "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult", "OSId"
     }
 
     # ====================================================================
@@ -120,7 +121,7 @@ def apply_fixes():
         original_content = content
 
         # Active Sanitization list
-        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt", "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult"]:
+        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt", "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult", "OSId"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
                 content = content.replace(bad_struct, "")
