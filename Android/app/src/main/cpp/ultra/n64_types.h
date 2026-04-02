@@ -85,8 +85,8 @@ typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 // FIX: Removed dummy Actor struct to prevent redefinition conflict with prop.h
 // typedef struct { u8 padding[0x800]; } Actor; 
 
-// FIX: Removed dummy sChVegetable struct to prevent redefinition conflict with vegetables.c
-// typedef struct { u8 padding[0x400]; } sChVegetable;
+// RESTORED: This is a recompilation-specific struct and must remain defined!
+typedef struct { u8 padding[0x400]; } sChVegetable;
 
 /**
  * 7. SYSTEM INCLUDES
