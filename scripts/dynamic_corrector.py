@@ -30,7 +30,7 @@ def harvest_macro(macro_name, sdk_dir="include"):
                     return macro_block.strip()
     return None
 
-def inject_macro_to_header(macro_block, macro_name):
+def inject_macro_to_header(macro_block, macro_name, is_polyfill=False):
     """Safely injects the harvested macro into the master n64_types.h file."""
     if not os.path.exists(TYPES_HEADER): return False
     with open(TYPES_HEADER, "r") as f: content = f.read()
@@ -41,7 +41,8 @@ def inject_macro_to_header(macro_block, macro_name):
     # Insert it right above the final #endif
     pos = content.rfind('#endif')
     if pos != -1:
-        new_content = content[:pos] + f"\n/* Auto-Harvested: {macro_name} */\n{macro_block}\n\n" + content[pos:]
+        label = "Auto-Polyfilled Missing Token" if is_polyfill else "Auto-Harvested SDK Macro"
+        new_content = content[:pos] + f"\n/* {label}: {macro_name} */\n{macro_block}\n\n" + content[pos:]
         with open(TYPES_HEADER, "w") as f: f.write(new_content)
         return True
     return False
@@ -79,7 +80,7 @@ def apply_fixes():
     }
 
     # ====================================================================
-    # NEW: GLOBAL SDK MACRO HARVESTER
+    # GLOBAL SDK MACRO HARVESTER & POLYFILLER
     # ====================================================================
     all_identifiers = set([i[1] for i in id_errs])
     for err in all_identifiers:
@@ -89,10 +90,16 @@ def apply_fixes():
         if err.isupper() or err.startswith(("G_", "OS_", "GU_", "RM_")):
             macro_block = harvest_macro(err)
             if macro_block:
-                if inject_macro_to_header(macro_block, err):
+                if inject_macro_to_header(macro_block, err, is_polyfill=False):
                     print(f"  [🤖] Auto-Harvested SDK Macro: {err}")
                     fixes += 1
-                    # Remove from local file errors so we don't inject bad extern arrays for it
+                    id_errs = [e for e in id_errs if e[1] != err]
+            else:
+                # NEW: If it fails to find the macro, safely polyfill it to 0
+                dummy_block = f"#ifndef {err}\n#define {err} 0\n#endif"
+                if inject_macro_to_header(dummy_block, err, is_polyfill=True):
+                    print(f"  [🤖] Auto-Polyfilled Missing Token: {err}")
+                    fixes += 1
                     id_errs = [e for e in id_errs if e[1] != err]
 
     # ====================================================================
@@ -112,7 +119,6 @@ def apply_fixes():
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # 0. Active Sanitization
         for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
@@ -120,14 +126,12 @@ def apply_fixes():
                 print(f"  [-] Sanitized incomplete type {name} in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 0.5: Internal 'close' Renaming
         if filepath in close_errs:
             if "bka_close" not in content:
                 content = re.sub(r'\bclose\b', 'bka_close', content)
                 print(f"  [-] Safely renamed internal 'close' to 'bka_close' natively in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 1. Advanced Redefinition Cleanup
         file_redefs = [r[1] for r in redef_errs if r[0] == filepath]
         for name in file_redefs:
             if name in CORE_N64:
@@ -147,7 +151,6 @@ def apply_fixes():
 
         handled_errors = set()
 
-        # 2. Out-of-Order Struct Fixer
         for err in all_file_errors:
             pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{{.*?\}}\s*{err}\s*;)"
             match = re.search(pattern_struct, content, re.DOTALL)
@@ -164,7 +167,6 @@ def apply_fixes():
                 fixes += 1
                 handled_errors.add(err)
 
-        # 3. Foundation Injection
         if any(err in CORE_N64 for err in all_file_errors):
             if 'include "ultra/n64_types.h"' not in content:
                 content = '#include "ultra/n64_types.h"\n' + content
@@ -172,7 +174,6 @@ def apply_fixes():
                 fixes += 1
                 handled_errors.update(CORE_N64.intersection(all_file_errors))
 
-        # 4a. Type Error Injection 
         type_and_sizeof = set([t[1] for t in type_errs if t[0] == filepath] + [s[1] for s in sizeof_errs if s[0] == filepath])
         for err in type_and_sizeof:
             if err in CORE_N64 or err in handled_errors: continue
@@ -182,7 +183,6 @@ def apply_fixes():
                 print(f"  [+] Injected struct typedef: {err}")
                 fixes += 1
 
-        # 4b. Identifier Error Injection 
         file_identifiers = set([i[1] for i in id_errs if i[0] == filepath])
         for err in file_identifiers:
             if err in CORE_N64 or err in handled_errors: continue
