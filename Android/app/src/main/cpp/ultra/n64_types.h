@@ -106,8 +106,6 @@ extern "C" {
 extern u32 osTvType;
 extern u32 osClockRate;
 
-// FIX: Dropped the void* bridge and used the strict N64 SDK float array signature
-// This perfectly matches the actual decompiled source code in the project.
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
 
@@ -147,12 +145,46 @@ typedef struct {
     OSMesgQueue *retQueue;
 } OSIoMesgHdr;
 
+// FIX: Added OSPiHandle and __OSTranxInfo for hardware DMA
+typedef struct {
+    u32 errStatus;
+    void *dramAddr;
+    void *C2Addr;
+    u32 sectorSize;
+    u32 C1ErrNum;
+    u32 C1ErrSector[4];
+} __OSBlockInfo;
+
+typedef struct {
+    u32 cmdType;
+    u16 transferMode;
+    u16 blockNum;
+    s32 sectorNum;
+    u32 devAddr;
+    u32 bmCtlShadow;
+    u32 seqCtlShadow;
+    __OSBlockInfo block[2];
+} __OSTranxInfo;
+
+typedef struct OSPiHandle_s {
+    struct OSPiHandle_s *next;
+    u8 type;
+    u8 latency;
+    u8 pageSize;
+    u8 relDuration;
+    u8 pulse;
+    u8 domain;
+    u32 baseAddress;
+    u32 speed;
+    __OSTranxInfo transferInfo;
+} OSPiHandle;
+
 typedef struct {
     OSIoMesgHdr hdr;
     void *dramAddr;
     u32 devAddr;
     u32 size;
-    void *piHandle; 
+    OSPiHandle *piHandle; 
 } OSIoMesg;
 
 typedef struct {
@@ -209,8 +241,10 @@ typedef struct OSThread_s {
     u8 padding[512];
 } OSThread;
 
-typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
-typedef struct { u16 type; u8 status, errnum; } OSContStatus;
+// FIX: Renamed 'errnum' to 'errno' to match exactly what the game calls
+#undef errno
+typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
+typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
 /**
  * 6. RECOMPILATION SPECIFIC TYPES
