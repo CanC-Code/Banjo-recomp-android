@@ -35,9 +35,6 @@ typedef double f64;
 typedef int n64_bool;
 typedef s32 OSPri;
 
-#undef NULL
-#define NULL 0
-
 /**
  * 4. N64 OS TYPES (FOUNDATION)
  */
@@ -84,15 +81,16 @@ typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
 
 /**
  * 6. RECOMPILATION SPECIFIC TYPES
- * Fixed: Converted from forward declarations to dummy structs with size.
- * This allows sizeof() to work in Actor and Vegetable logic.
  */
 // FIX: Removed dummy Actor struct to prevent redefinition conflict with prop.h
 // typedef struct { u8 padding[0x800]; } Actor; 
-typedef struct { u8 padding[0x400]; } sChVegetable;
+
+// FIX: Removed dummy sChVegetable struct to prevent redefinition conflict with vegetables.c
+// typedef struct { u8 padding[0x400]; } sChVegetable;
 
 /**
  * 7. SYSTEM INCLUDES
+ * (Must come BEFORE our NULL redefinition to prevent stddef.h from overwriting it)
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -100,6 +98,13 @@ typedef struct { u8 padding[0x400]; } sChVegetable;
 #include <time.h>
 #include <math.h>
 #include <unistd.h>
+
+/**
+ * FIX: Define NULL as 0 AFTER system headers. 
+ * This prevents float initialization errors where the Android NDK uses ((void*)0)
+ */
+#undef NULL
+#define NULL 0
 
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
