@@ -70,12 +70,49 @@ typedef u32 OSIntMask;
 #define OS_MESG_BLOCK 1
 #define OS_MESG_NOBLOCK 0
 
+/**
+ * 5. GRAPHICS & AUDIO TYPES
+ */
+typedef u64 Gfx;
+typedef u64 Acmd;
+
+typedef s16 ADPCM_STATE[16];
+typedef s16 POLEF_STATE[16];
+typedef s16 RESAMPLE_STATE[16];
+typedef s16 ENVMIX_STATE[40];
+
+#define ADPCMFSIZE 9
+#define ADPCMVSIZE 8
+
+#ifndef UNITY_PITCH
+  #define UNITY_PITCH 0x8000
+#endif
+
+#ifndef MAX_RATIO
+  #define MAX_RATIO 1.99996
+#endif
+
+typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
+typedef union { Vtx_t v; long long force_align; } Vtx;
+typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
+
+// FIX: Added N64 Floating Point Matrix Type
+typedef float MtxF[4][4]; 
+
+typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed char dir[3], pad3; } Light_t;
+typedef union { Light_t l; long long force_align[2]; } Light;
+typedef struct { Light l[2]; } LookAt;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-// FIX: Added osClockRate alongside osTvType
 extern u32 osTvType;
 extern u32 osClockRate;
+
+// FIX: Explicitly declared GU Math Prototypes to prevent implicit 'int' conflicts
+extern void guMtxIdentF(MtxF mf);
+extern void guMtxF2L(MtxF mf, Mtx *m);
+
 #ifdef __cplusplus
 }
 #endif
@@ -96,7 +133,6 @@ typedef struct OSMesgQueue_s {
     OSMesg *msg;
 } OSMesgQueue;
 
-// FIX: Added true OSTimer definition
 typedef struct OSTimer_s {
     struct OSTimer_s *next;
     struct OSTimer_s *prev;
@@ -136,7 +172,6 @@ typedef struct {
     u8 activebank;
 } OSPfs;
 
-// FIX: Added true OSViMode definition and its sub-structs
 typedef struct {
     u32 ctrl;
     u32 width;
@@ -178,36 +213,6 @@ typedef struct OSThread_s {
 
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errnum; } OSContPad;
 typedef struct { u16 type; u8 status, errnum; } OSContStatus;
-
-/**
- * 5. GRAPHICS & AUDIO TYPES
- */
-typedef u64 Gfx;
-typedef u64 Acmd;
-
-typedef s16 ADPCM_STATE[16];
-typedef s16 POLEF_STATE[16];
-typedef s16 RESAMPLE_STATE[16];
-typedef s16 ENVMIX_STATE[40];
-
-#define ADPCMFSIZE 9
-#define ADPCMVSIZE 8
-
-#ifndef UNITY_PITCH
-  #define UNITY_PITCH 0x8000
-#endif
-
-#ifndef MAX_RATIO
-  #define MAX_RATIO 1.99996
-#endif
-
-typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
-typedef union { Vtx_t v; long long force_align; } Vtx;
-typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
-
-typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed char dir[3], pad3; } Light_t;
-typedef union { Light_t l; long long force_align[2]; } Light;
-typedef struct { Light l[2]; } LookAt;
 
 /**
  * 6. RECOMPILATION SPECIFIC TYPES
