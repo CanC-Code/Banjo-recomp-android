@@ -39,7 +39,31 @@ typedef s32 OSPri;
 typedef u32 OSEvent;
 typedef u64 OSTime;
 typedef void* OSMesg;
-typedef void* OSTask;
+
+// FIX: Provided the true N64 OSTask structure so the game can access its internal fields
+typedef struct {
+    u32 type;
+    u32 flags;
+    u64 *ucode_boot;
+    u32 ucode_boot_size;
+    u64 *ucode;
+    u32 ucode_size;
+    u64 *ucode_data;
+    u32 ucode_data_size;
+    u64 *dram_stack;
+    u32 dram_stack_size;
+    u64 *output_buff;
+    u64 *output_buff_size;
+    u64 *data_ptr;
+    u32 data_size;
+    u64 *yield_data_ptr;
+    u32 yield_data_size;
+} OSTask_t;
+
+typedef union {
+    OSTask_t t;
+    long long int force_align[32];
+} OSTask;
 
 typedef u32 OSIntMask;
 #define OS_IM_NONE 0
@@ -47,7 +71,6 @@ typedef u32 OSIntMask;
 #define OS_MESG_BLOCK 1
 #define OS_MESG_NOBLOCK 0
 
-// FIX: Shielded global variable from C++ name mangling!
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,10 +86,14 @@ extern u32 osTvType;
 #define PFS_ERR_DEVICE 11
 #define PFS_ERR_ID_FATAL 12
 
+// FIX: Provided the true N64 Message Queue structure
 typedef struct OSMesgQueue_s {
-    void* mt;
-    void* full;
-    s32 count;
+    struct OSThread_s *mtqueue;
+    struct OSThread_s *fullqueue;
+    s32 validCount;
+    s32 first;
+    s32 msgCount;
+    OSMesg *msg;
 } OSMesgQueue;
 
 typedef struct {
