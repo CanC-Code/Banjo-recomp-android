@@ -28,11 +28,12 @@ def apply_fixes():
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
 
+    # FIX: Added LetterFloorTile to the core exclusion list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
         "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals", "Gfx", "Acmd",
-        "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable"
+        "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", "LetterFloorTile"
     }
 
     affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in redef_errs] + [e[0] for e in sizeof_errs])
@@ -44,7 +45,8 @@ def apply_fixes():
         original_content = content
 
         # 0. Active Sanitization
-        for name in ["Actor", "sChVegetable"]:
+        # FIX: Added LetterFloorTile here to actively clean up broken injections from previous runs
+        for name in ["Actor", "sChVegetable", "LetterFloorTile"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
                 content = content.replace(bad_struct, "")
@@ -60,7 +62,7 @@ def apply_fixes():
                 content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
                 pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
                 content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
-                
+
                 # ONLY increment if we actually modified the file!
                 if content != old_c:
                     print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
