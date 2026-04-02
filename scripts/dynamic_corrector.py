@@ -22,7 +22,7 @@ def apply_fixes():
 
     fixes = 0
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
-    
+
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
@@ -39,10 +39,10 @@ def apply_fixes():
 
     for filepath in affected_files:
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
-        
+
         with open(filepath, "r") as f: content = f.read()
         original_content = content
-        
+
         # 0. Active Sanitization for Flawed Incomplete Types
         for name in ["Actor", "sChVegetable"]:
             bad_struct = f"typedef struct {name} {name};\n"
@@ -50,7 +50,7 @@ def apply_fixes():
                 content = content.replace(bad_struct, "")
                 print(f"  [-] Sanitized incomplete type {name} in {os.path.basename(filepath)}")
                 fixes += 1
-        
+
         # 1. Advanced Redefinition Cleanup
         file_redefs = [r[1] for r in redef_errs if r[0] == filepath]
         for name in file_redefs:
@@ -62,30 +62,36 @@ def apply_fixes():
                 fixes += 1
 
         # 2. Foundation Injection
-        file_errors = ([t[1] for t in type_errs if t[0] == filepath] + 
-                       [i[1] for i in id_errs if i[0] == filepath] +
-                       [s[1] for s in sizeof_errs if s[0] == filepath])
-        
-        if any(err in CORE_N64 for err in file_errors):
+        # Check if ANY error in this file is a core missing type
+        all_file_errors = ([t[1] for t in type_errs if t[0] == filepath] + 
+                           [i[1] for i in id_errs if i[0] == filepath] +
+                           [s[1] for s in sizeof_errs if s[0] == filepath])
+
+        if any(err in CORE_N64 for err in all_file_errors):
             if 'include "ultra/n64_types.h"' not in content:
                 content = '#include "ultra/n64_types.h"\n' + content
                 print(f"  [+] Forced n64_types.h into {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 3. Extern and Struct Injection
-        for err in set(file_errors):
+        # 3a. Type Error Injection (Safe to inject structs)
+        type_and_sizeof = set([t[1] for t in type_errs if t[0] == filepath] + [s[1] for s in sizeof_errs if s[0] == filepath])
+        for err in type_and_sizeof:
+            if err in CORE_N64: continue
+            decl = f"typedef struct {err} {err};\n"
+            if decl not in content:
+                content = decl + content
+                print(f"  [+] Injected struct typedef: {err}")
+                fixes += 1
+
+        # 3b. Identifier Error Injection (DANGER: Only inject known data arrays, NEVER structs)
+        file_identifiers = set([i[1] for i in id_errs if i[0] == filepath])
+        for err in file_identifiers:
             if err in CORE_N64: continue
             if err.startswith(("D_", "sCh")):
                 decl = f"extern u8 {err}[];\n"
                 if decl not in content:
                     content = decl + content
                     print(f"  [+] Injected extern: {err}")
-                    fixes += 1
-            else:
-                decl = f"typedef struct {err} {err};\n"
-                if decl not in content:
-                    content = decl + content
-                    print(f"  [+] Injected struct typedef: {err}")
                     fixes += 1
 
         if content != original_content:
