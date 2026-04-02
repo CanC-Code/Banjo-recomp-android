@@ -27,8 +27,10 @@ def apply_fixes():
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
+    
+    # FIX: Catch the static close collision!
+    close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
-    # FIX: Added LetterFloorTile to the core exclusion list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
@@ -36,7 +38,13 @@ def apply_fixes():
         "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", "LetterFloorTile"
     }
 
-    affected_files = set([e[0] for e in type_errs] + [e[0] for e in id_errs] + [e[0] for e in redef_errs] + [e[0] for e in sizeof_errs])
+    affected_files = set(
+        [e[0] for e in type_errs] + 
+        [e[0] for e in id_errs] + 
+        [e[0] for e in redef_errs] + 
+        [e[0] for e in sizeof_errs] +
+        [e for e in close_errs]
+    )
 
     for filepath in affected_files:
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
@@ -45,7 +53,6 @@ def apply_fixes():
         original_content = content
 
         # 0. Active Sanitization
-        # FIX: Added LetterFloorTile here to actively clean up broken injections from previous runs
         for name in ["Actor", "sChVegetable", "LetterFloorTile"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
@@ -53,7 +60,15 @@ def apply_fixes():
                 print(f"  [-] Sanitized incomplete type {name} in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 1. Advanced Redefinition Cleanup (FIXED GHOST INCREMENT BUG)
+        # NEW 0.5: Internal 'close' Renaming
+        # This surgically renames the game's internal function without breaking POSIX tools!
+        if filepath in close_errs:
+            if "bka_close" not in content:
+                content = re.sub(r'\bclose\b', 'bka_close', content)
+                print(f"  [-] Safely renamed internal 'close' to 'bka_close' natively in {os.path.basename(filepath)}")
+                fixes += 1
+
+        # 1. Advanced Redefinition Cleanup
         file_redefs = [r[1] for r in redef_errs if r[0] == filepath]
         for name in file_redefs:
             if name in CORE_N64:
@@ -63,7 +78,6 @@ def apply_fixes():
                 pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
                 content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
 
-                # ONLY increment if we actually modified the file!
                 if content != old_c:
                     print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
                     fixes += 1
