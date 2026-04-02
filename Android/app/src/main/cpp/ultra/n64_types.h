@@ -40,7 +40,6 @@ typedef u32 OSEvent;
 typedef u64 OSTime;
 typedef void* OSMesg;
 
-// FIX: Provided the true N64 OSTask structure so the game can access its internal fields
 typedef struct {
     u32 type;
     u32 flags;
@@ -74,7 +73,9 @@ typedef u32 OSIntMask;
 #ifdef __cplusplus
 extern "C" {
 #endif
+// FIX: Added osClockRate alongside osTvType
 extern u32 osTvType;
+extern u32 osClockRate;
 #ifdef __cplusplus
 }
 #endif
@@ -86,7 +87,6 @@ extern u32 osTvType;
 #define PFS_ERR_DEVICE 11
 #define PFS_ERR_ID_FATAL 12
 
-// FIX: Provided the true N64 Message Queue structure
 typedef struct OSMesgQueue_s {
     struct OSThread_s *mtqueue;
     struct OSThread_s *fullqueue;
@@ -95,6 +95,16 @@ typedef struct OSMesgQueue_s {
     s32 msgCount;
     OSMesg *msg;
 } OSMesgQueue;
+
+// FIX: Added true OSTimer definition
+typedef struct OSTimer_s {
+    struct OSTimer_s *next;
+    struct OSTimer_s *prev;
+    u64 interval;
+    u64 value;
+    OSMesgQueue *mq;
+    OSMesg msg;
+} OSTimer;
 
 typedef struct {
     u16 type;
@@ -125,6 +135,33 @@ typedef struct {
     u8 banks;
     u8 activebank;
 } OSPfs;
+
+// FIX: Added true OSViMode definition and its sub-structs
+typedef struct {
+    u32 ctrl;
+    u32 width;
+    u32 burst;
+    u32 vSync;
+    u32 hSync;
+    u32 leap;
+    u32 hStart;
+    u32 xScale;
+    u32 vCurrent;
+} OSViCommonRegs;
+
+typedef struct {
+    u32 origin;
+    u32 yScale;
+    u32 vStart;
+    u32 vBurst;
+    u32 vIntr;
+} OSViFieldRegs;
+
+typedef struct {
+    u8 type;
+    OSViCommonRegs comRegs;
+    OSViFieldRegs fldRegs[2];
+} OSViMode;
 
 typedef struct {
     u64 registers[32];
