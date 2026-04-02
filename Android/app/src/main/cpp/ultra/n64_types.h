@@ -82,6 +82,15 @@ typedef s16 ENVMIX_STATE[40];
 #define ADPCMFSIZE 9
 #define ADPCMVSIZE 8
 
+// FIX: Missing N64 audio pitch & resampling macros
+#ifndef UNITY_PITCH
+  #define UNITY_PITCH 0x8000
+#endif
+
+#ifndef MAX_RATIO
+  #define MAX_RATIO 1.99996
+#endif
+
 typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
