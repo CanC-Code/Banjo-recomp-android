@@ -227,6 +227,13 @@ typedef struct {
     OSViFieldRegs fldRegs[2];
 } OSViMode;
 
+// FIX: Added OSYieldResult structure
+// Standard size is 0xc00, though Banjo code may vary. 
+// Defining as a struct containing data to satisfy the 'struct' requirement.
+typedef struct {
+    u64 data[0xc00 / 8];
+} OSYieldResult;
+
 typedef struct {
     u64 registers[32];
     u64 lo, hi, pc;
@@ -249,17 +256,19 @@ extern "C" {
 #endif
 extern u32 osTvType;
 extern u32 osClockRate;
-extern OSPiHandle *__osPiTable;
-
-// FIX: Added ROM base address global
 extern u32 osRomBase;
+extern OSPiHandle *__osPiTable;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
 
-// FIX: Added fundamental PI DMA prototypes
 extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
 extern s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
+
+// FIX: Added specific LAN1 Video Mode externs
+extern OSViMode osViModeNtscLan1;
+extern OSViMode osViModePalLan1;
+extern OSViMode osViModeMpalLan1;
 
 #ifdef __cplusplus
 }
