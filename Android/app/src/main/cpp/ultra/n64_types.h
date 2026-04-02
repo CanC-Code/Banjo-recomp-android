@@ -145,7 +145,6 @@ typedef struct {
     OSMesgQueue *retQueue;
 } OSIoMesgHdr;
 
-// FIX: Added OSPiHandle and __OSTranxInfo for hardware DMA
 typedef struct {
     u32 errStatus;
     void *dramAddr;
@@ -178,6 +177,17 @@ typedef struct OSPiHandle_s {
     u32 speed;
     __OSTranxInfo transferInfo;
 } OSPiHandle;
+
+// FIX: Added the N64 OS Device Manager struct
+typedef struct {
+    s32 active;
+    OSThread_s *thread;
+    OSMesgQueue *cmdQueue;
+    OSMesgQueue *evtQueue;
+    OSMesgQueue *acsQueue;
+    s32 (*dma)(s32, u32, void *, u32);
+    s32 (*edma)(OSPiHandle *, s32, u32, void *, u32);
+} OSDevMgr;
 
 typedef struct {
     OSIoMesgHdr hdr;
@@ -241,7 +251,6 @@ typedef struct OSThread_s {
     u8 padding[512];
 } OSThread;
 
-// FIX: Renamed 'errnum' to 'errno' to match exactly what the game calls
 #undef errno
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
