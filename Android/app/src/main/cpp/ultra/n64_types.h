@@ -90,6 +90,11 @@ typedef struct ch_vegatable sChVegetable;
 #include <unistd.h>
 
 /**
+ * FIX: Shield the game's internal 'close' function from the POSIX unistd.h 'close()'
+ */
+#define close bka_close
+
+/**
  * FIX: Define NULL as 0 AFTER system headers. 
  */
 #undef NULL
