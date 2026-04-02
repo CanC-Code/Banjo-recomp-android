@@ -41,9 +41,7 @@ typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 
-// RESTORED: These are custom structs required by NativeBridge.cpp for emulation
-typedef struct ALHeap ALHeap; 
-typedef struct { u8 padding[0x1000]; } ALGlobals;
+// FIX: Dummies completely removed. We will use the real libaudio.h!
 
 typedef struct OSMesgQueue_s {
     void* mt;
@@ -103,12 +101,19 @@ typedef struct ch_vegatable sChVegetable;
   #define M_PI 3.14159265358979323846
 #endif
 
+/**
+ * 8. N64 SDK INCLUDES
+ * We explicitly include the REAL audio header here so NativeBridge.cpp 
+ * and the emulator know exactly how large ALGlobals truly is.
+ */
+#include <PR/libaudio.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * 8. POLYFILLS
+ * 9. POLYFILLS
  */
 static inline int sched_yield_polyfill(void) { return usleep(1); }
 #undef sched_yield
