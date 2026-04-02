@@ -11,16 +11,31 @@ public class NativeBridge {
 
     /**
      * Bootstraps the N64 environment and starts the game loop.
-     * * @param otrPath      The absolute path to the extracted assets directory.
+     * @param otrPath      The absolute path to the extracted assets directory.
      * @param assetManager Android's AssetManager to read the manifest.
      */
     public static native void nativeGameBoot(String otrPath, AssetManager assetManager);
 
     /**
      * Updates the N64 controller state.
-     * * @param buttonMask Bitmask of currently pressed buttons.
+     * @param buttonMask Bitmask of currently pressed buttons.
      * @param stickX     Analog stick X-axis (-80 to 80).
      * @param stickY     Analog stick Y-axis (-80 to 80).
      */
     public static native void nativeUpdateInput(int buttonMask, float stickX, float stickY);
+
+    /**
+     * Initializes the OTR extraction service.
+     */
+    public static native void nativeInit(OtrService service);
+
+    /**
+     * Generates OTR asset files from the provided ROM file descriptor.
+     */
+    public static native void runOtrGeneration(int fd, AssetManager assetManager, String outDir);
+
+    /**
+     * Triggers the OpenGL texture update logic.
+     */
+    public static native void updateTexture(int textureStub);
 }
