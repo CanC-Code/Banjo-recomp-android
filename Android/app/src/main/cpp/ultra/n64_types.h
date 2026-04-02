@@ -31,6 +31,7 @@ typedef float f32;
 typedef double f64;
 typedef int n64_bool;
 typedef s32 OSPri;
+typedef s32 OSId; // FIX: Defined OSId as a standard scalar
 
 /**
  * 4. N64 OS TYPES (FOUNDATION)
@@ -227,20 +228,33 @@ typedef struct {
     OSViFieldRegs fldRegs[2];
 } OSViMode;
 
-// FIX: OSYieldResult is a status code (scalar), not a structure!
 typedef u32 OSYieldResult;
 
+// FIX: Full MIPS Context to support low-level game exception/thread logic
 typedef struct {
-    u64 registers[32];
+    u64 at, v0, v1, a0, a1, a2, a3;
+    u64 t0, t1, t2, t3, t4, t5, t6, t7;
+    u64 s0, s1, s2, s3, s4, s5, s6, s7;
+    u64 t8, t9, k0, k1, gp, sp, s8, ra;
     u64 lo, hi, pc;
-    u32 status, cause, badvaddr;
+    u32 sr, cause, badvaddr, rcp;
+    u32 fpcsr;
+    f64 fp0,  fp2,  fp4,  fp6,  fp8, fp10, fp12, fp14;
+    f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
 } CPUState;
 
+// FIX: Expanded OSThread to include id, queue, and fp flag
 typedef struct OSThread_s {
     struct OSThread_s *next;
     OSPri priority;
+    struct OSMesgQueue_s *queue;
+    OSMesg msg;
+    u32 contextId;
+    u32 state;
+    u32 flags;
+    OSId id;
+    int fp;
     CPUState context;
-    u8 padding[512];
 } OSThread;
 
 #undef errno
@@ -261,12 +275,10 @@ extern void guMtxF2L(float mf[4][4], Mtx *m);
 extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
 extern s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
 
-// FIX: Banjo-specific video mode naming
 extern OSViMode osViModeNtscLan1;
 extern OSViMode osViModePalLan1;
 extern OSViMode osViModeMpalLan1;
 
-// FIX: Prototypes for yielding
 extern OSYieldResult osSpTaskYielded(OSTask *t);
 
 #ifdef __cplusplus
