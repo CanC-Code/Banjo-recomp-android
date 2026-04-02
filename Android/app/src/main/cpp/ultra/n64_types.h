@@ -271,13 +271,16 @@ typedef struct { u16 type; u8 status, errno; } OSContStatus;
 extern "C" {
 #endif
 extern u32 osTvType;
-extern u32 osClockRate;
+// FIX: Restored to OSTime (u64) based on recompiled source requirement
+extern OSTime osClockRate;
 extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 extern u32 osResetType;
+
+// FIX: Set to u32 to match recompiler output
 extern u32 osAppNMIBuffer;
 
-// FIX: Strictly matching 'volatile uint32_t' found in recompiled source
+// FIX: Explicitly volatile u32 to solve redeclaration conflict
 extern volatile u32 __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
