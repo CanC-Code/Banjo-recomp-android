@@ -19,11 +19,9 @@ def harvest_macro(macro_name, sdk_dir="include"):
             except: continue
 
             for i, line in enumerate(lines):
-                # Search for the exact macro definition
                 if re.match(rf'^[ \t]*#[ \t]*define[ \t]+{macro_name}\b', line):
                     macro_block = line
                     curr = i
-                    # Handle multi-line macros that end in a backslash '\'
                     while macro_block.strip().endswith('\\') and curr + 1 < len(lines):
                         curr += 1
                         macro_block += lines[curr]
@@ -31,15 +29,12 @@ def harvest_macro(macro_name, sdk_dir="include"):
     return None
 
 def inject_macro_to_header(macro_block, macro_name, is_polyfill=False):
-    """Safely injects the harvested macro into the master n64_types.h file."""
     if not os.path.exists(TYPES_HEADER): return False
     with open(TYPES_HEADER, "r") as f: content = f.read()
     
-    # FIX: Use Regex with word boundaries (\b) to prevent "G_RM_NOOP" from falsely matching "G_RM_NOOP2"!
     if re.search(rf'^[ \t]*#[ \t]*define[ \t]+{macro_name}\b', content, re.MULTILINE): 
         return False
 
-    # Insert it right above the final #endif
     pos = content.rfind('#endif')
     if pos != -1:
         label = "Auto-Polyfilled Missing Token" if is_polyfill else "Auto-Harvested SDK Macro"
@@ -71,7 +66,7 @@ def apply_fixes():
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
-    # FIX: Added OSDevMgr to core types
+    # Added OSYieldResult to the CORE_N64 list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
@@ -79,16 +74,12 @@ def apply_fixes():
         "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", 
         "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIntMask",
         "OSIoMesg", "OSPfs", "LookAt", "Light",
-        "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr"
+        "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult"
     }
 
-    # ====================================================================
-    # GLOBAL SDK MACRO HARVESTER & POLYFILLER
-    # ====================================================================
     all_identifiers = set([i[1] for i in id_errs])
     for err in all_identifiers:
         if err in CORE_N64: continue
-        
         if err.isupper() or err.startswith(("G_", "OS_", "GU_", "RM_")):
             macro_block = harvest_macro(err)
             if macro_block:
@@ -103,9 +94,6 @@ def apply_fixes():
                     fixes += 1
                     id_errs = [e for e in id_errs if e[1] != err]
 
-    # ====================================================================
-    # LOCAL FILE CORRECTIONS
-    # ====================================================================
     affected_files = set(
         [e[0] for e in type_errs] + 
         [e[0] for e in id_errs] + 
@@ -120,8 +108,8 @@ def apply_fixes():
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # FIX: Added OSDevMgr to the active sanitization list
-        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt", "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr"]:
+        # Added OSYieldResult to sanitization list
+        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIoMesg", "OSPfs", "LookAt", "OSViMode", "OSTimer", "OSPiHandle", "OSDevMgr", "OSYieldResult"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
                 content = content.replace(bad_struct, "")
@@ -142,7 +130,6 @@ def apply_fixes():
                 content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
                 pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
                 content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
-
                 if content != old_c:
                     print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
                     fixes += 1
@@ -204,7 +191,6 @@ def apply_fixes():
         if unhandled:
             print("\n🚨 UNHANDLED ERRORS DETECTED:")
             for err in list(dict.fromkeys(unhandled))[:10]: print(f"  - {err}")
-
     return fixes
 
 def main():
