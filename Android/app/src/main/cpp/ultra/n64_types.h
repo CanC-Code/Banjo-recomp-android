@@ -65,8 +65,8 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-// FIX: Using plain u32 to resolve the redeclaration tug-of-war
-typedef u32 OSIntMask;
+// FIX: Added 'volatile' to the typedef to force global consistency across all source files
+typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
 
 #define OS_MESG_BLOCK 1
@@ -278,8 +278,8 @@ extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 
-// FIX: Declared as plain u32 to match recompiled data definitions
-extern u32 __OSGlobalIntMask;
+// FIX: Declared using the volatile OSIntMask type to match recompiler logic
+extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
