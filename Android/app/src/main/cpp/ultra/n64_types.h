@@ -100,19 +100,6 @@ typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed
 typedef union { Light_t l; long long force_align[2]; } Light;
 typedef struct { Light l[2]; } LookAt;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-extern u32 osTvType;
-extern u32 osClockRate;
-
-extern void guMtxIdentF(float mf[4][4]);
-extern void guMtxF2L(float mf[4][4], Mtx *m);
-
-#ifdef __cplusplus
-}
-#endif
-
 #define OS_TV_NTSC 0
 #define OS_TV_PAL 1
 #define OS_TV_MPAL 2
@@ -178,10 +165,8 @@ typedef struct OSPiHandle_s {
     __OSTranxInfo transferInfo;
 } OSPiHandle;
 
-// Forward declaration of OSThread to allow OSDevMgr to use it
 struct OSThread_s;
 
-// FIX: Changed OSThread_s* to OSThread* (the typedef name)
 typedef struct {
     s32 active;
     struct OSThread_s *thread; 
@@ -200,6 +185,7 @@ typedef struct {
     OSPiHandle *piHandle; 
 } OSIoMesg;
 
+// FIX: Added 'status' member required by the game
 typedef struct {
     int queue;
     int channel;
@@ -213,6 +199,7 @@ typedef struct {
     int inode_start_page;
     u8 banks;
     u8 activebank;
+    u8 status;
 } OSPfs;
 
 typedef struct {
@@ -258,6 +245,20 @@ typedef struct OSThread_s {
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern u32 osTvType;
+extern u32 osClockRate;
+// FIX: Added internal PI handle table reference
+extern OSPiHandle *__osPiTable;
+
+extern void guMtxIdentF(float mf[4][4]);
+extern void guMtxF2L(float mf[4][4], Mtx *m);
+#ifdef __cplusplus
+}
+#endif
+
 /**
  * 6. RECOMPILATION SPECIFIC TYPES
  */
@@ -273,9 +274,6 @@ typedef struct ch_vegatable sChVegetable;
 #include <math.h>
 #include <unistd.h>
 
-/**
- * FIX: Define NULL as 0 AFTER system headers. 
- */
 #undef NULL
 #define NULL 0
 
