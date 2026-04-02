@@ -227,12 +227,8 @@ typedef struct {
     OSViFieldRegs fldRegs[2];
 } OSViMode;
 
-// FIX: Added OSYieldResult structure
-// Standard size is 0xc00, though Banjo code may vary. 
-// Defining as a struct containing data to satisfy the 'struct' requirement.
-typedef struct {
-    u64 data[0xc00 / 8];
-} OSYieldResult;
+// FIX: OSYieldResult is a status code (scalar), not a structure!
+typedef u32 OSYieldResult;
 
 typedef struct {
     u64 registers[32];
@@ -265,10 +261,13 @@ extern void guMtxF2L(float mf[4][4], Mtx *m);
 extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
 extern s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
 
-// FIX: Added specific LAN1 Video Mode externs
+// FIX: Banjo-specific video mode naming
 extern OSViMode osViModeNtscLan1;
 extern OSViMode osViModePalLan1;
 extern OSViMode osViModeMpalLan1;
+
+// FIX: Prototypes for yielding
+extern OSYieldResult osSpTaskYielded(OSTask *t);
 
 #ifdef __cplusplus
 }
