@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.AssetManager; // FIX: Added missing import
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -102,12 +103,13 @@ public class MainActivity extends AppCompatActivity {
             new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    // The directory where OtrService just saved the assets
-                    String otrPath = getFilesDir().getAbsolutePath();
-                    
+                    // FIX: Explicitly use MainActivity.this to resolve context symbols
+                    String otrPath = MainActivity.this.getFilesDir().getAbsolutePath();
+                    AssetManager assetManager = MainActivity.this.getAssets();
+
                     // Call the C++ NativeBridge function to boot the engine
                     // Passing the internal files path and the Android Asset Manager
-                    NativeBridge.nativeGameBoot(otrPath, getAssets());
+                    NativeBridge.nativeGameBoot(otrPath, assetManager);
                 }
             }).start();
         }
