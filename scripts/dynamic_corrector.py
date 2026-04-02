@@ -29,12 +29,13 @@ def apply_fixes():
     sizeof_errs = re.findall(file_regex + r":\d+:\d+: error: invalid application of 'sizeof' to an incomplete type '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
 
-    # FIX: Removed LetterFloorTile from CORE_N64 so it can be handled locally by the new struct mover!
+    # FIX: Added the new audio and OS types to the core exclusion list
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "ADPCM_STATE",
         "OSContPad", "OSContStatus", "Vtx", "Mtx", "ALHeap", "ALGlobals", "Gfx", "Acmd",
-        "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable"
+        "OS_NUM_EVENTS", "OSEvent", "Actor", "sChVegetable", 
+        "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE", "OSIntMask"
     }
 
     affected_files = set(
@@ -52,7 +53,8 @@ def apply_fixes():
         original_content = content
 
         # 0. Active Sanitization
-        for name in ["Actor", "sChVegetable", "LetterFloorTile"]:
+        # FIX: Added the audio types here to actively clean up broken injections from previous runs
+        for name in ["Actor", "sChVegetable", "LetterFloorTile", "POLEF_STATE", "RESAMPLE_STATE", "ENVMIX_STATE"]:
             bad_struct = f"typedef struct {name} {name};\n"
             if bad_struct in content:
                 content = content.replace(bad_struct, "")
@@ -87,16 +89,15 @@ def apply_fixes():
         handled_errors = set()
 
         # 2. Out-of-Order Struct Fixer (The mips2c Quirk)
-        # If the compiler complains about an unknown type, but we find its real definition lower in the file, move it to the top!
         for err in all_file_errors:
             pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{{.*?\}}\s*{err}\s*;)"
             match = re.search(pattern_struct, content, re.DOTALL)
             if match:
                 struct_def = match.group(1)
-                
+
                 # Cut the struct from the bottom
                 content = content.replace(struct_def, "")
-                
+
                 # Paste the struct at the top (right below includes)
                 include_idx = content.rfind('#include')
                 if include_idx != -1:
@@ -104,7 +105,7 @@ def apply_fixes():
                     content = content[:eol] + "\n/* Auto-moved struct */\n" + struct_def + "\n" + content[eol:]
                 else:
                     content = "/* Auto-moved struct */\n" + struct_def + "\n" + content
-                
+
                 print(f"  [-] Auto-moved real definition of {err} to the top of {os.path.basename(filepath)}")
                 fixes += 1
                 handled_errors.add(err)
