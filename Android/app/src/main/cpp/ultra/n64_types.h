@@ -87,7 +87,8 @@ typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
  * Fixed: Converted from forward declarations to dummy structs with size.
  * This allows sizeof() to work in Actor and Vegetable logic.
  */
-typedef struct { u8 padding[0x800]; } Actor; 
+// FIX: Removed dummy Actor struct to prevent redefinition conflict with prop.h
+// typedef struct { u8 padding[0x800]; } Actor; 
 typedef struct { u8 padding[0x400]; } sChVegetable;
 
 /**
