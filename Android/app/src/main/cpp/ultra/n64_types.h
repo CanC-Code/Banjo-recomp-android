@@ -41,6 +41,10 @@ typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 
+// FIX: Added missing Interrupt Mask types
+typedef u32 OSIntMask;
+#define OS_IM_NONE 0
+
 typedef struct OSMesgQueue_s {
     void* mt;
     void* full;
@@ -68,7 +72,15 @@ typedef struct { u16 type; u8 status, errnum; } OSContStatus;
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
-typedef struct { s16 state[16]; } ADPCM_STATE;
+
+// FIX: Audio states are arrays, not structs. This fixes the void* pointer crashes!
+typedef s16 ADPCM_STATE[16];
+typedef s16 POLEF_STATE[16];
+typedef s16 RESAMPLE_STATE[16];
+typedef s16 ENVMIX_STATE[40];
+
+#define ADPCMFSIZE 9
+#define ADPCMVSIZE 8
 
 typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
