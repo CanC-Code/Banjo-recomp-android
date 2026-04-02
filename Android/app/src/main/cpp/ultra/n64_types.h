@@ -65,7 +65,8 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-typedef u32 OSIntMask;
+// FIX: Added 'volatile' to the typedef to resolve source redeclaration conflicts
+typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
 
 #define OS_MESG_BLOCK 1
@@ -271,17 +272,15 @@ typedef struct { u16 type; u8 status, errno; } OSContStatus;
 extern "C" {
 #endif
 extern u32 osTvType;
-// FIX: Restored to OSTime (u64) based on recompiled source requirement
-extern OSTime osClockRate;
+// FIX: Using u32 to align with Banjo recompiler's word-centric logic
+extern u32 osClockRate;
 extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 extern u32 osResetType;
-
-// FIX: Set to u32 to match recompiler output
 extern u32 osAppNMIBuffer;
 
-// FIX: Explicitly volatile u32 to solve redeclaration conflict
-extern volatile u32 __OSGlobalIntMask;
+// FIX: Declared as OSIntMask (which is now volatile u32)
+extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
