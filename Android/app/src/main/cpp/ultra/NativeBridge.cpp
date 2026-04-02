@@ -22,8 +22,7 @@ extern "C" {
     // Low-level OS symbols
     extern void initInterruptTables();
     
-    // FIX: Now that libaudio.h is working, we use the strict ALGlobals pointer type instead of void*
-    extern ALGlobals* alGlobals;
+    // FIX: Removed manual 'alGlobals' redeclaration. We now rely fully on libaudio.h!
 }
 
 extern "C" {
@@ -42,7 +41,6 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
         
         // posix_memalign returns 0 on success
         if (posix_memalign(&ptr, 16, allocSize) == 0) {
-            // FIX: Explicitly cast the allocated void* memory to ALGlobals*
             alGlobals = (ALGlobals*) ptr;
             memset(alGlobals, 0, allocSize);
             LOGI("Audio globals initialized and aligned at %p", alGlobals);
