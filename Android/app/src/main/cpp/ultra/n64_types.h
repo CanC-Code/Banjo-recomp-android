@@ -41,7 +41,9 @@ typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 
-// FIX: Removed ALHeap and ALGlobals dummies to prevent redefinition loops with libaudio.h!
+// RESTORED: These are custom structs required by NativeBridge.cpp for emulation
+typedef struct ALHeap ALHeap; 
+typedef struct { u8 padding[0x1000]; } ALGlobals;
 
 typedef struct OSMesgQueue_s {
     void* mt;
