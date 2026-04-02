@@ -230,7 +230,6 @@ typedef struct {
 
 typedef u32 OSYieldResult;
 
-// FIX: Hardware Interrupt Handler definition
 typedef struct {
     OSMesgQueue *queue;
     OSMesg msg;
@@ -278,8 +277,8 @@ extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 
-// FIX: Added Global Interrupt Mask
-extern OSIntMask __OSGlobalIntMask;
+// FIX: Added volatile to match the recompiled source
+extern volatile OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
