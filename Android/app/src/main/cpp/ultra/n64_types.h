@@ -266,14 +266,13 @@ typedef struct { u16 type; u8 status, errno; } OSContStatus;
 extern "C" {
 #endif
 extern u32 osTvType;
-// FIX: osClockRate changed to OSTime (u64) to match SDK expectations
 extern OSTime osClockRate;
 extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 
-// FIX: Added NMI and Reset globals
-extern s32 osResetType;
-extern u8 osAppNMIBuffer[];
+// FIX: Aligned with the recompiled source's uint32_t definitions
+extern u32 osResetType;
+extern u32 osAppNMIBuffer;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
