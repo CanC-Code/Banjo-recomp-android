@@ -41,8 +41,6 @@ typedef u64 OSTime;
 typedef void* OSMesg;
 typedef void* OSTask;
 
-// FIX: Dummies completely removed. We will use the real libaudio.h!
-
 typedef struct OSMesgQueue_s {
     void* mt;
     void* full;
@@ -101,16 +99,15 @@ typedef struct ch_vegatable sChVegetable;
   #define M_PI 3.14159265358979323846
 #endif
 
-/**
- * 8. N64 SDK INCLUDES
- * We explicitly include the REAL audio header here so NativeBridge.cpp 
- * and the emulator know exactly how large ALGlobals truly is.
- */
-#include <PR/libaudio.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * 8. N64 SDK INCLUDES
+ * FIX: Wrapped inside extern "C" so the C++ NativeBridge doesn't mangle its symbols!
+ */
+#include <PR/libaudio.h>
 
 /**
  * 9. POLYFILLS
