@@ -178,10 +178,13 @@ typedef struct OSPiHandle_s {
     __OSTranxInfo transferInfo;
 } OSPiHandle;
 
-// FIX: Added the N64 OS Device Manager struct
+// Forward declaration of OSThread to allow OSDevMgr to use it
+struct OSThread_s;
+
+// FIX: Changed OSThread_s* to OSThread* (the typedef name)
 typedef struct {
     s32 active;
-    OSThread_s *thread;
+    struct OSThread_s *thread; 
     OSMesgQueue *cmdQueue;
     OSMesgQueue *evtQueue;
     OSMesgQueue *acsQueue;
