@@ -3,8 +3,8 @@ import re
 import subprocess
 import time
 
-# [FIX APPLIED]: Added -Dorg.gradle.jvmargs=-Xmx4g to give Gradle enough memory to prevent OOM crashes!
-GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace", "-Dorg.gradle.jvmargs=-Xmx4g"]
+# [FIX APPLIED]: Added --no-daemon to force a fresh process that respects the 4GB memory limit
+GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace", "--no-daemon", "-Dorg.gradle.jvmargs=-Xmx4g"]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
@@ -40,7 +40,7 @@ def classify_errors(log_data):
         "typedef_redef":      [],  
         "static_conflict":    [],  
         "incomplete_sizeof":  [],
-        "undeclared_macros":  [], # NEW: Catches missing N64 constants
+        "undeclared_macros":  [], 
         "unknown":            [],
     }
 
@@ -268,7 +268,14 @@ def apply_fixes():
             
             types_added = False
             for filepath, tag in set(categories["incomplete_sizeof"]):
+                # [FIX APPLIED]: Also check if the prefix (before _s) is perfectly uppercase!
+                is_sdk = False
                 if tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_")):
+                    is_sdk = True
+                elif tag.endswith("_s") and tag[:-2].isupper():
+                    is_sdk = True
+                
+                if is_sdk:
                     dummy_def = f"\nstruct {tag} {{ long long int force_align[32]; }};\n"
                     if f"struct {tag} {{" not in types_content:
                         types_content += dummy_def
@@ -305,7 +312,6 @@ def apply_fixes():
     if categories["undeclared_macros"]:
         known_macros = {
             "ADPCMFSIZE": "9",
-            # We can easily add other missing N64 constants here if they pop up!
         }
         
         if os.path.exists(TYPES_HEADER):
