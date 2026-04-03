@@ -37,12 +37,12 @@ def classify_errors(log_data):
         "local_struct_fwd":   [],  
         "libaudio_types":     [],  
         "null_float":         [],  
-        "typedef_redef":      [],  # tuples of (filepath, actual_tag, injected_tag)
-        "static_conflict":    [],  # tuples of (filepath, func_name)
+        "typedef_redef":      [],  
+        "static_conflict":    [],  
+        "incomplete_sizeof":  [],
         "unknown":            [],
     }
 
-    # ── Header-level traps ────────────────────────────────────────────────
     libaudio_patterns = [
         r"libaudio\.h.*unknown type name 'Acmd'",
         r"libaudio\.h.*unknown type name 'ADPCM_STATE'",
@@ -54,9 +54,18 @@ def classify_errors(log_data):
     if re.search(r"initializing 'f32'.*incompatible type 'void \*'", log_data):
         categories["null_float"].append("NULL=(void*)0 assigned to f32 field")
 
-    # ── Per-file error parsing ─────────────────────────────────────────────
     file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
     local_struct_map = {}
+
+    def extract_incomplete_type(line):
+        # Extract the struct tag name out of complex Clang aka messages
+        m = re.search(r"\(aka 'struct ([^']+)'\)", line)
+        if m: return m.group(1)
+        m = re.search(r"'struct ([^']+)'", line)
+        if m: return m.group(1)
+        m = re.search(r"'([^']+)'", line)
+        if m: return m.group(1)
+        return None
 
     for line in log_data.split('\n'):
         if "error:" not in line:
@@ -69,9 +78,14 @@ def classify_errors(log_data):
         if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
             filepath = None
 
-        m_redef = re.search(r"typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", line)
+        m_redef = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
         m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
+        
+        m_sizeof = "invalid application of 'sizeof'" in line
+        m_ptr = "arithmetic on a pointer to an incomplete type" in line
+        m_array = "array has incomplete element type" in line
+        m_def = "incomplete definition of type" in line
 
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
             pass  
@@ -79,12 +93,14 @@ def classify_errors(log_data):
             pass  
         elif "use of undeclared identifier 'actor'" in line and filepath:
             categories["actor_pointer"].append(filepath)
-        elif m_redef:
-            if filepath:
-                categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
-        elif m_static:
-            if filepath:
-                categories["static_conflict"].append((filepath, m_static.group(1)))
+        elif m_redef and filepath:
+            categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
+        elif m_static and filepath:
+            categories["static_conflict"].append((filepath, m_static.group(1)))
+        elif (m_sizeof or m_ptr or m_array or m_def) and filepath:
+            inc_type = extract_incomplete_type(line)
+            if inc_type:
+                categories["incomplete_sizeof"].append((filepath, inc_type))
         elif m_unknown:
             type_name = m_unknown.group(1)
             if filepath:
@@ -196,27 +212,62 @@ def apply_fixes():
 
     # ── FIX D: Typedef Redefinition (Resolving mismatched tags) ───────────
     if categories["typedef_redef"]:
-        for filepath, actual_tag, injected_tag in set(categories["typedef_redef"]):
+        for filepath, type1, type2 in set(categories["typedef_redef"]):
             if not os.path.exists(filepath):
                 continue
             with open(filepath, "r") as f:
                 content = f.read()
             original = content
             
-            # Rewrite the incorrect injected tag to match the actual tag found in the file
-            if "anonymous" in actual_tag:
-                content = content.replace("typedef struct {", f"typedef struct {injected_tag} {{", 1)
-            else:
-                content = content.replace(f"struct {injected_tag} ", f"struct {actual_tag} ")
-                content = content.replace(f"struct {injected_tag};", f"struct {actual_tag};")
+            # The conflict occurs because an injected forward declaration conflicts
+            # with an anonymous struct. We will trace back from the typedef and name the struct.
+            m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
+            if not m: m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
+            
+            if m:
+                tag = m.group(1)
+                lines = content.split('\n')
+                for i, l in enumerate(lines):
+                    if re.search(r"\}\s*" + tag + r"\s*;", l):
+                        # Found the end of the anonymous struct. Trace backwards to its opening.
+                        for j in range(i, -1, -1):
+                            if "typedef struct" in lines[j]:
+                                if "{" in lines[j]:
+                                    lines[j] = re.sub(r"typedef\s+struct\s*\{", f"typedef struct {tag} {{", lines[j])
+                                else:
+                                    lines[j] = re.sub(r"typedef\s+struct", f"typedef struct {tag}", lines[j])
+                                break
+                content = '\n'.join(lines)
                 
             if content != original:
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Harmonized typedef tag from {injected_tag} to {actual_tag} in {os.path.basename(filepath)}")
+                print(f"  [🛠️] Harmonized anonymous struct for '{tag}' in {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX E: Static Function Conflict (Resolving close() collision) ──────
+    # ── FIX E: Incomplete SDK Types (sizeof traps) ────────────────────────
+    if categories["incomplete_sizeof"]:
+        if os.path.exists(TYPES_HEADER):
+            with open(TYPES_HEADER, "r") as f:
+                types_content = f.read()
+            
+            types_added = False
+            for filepath, tag in set(categories["incomplete_sizeof"]):
+                # If it's an SDK type (ends with _s or is strictly uppercase like RESAMPLE_STATE)
+                # it is missing its underlying definition for heap allocation sizes.
+                if tag.isupper() or tag.endswith("_s"):
+                    dummy_def = f"\nstruct {tag} {{ long long int force_align[32]; }};\n"
+                    if f"struct {tag} {{" not in types_content:
+                        types_content += dummy_def
+                        types_added = True
+                        print(f"  [🛠️] Injected dummy SDK struct '{tag}' into n64_types.h")
+            
+            if types_added:
+                with open(TYPES_HEADER, "w") as f:
+                    f.write(types_content)
+                fixes += 1
+
+    # ── FIX F: Static Function Conflict (Resolving close() collision) ──────
     if categories["static_conflict"]:
         for filepath, func_name in set(categories["static_conflict"]):
             if not os.path.exists(filepath):
@@ -225,7 +276,6 @@ def apply_fixes():
                 content = f.read()
             original = content
             
-            # Use preprocessor macro to safely rename the function locally without breaking code
             macro_fix = f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{func_name}\n"
             if macro_fix not in content:
                 if '#include "ultra/n64_types.h"' in content:
