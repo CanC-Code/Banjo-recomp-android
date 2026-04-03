@@ -29,7 +29,7 @@ def apply_fixes():
 
     fixes = 0
     # Robust regex to capture full paths even without extensions
-    file_regex = r"^((?:/[^:/]+)+):"
+    file_regex = r"(/[^:\s]+):"
     
     CORE_N64 = {"__OSGlobalIntMask", "osClockRate", "osResetType", "osAppNMIBuffer", "Actor", "ActorMarker", "OSContPad"}
 
@@ -44,7 +44,10 @@ def apply_fixes():
                     affected_files.add(filepath)
 
     for filepath in affected_files:
-        with open(filepath, "r") as f: content = f.read()
+        try:
+            with open(filepath, "r") as f: content = f.read()
+        except: continue
+        
         original_content = content
 
         # FIX: The 'close' Conflict
