@@ -14,7 +14,6 @@ GRADLE_CMD = [
 ]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
-# NEW: A file to hold our auto-generated empty functions
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
 def strip_ansi(text):
@@ -48,7 +47,7 @@ def classify_errors(log_data):
         "incomplete_sizeof":  [],
         "undeclared_macros":  [], 
         "implicit_func":      [], 
-        "undefined_symbols":  [], # NEW: Catches linker errors
+        "undefined_symbols":  [], 
         "unknown":            [],
     }
 
@@ -91,7 +90,6 @@ def classify_errors(log_data):
         m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
         
-        # [NEW]: Linker error regex catchers
         m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
         
@@ -110,7 +108,6 @@ def classify_errors(log_data):
         elif m_undef_ref:
             categories["undefined_symbols"].append(m_undef_ref.group(1).strip())
         elif m_undef_sym:
-            # Clean up C++ mangled names if present, or strip quotes
             sym = m_undef_sym.group(1).replace("'", "").strip()
             categories["undefined_symbols"].append(sym)
         elif m_implicit:
@@ -346,6 +343,10 @@ def apply_fixes():
         known_macros = {
             "ADPCMFSIZE": "9",
             "ADPCMVSIZE": "8", 
+            # [FIX APPLIED]: Auto-inject newly discovered N64 definitions!
+            "UNITY_PITCH": "32768.0f",
+            "OSIntMask": "u32",
+            "OS_IM_NONE": "0",
         }
         
         if os.path.exists(TYPES_HEADER):
@@ -366,7 +367,7 @@ def apply_fixes():
                     f.write(types_content)
                 fixes += 1
 
-    # ── FIX H: Missing Standard C Libraries ────────────────────────
+    # ── FIX H: Missing Standard C Libraries & N64 Declarations ────────────
     if categories["implicit_func"]:
         math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
         string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
@@ -390,6 +391,13 @@ def apply_fixes():
                     types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header_to_add}")
                     includes_added = True
                     print(f"  [🛠️] Injected {header_to_add} into n64_types.h to fix implicit '{func}'")
+                elif not header_to_add:
+                    # [FIX APPLIED]: Automatically declare unknown system functions directly in the header!
+                    decl = f"\nlong long int {func}();\n"
+                    if decl not in types_content and f" {func}(" not in types_content:
+                        types_content += decl
+                        includes_added = True
+                        print(f"  [🛠️] Injected dummy declaration for '{func}' into n64_types.h")
             
             if includes_added:
                 with open(TYPES_HEADER, "w") as f:
@@ -400,13 +408,11 @@ def apply_fixes():
     if categories["undefined_symbols"]:
         stubs_added = False
         
-        # Create the stubs file if it doesn't exist
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
             with open(STUBS_FILE, "w") as f:
                 f.write('#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
             
-            # Make sure CMake compiles the stubs file!
             cmake_file = "Android/app/src/main/cpp/CMakeLists.txt"
             if os.path.exists(cmake_file):
                 with open(cmake_file, "r") as f:
@@ -420,7 +426,6 @@ def apply_fixes():
             existing_stubs = f.read()
             
         for sym in set(categories["undefined_symbols"]):
-            # Ignore standard C++ mangled things, just focus on C functions
             if sym.startswith("_Z") or "vtable" in sym:
                 continue
                 
