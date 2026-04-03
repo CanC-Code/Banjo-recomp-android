@@ -10,6 +10,7 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
+ * Prevents original SDK headers from overriding our recompiled types.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -65,7 +66,13 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-typedef u32 OSIntMask;
+/**
+ * AUTHORITY FIX: 
+ * OSIntMask is made volatile in the typedef. This ensures that any 
+ * declaration using OSIntMask (like __OSGlobalIntMask) is globally 
+ * consistent as a volatile type, satisfying the hardware interrupt logic.
+ */
+typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
 
 #define OS_MESG_BLOCK 1
@@ -274,8 +281,8 @@ extern u32 osTvType;
 
 /**
  * AUTHORITY FIX: 
- * Locked to OSTime (u64) to match internal N64 assembly logic.
- * The Purifier script will nuke local 'u32' declarations.
+ * osClockRate MUST be OSTime (u64) to match the SDK timers 
+ * and internal recompiled cycle calculations.
  */
 extern OSTime osClockRate;
 
@@ -286,9 +293,9 @@ extern u32 osAppNMIBuffer;
 
 /**
  * AUTHORITY FIX: 
- * Explicitly volatile to match high-priority interrupt source files.
+ * Declared as OSIntMask (which is now volatile u32). 
  */
-extern volatile u32 __OSGlobalIntMask;
+extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
