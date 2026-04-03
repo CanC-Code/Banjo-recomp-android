@@ -81,24 +81,21 @@ def classify_errors(log_data):
         elif "use of undeclared identifier 'actor'" in line and filepath:
             categories["actor_pointer"].append(filepath)
 
-        elif m := re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line):
-            type_name = m.group(1)
-            if filepath:
-                local_struct_map.setdefault(filepath, set()).add(type_name)
-            else:
-                categories["unknown"].append(line.strip())
-
-        elif filepath and os.path.exists(filepath):
-            categories["missing_n64_types"].append(filepath)
-
         else:
-            if line.strip():
+            # [FIX APPLIED]: Removed the walrus (:=) operator for compatibility 
+            m = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
+            if m:
+                type_name = m.group(1)
+                if filepath:
+                    local_struct_map.setdefault(filepath, set()).add(type_name)
+                else:
+                    categories["unknown"].append(line.strip())
+            elif filepath and os.path.exists(filepath):
+                categories["missing_n64_types"].append(filepath)
+            elif line.strip():
                 categories["unknown"].append(line.strip())
 
     # Resolve local_struct_map into actionable entries.
-    # If a type is unknown in a .c file and not defined anywhere in n64_types.h,
-    # it's almost certainly a local struct that needs a forward declaration
-    # injected at the top of that specific source file.
     known_global_types = {
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
@@ -180,4 +177,60 @@ def apply_fixes():
         for filepath, type_name in categories["local_struct_fwd"]:
             file_to_types.setdefault(filepath, set()).add(type_name)
 
-        for filepath, type_names in file
+        for filepath, type_names in file_to_types.items():
+            if not os.path.exists(filepath):
+                continue
+            with open(filepath, "r") as f:
+                content = f.read()
+            original = content
+
+            fwd_lines = []
+            for t in sorted(type_names):
+                # Only inject if not already declared in this file
+                if f"typedef struct" not in content or t not in content.split("typedef struct")[0]:
+                    
+                    # Properly targets the substring after 's' or 'S'
+                    tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
+                    
+                    fwd_decl = f"typedef struct {tag}_s {t};"
+                    if fwd_decl not in content:
+                        fwd_lines.append(fwd_decl)
+
+            if fwd_lines:
+                injection = "/* AUTO: forward declarations */\n" + \
+                            "\n".join(fwd_lines) + "\n"
+                content = injection + content
+                with open(filepath, "w") as f:
+                    f.write(content)
+                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into "
+                      f"{os.path.basename(filepath)}")
+                fixes += 1
+
+    # ── UNKNOWN errors: report but don't fix ─────────────────────────────
+    if categories["unknown"] and fixes == 0:
+        print("\n⚠️  Unrecognized errors (no automatic fix available):")
+        for msg in list(dict.fromkeys(categories["unknown"]))[:10]:
+            print(f"   {msg}")
+
+    return fixes
+
+def main():
+    for i in range(1, 100):
+        print(f"\n--- Cycle {i} ---")
+        if run_build():
+            print("\n✅ Build Successful!")
+            return
+
+        result = apply_fixes()
+
+        if result == -1:
+            print("\n🛑 Loop halted. Manual fix required in n64_types.h.")
+            break
+        elif result == 0:
+            print("\n🛑 Loop halted. No fixable patterns found.")
+            break
+
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
