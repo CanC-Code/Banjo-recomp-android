@@ -29,7 +29,6 @@ def run_build():
 def classify_errors(log_data):
     """
     Returns a dict of recognized error categories found in the log.
-    Values are lists of (filepath, extra_context) tuples where relevant.
     """
     categories = {
         "missing_n64_types":  [],  
@@ -58,7 +57,6 @@ def classify_errors(log_data):
     local_struct_map = {}
 
     def extract_incomplete_type(line):
-        # Extract the struct tag name out of complex Clang aka messages
         m = re.search(r"\(aka 'struct ([^']+)'\)", line)
         if m: return m.group(1)
         m = re.search(r"'struct ([^']+)'", line)
@@ -74,7 +72,6 @@ def classify_errors(log_data):
         match = re.search(file_regex, line)
         filepath = match.group(1) if match else None
 
-        # Skip NDK/sysroot headers
         if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
             filepath = None
 
@@ -113,7 +110,6 @@ def classify_errors(log_data):
             if line.strip():
                 categories["unknown"].append(line.strip())
 
-    # Resolve local_struct_map
     known_global_types = {
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
@@ -151,7 +147,8 @@ def apply_fixes():
     for filepath in affected_files:
         if not os.path.exists(filepath):
             continue
-        if "/usr/include" in filepath or "ndk" in filepath:
+        # [FIX APPLIED]: Explicitly prevent n64_types.h from causing an infinite include loop!
+        if "/usr/include" in filepath or "ndk" in filepath or filepath.endswith("n64_types.h"):
             continue
         with open(filepath, "r") as f:
             content = f.read()
@@ -219,8 +216,6 @@ def apply_fixes():
                 content = f.read()
             original = content
             
-            # The conflict occurs because an injected forward declaration conflicts
-            # with an anonymous struct. We will trace back from the typedef and name the struct.
             m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
             if not m: m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
             
@@ -229,7 +224,6 @@ def apply_fixes():
                 lines = content.split('\n')
                 for i, l in enumerate(lines):
                     if re.search(r"\}\s*" + tag + r"\s*;", l):
-                        # Found the end of the anonymous struct. Trace backwards to its opening.
                         for j in range(i, -1, -1):
                             if "typedef struct" in lines[j]:
                                 if "{" in lines[j]:
@@ -253,9 +247,8 @@ def apply_fixes():
             
             types_added = False
             for filepath, tag in set(categories["incomplete_sizeof"]):
-                # If it's an SDK type (ends with _s or is strictly uppercase like RESAMPLE_STATE)
-                # it is missing its underlying definition for heap allocation sizes.
-                if tag.isupper() or tag.endswith("_s"):
+                # [FIX APPLIED]: Tightened condition to ensure it only catches TRUE N64 SDK tags.
+                if tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_")):
                     dummy_def = f"\nstruct {tag} {{ long long int force_align[32]; }};\n"
                     if f"struct {tag} {{" not in types_content:
                         types_content += dummy_def
