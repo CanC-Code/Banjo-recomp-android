@@ -107,13 +107,19 @@ struct OSThread_s {
 };
 
 /**
- * 6. GBI / RSP STUBS REQUIRED BY libaudio.h
- *    _GBI_H_ is defined above to block the real gbi.h, so we must
- *    manually provide the types that libaudio.h pulls from that header.
+ * 6. GBI / RSP / OS STUBS
  *
- *    Acmd: a 64-bit audio RSP command word (union of word/bytes).
- *    ADPCM_STATE: a 16-entry s16 array holding ADPCM predictor state.
+ * _GBI_H_ blocks the real gbi.h and _OS_H_ blocks os.h, but several
+ * game headers (model.h, structs.h, prop.h, mlmtx.h, modelRender.h,
+ * pfsmanager.h) depend on the types below.  We provide minimal stubs
+ * so those headers parse cleanly without dragging in the full N64 SDK.
+ *
+ * All guards follow the pattern used by the upstream SDK so that if any
+ * include path ever resolves the real header first, these stubs are skipped.
  */
+
+/* ── Acmd ─────────────────────────────────────────────────────────────────
+ * 64-bit RSP audio command word.  Required by libaudio.h.              */
 #ifndef ACMD_DEFINED
 #define ACMD_DEFINED
 typedef union {
@@ -122,9 +128,72 @@ typedef union {
 } Acmd;
 #endif
 
+/* ── ADPCM_STATE ──────────────────────────────────────────────────────────
+ * 16-entry s16 predictor-state array.  Required by libaudio.h.         */
 #ifndef ADPCM_STATE_DEFINED
 #define ADPCM_STATE_DEFINED
 typedef s16 ADPCM_STATE[16];
+#endif
+
+/* ── Vtx ──────────────────────────────────────────────────────────────────
+ * Vertex union used in RSP display lists.
+ * Required by: model.h, structs.h, prop.h                              */
+#ifndef VTX_DEFINED
+#define VTX_DEFINED
+typedef union {
+    struct {
+        s16 ob[3];   /* object-space position x,y,z */
+        u16 flag;
+        s16 tc[2];   /* texture coords s,t           */
+        u8  cn[4];   /* colour/normal r,g,b,a        */
+    } v;
+    struct {
+        s16 ob[3];
+        u16 flag;
+        s16 tc[2];
+        s8  n[3];    /* normal x,y,z                 */
+        u8  a;       /* alpha                        */
+    } n;
+    long long int force_align;
+} Vtx;
+#endif
+
+/* ── Gfx ──────────────────────────────────────────────────────────────────
+ * Display list command word pair.
+ * Required by: model.h, structs.h, prop.h, modelRender.h               */
+#ifndef GFX_DEFINED
+#define GFX_DEFINED
+typedef union {
+    struct { u32 w0; u32 w1; } words;
+    long long int force_align;
+} Gfx;
+#endif
+
+/* ── Mtx ──────────────────────────────────────────────────────────────────
+ * Fixed-point 4x4 matrix (16 x s16 integer + 16 x u16 fraction).
+ * Required by: structs.h, prop.h, mlmtx.h, modelRender.h
+ * NOTE: the game's structs.h already defines MtxF (float 4x4); Clang
+ * suggests MtxF for Mtx, confirming these are two distinct types.      */
+#ifndef MTX_DEFINED
+#define MTX_DEFINED
+typedef struct {
+    s16 intPart[4][4];
+    u16 fracPart[4][4];
+} Mtx;
+#endif
+
+/* ── OSContPad ────────────────────────────────────────────────────────────
+ * Controller pad state struct.  Normally from os_cont.h, but _OS_H_
+ * prevents the os.h chain that os_cont.h depends on from loading fully.
+ * Required by: pfsmanager.h (include/core1/pfsmanager.h:64)            */
+#ifndef OS_CONT_PAD_DEFINED
+#define OS_CONT_PAD_DEFINED
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errno;
+} OSContPad;
 #endif
 
 #ifdef __cplusplus
