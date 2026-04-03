@@ -49,7 +49,7 @@ def classify_errors(log_data):
         "undeclared_macros":  [], 
         "implicit_func":      [], 
         "undefined_symbols":  [], 
-        "missing_sdk_types":  [], # NEW: Safely handles missing N64 type definitions
+        "missing_sdk_types":  [], 
         "unknown":            [],
     }
 
@@ -138,7 +138,6 @@ def classify_errors(log_data):
                 categories["incomplete_sizeof"].append((filepath, inc_type))
         elif m_unknown:
             type_name = m_unknown.group(1)
-            # [FIX APPLIED]: Intercept known N64 SDK Types and shuttle them to FIX K instead of creating structs!
             if type_name in known_global_types:
                 categories["missing_sdk_types"].append(type_name)
             elif filepath:
@@ -458,8 +457,8 @@ def apply_fixes():
             fixes += 1
 
     # ── FIX K: Missing SDK Typedefs ──────────────────────────────────────
+    # [FIX APPLIED]: Completely overhauled to safely assign dummy structs for complex N64 SDK types!
     if categories["missing_sdk_types"]:
-        # We safely map all known N64 specific types directly to standard C primitives!
         known_sdk_typedefs = {
             "OSHWIntr": "unsigned int",
             "OSIntMask": "unsigned int",
@@ -485,11 +484,17 @@ def apply_fixes():
             typedefs_added = False
             for t in set(categories["missing_sdk_types"]):
                 if t in known_sdk_typedefs:
+                    # It's a primitive type, map it exactly
                     typedef_decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
-                    if f"typedef {known_sdk_typedefs[t]} {t};" not in types_content:
-                        types_content += typedef_decl
-                        typedefs_added = True
-                        print(f"  [🛠️] Injected missing SDK typedef '{t}' into n64_types.h")
+                else:
+                    # It's a complex SDK type (like OSMesgQueue or Gfx). Assign a dummy padded struct!
+                    typedef_decl = f"\ntypedef struct {{ long long int force_align[32]; }} {t};\n"
+                
+                # Only inject if it doesn't already exist
+                if f" {t};" not in types_content:
+                    types_content += typedef_decl
+                    typedefs_added = True
+                    print(f"  [🛠️] Injected missing SDK typedef '{t}' into n64_types.h")
             
             if typedefs_added:
                 with open(TYPES_HEADER, "w") as f:
