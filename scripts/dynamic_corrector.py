@@ -147,7 +147,6 @@ def apply_fixes():
     for filepath in affected_files:
         if not os.path.exists(filepath):
             continue
-        # [FIX APPLIED]: Explicitly prevent n64_types.h from causing an infinite include loop!
         if "/usr/include" in filepath or "ndk" in filepath or filepath.endswith("n64_types.h"):
             continue
         with open(filepath, "r") as f:
@@ -216,11 +215,28 @@ def apply_fixes():
                 content = f.read()
             original = content
             
-            m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
-            if not m: m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
+            t1_match = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
+            t2_match = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
             
-            if m:
-                tag = m.group(1)
+            tag1 = t1_match.group(1) if t1_match else None
+            tag2 = t2_match.group(1) if t2_match else None
+
+            # [FIX APPLIED]: Handle named struct mismatches (e.g. 'chVegetable_s' vs 'ch_vegatable')
+            if tag1 and tag2 and tag1 != tag2:
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if "/* AUTO: forward declarations */" in line:
+                        for j in range(i + 1, min(i + 20, len(lines))):
+                            if f"struct {tag1}" in lines[j] and "typedef" in lines[j]:
+                                lines[j] = lines[j].replace(f"struct {tag1}", f"struct {tag2}")
+                            elif f"struct {tag2}" in lines[j] and "typedef" in lines[j]:
+                                lines[j] = lines[j].replace(f"struct {tag2}", f"struct {tag1}")
+                        break
+                content = '\n'.join(lines)
+            
+            # Fallback for anonymous structs
+            elif tag1 or tag2:
+                tag = tag1 or tag2
                 lines = content.split('\n')
                 for i, l in enumerate(lines):
                     if re.search(r"\}\s*" + tag + r"\s*;", l):
@@ -236,7 +252,7 @@ def apply_fixes():
             if content != original:
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Harmonized anonymous struct for '{tag}' in {os.path.basename(filepath)}")
+                print(f"  [🛠️] Harmonized typedef tags in {os.path.basename(filepath)}")
                 fixes += 1
 
     # ── FIX E: Incomplete SDK Types (sizeof traps) ────────────────────────
@@ -247,7 +263,6 @@ def apply_fixes():
             
             types_added = False
             for filepath, tag in set(categories["incomplete_sizeof"]):
-                # [FIX APPLIED]: Tightened condition to ensure it only catches TRUE N64 SDK tags.
                 if tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_")):
                     dummy_def = f"\nstruct {tag} {{ long long int force_align[32]; }};\n"
                     if f"struct {tag} {{" not in types_content:
