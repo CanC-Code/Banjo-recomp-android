@@ -18,6 +18,7 @@
 
 /**
  * 3. CORE N64 SCALARS
+ * Defined before includes so shadowed SDK headers (like PR/sched.h) don't fail.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -34,7 +35,22 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 4. N64 OS FOUNDATION STRUCTURES
+ * 4. SYSTEM INCLUDES & THREADING POLYFILL
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <math.h>
+#include <unistd.h>
+
+/* Fix for N64 PR/sched.h shadowing system sched.h */
+#ifndef sched_yield
+  #define sched_yield() usleep(1)
+#endif
+
+/**
+ * 5. N64 OS STRUCTURES
  */
 typedef u32 OSEvent;
 typedef u64 OSTime;
@@ -97,29 +113,11 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_NOBLOCK 0
 
 /**
- * 5. SYSTEM INCLUDES & POLYFILLS
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <math.h>
-#include <unistd.h>
-
-/* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
-#ifndef sched_yield
-  #define sched_yield() usleep(1)
-#endif
-
-/**
- * 6. ADDITIONAL OS & INPUT TYPES
+ * 6. INPUT & AUDIO Foundation
  */
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
-/**
- * 7. SDK SYMBOLS & AUDIO
- */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -137,7 +135,7 @@ extern OSIntMask __OSGlobalIntMask;
 #endif
 
 /**
- * 8. GAME-SPECIFIC TAG HARMONIZATION
+ * 7. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
