@@ -174,70 +174,10 @@ def apply_fixes():
                 fixes += 1
 
     # ── FIX C: Local struct forward declaration injection ─────────────────
-    # Groups all unknown local type names per file, then injects a single
-    # block of forward declarations at the top of each affected source file.
-    # Pattern: typedef struct typeName_s typeName;
-    # This covers the 'sChVegetable' class of errors where a .c file uses
-    # a struct type in a forward prototype before defining it.
     if categories["local_struct_fwd"]:
         # Group by file
         file_to_types = {}
         for filepath, type_name in categories["local_struct_fwd"]:
             file_to_types.setdefault(filepath, set()).add(type_name)
 
-        for filepath, type_names in file_to_types.items():
-            if not os.path.exists(filepath):
-                continue
-            with open(filepath, "r") as f:
-                content = f.read()
-            original = content
-
-            fwd_lines = []
-            for t in sorted(type_names):
-                # Only inject if not already declared in this file
-                if f"typedef struct" not in content or t not in content.split("typedef struct")[0]:
-                    # Derive tag: strip leading 's'/'S' prefix for tag name
-                    # e.g. sChVegetable → chVegetable_s, or just use t + _s
-                    tag = t[0].lower() + t[1:] if t[0] in ('s', 'S') else t
-                    fwd_decl = f"typedef struct {tag}_s {t};"
-                    if fwd_decl not in content:
-                        fwd_lines.append(fwd_decl)
-
-            if fwd_lines:
-                injection = "/* AUTO: forward declarations */\n" + \
-                            "\n".join(fwd_lines) + "\n"
-                content = injection + content
-                with open(filepath, "w") as f:
-                    f.write(content)
-                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into "
-                      f"{os.path.basename(filepath)}")
-                fixes += 1
-
-    # ── UNKNOWN errors: report but don't fix ─────────────────────────────
-    if categories["unknown"] and fixes == 0:
-        print("\n⚠️  Unrecognized errors (no automatic fix available):")
-        for msg in list(dict.fromkeys(categories["unknown"]))[:10]:
-            print(f"   {msg}")
-
-    return fixes
-
-def main():
-    for i in range(1, 100):
-        print(f"\n--- Cycle {i} ---")
-        if run_build():
-            print("\n✅ Build Successful!")
-            return
-
-        result = apply_fixes()
-
-        if result == -1:
-            print("\n🛑 Loop halted. Manual fix required in n64_types.h.")
-            break
-        elif result == 0:
-            print("\n🛑 Loop halted. No fixable patterns found.")
-            break
-
-        time.sleep(1)
-
-if __name__ == "__main__":
-    main()
+        for filepath, type_names in file
