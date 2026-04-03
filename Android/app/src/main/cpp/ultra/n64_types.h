@@ -65,8 +65,13 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-// FIX: Using plain u32 to resolve the redeclaration conflict with recompiled source
-typedef u32 OSIntMask;
+/**
+ * DYNAMIC FIX: 
+ * We define OSIntMask as 'volatile u32' to match the recompiled 
+ * interrupt handler logic. This prevents 'redefinition' errors 
+ * in files that expect volatility.
+ */
+typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
 
 #define OS_MESG_BLOCK 1
@@ -272,15 +277,24 @@ typedef struct { u16 type; u8 status, errno; } OSContStatus;
 extern "C" {
 #endif
 extern u32 osTvType;
-// FIX: Switched to u32 as the compiler finds this definition in the recompiled source
-extern u32 osClockRate;
+
+/**
+ * DYNAMIC FIX: 
+ * osClockRate MUST be OSTime (u64) to match the SDK timers 
+ * being called by the recompiled assembly logic.
+ */
+extern OSTime osClockRate;
+
 extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 
-// FIX: Using plain u32 to match recompiled data definitions exactly
-extern u32 __OSGlobalIntMask;
+/**
+ * DYNAMIC FIX: 
+ * Aligned with the volatile typedef above.
+ */
+extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
