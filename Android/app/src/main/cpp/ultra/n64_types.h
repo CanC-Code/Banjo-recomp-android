@@ -34,9 +34,7 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 4. N64 OS FOUNDATION STRUCTURES (Moved to Top)
- * These must be defined before any includes to prevent 'unknown type' errors
- * if an SDK header shadows a system header.
+ * 4. N64 OS FOUNDATION STRUCTURES
  */
 typedef u32 OSEvent;
 typedef u64 OSTime;
@@ -53,10 +51,7 @@ typedef struct {
     u64 *yield_data_ptr; u32 yield_data_size;
 } OSTask_t;
 
-typedef union {
-    OSTask_t t;
-    long long int force_align[32];
-} OSTask;
+typedef union { OSTask_t t; long long int force_align[32]; } OSTask;
 
 typedef struct {
     u64 at, v0, v1, a0, a1, a2, a3;
@@ -102,7 +97,7 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_NOBLOCK 0
 
 /**
- * 5. SYSTEM INCLUDES
+ * 5. SYSTEM INCLUDES & POLYFILLS
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -110,68 +105,21 @@ typedef volatile u32 OSIntMask;
 #include <time.h>
 #include <math.h>
 #include <unistd.h>
-#include <sched.h> 
 
-/**
- * 6. SDK FALLBACK & POLYFILLS
- */
+/* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
 #ifndef sched_yield
-  // If sched.h was shadowed by the SDK, polyfill sched_yield to keep C++ happy.
-  #ifdef __cplusplus
-    #include <thread>
-    #define sched_yield() std::this_thread::yield()
-  #else
-    #define sched_yield() usleep(1)
-  #endif
+  #define sched_yield() usleep(1)
 #endif
 
 /**
- * 7. ADDITIONAL OS TYPES
+ * 6. ADDITIONAL OS & INPUT TYPES
  */
-typedef struct {
-    u16 type;
-    u8 pri;
-    u8 cmp;
-    OSMesgQueue *retQueue;
-} OSIoMesgHdr;
-
-typedef struct OSPiHandle_s {
-    struct OSPiHandle_s *next;
-    u8 type;
-    u8 latency;
-    u8 pageSize;
-    u8 relDuration;
-    u8 pulse;
-    u8 domain;
-    u32 baseAddress;
-    u32 speed;
-} OSPiHandle;
-
-typedef struct {
-    OSIoMesgHdr hdr;
-    void *dramAddr;
-    u32 devAddr;
-    u32 size;
-    OSPiHandle *piHandle; 
-} OSIoMesg;
-
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
 /**
- * 8. GRAPHICS & SDK SYMBOLS
+ * 7. SDK SYMBOLS & AUDIO
  */
-typedef u64 Gfx;
-typedef u64 Acmd;
-typedef s16 ADPCM_STATE[16];
-typedef s16 POLEF_STATE[16];
-typedef s16 RESAMPLE_STATE[16];
-typedef s16 ENVMIX_STATE[40];
-
-typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
-typedef union { Vtx_t v; long long force_align; } Vtx;
-typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -182,9 +130,6 @@ extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 extern OSIntMask __OSGlobalIntMask;
 
-extern void guMtxIdentF(float mf[4][4]);
-extern void guMtxF2L(float mf[4][4], Mtx *m);
-
 #include <PR/libaudio.h>
 #include <PR/os_cont.h>
 #ifdef __cplusplus
@@ -192,12 +137,10 @@ extern void guMtxF2L(float mf[4][4], Mtx *m);
 #endif
 
 /**
- * 9. GAME-SPECIFIC TAG HARMONIZATION
+ * 8. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
 typedef struct ch_vegatable sChVegetable;
-typedef struct LetterFloorTile LetterFloorTile;
-typedef struct ActorLocal_Lockup ActorLocal_Lockup;
 
 #endif
