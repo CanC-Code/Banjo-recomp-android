@@ -17,18 +17,7 @@
 #define _GU_H_
 
 /**
- * 3. SYSTEM & SDK INCLUDES (Foundation)
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <math.h>
-#include <unistd.h>
-#include <sched.h>  // Authority for sched_yield
-
-/**
- * 4. CORE N64 SCALARS
+ * 3. CORE N64 SCALARS (Moved to top)
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -45,7 +34,7 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 5. N64 OS TYPES (FOUNDATION)
+ * 4. N64 OS TYPES (FOUNDATION)
  */
 #define OS_NUM_EVENTS 15
 typedef u32 OSEvent;
@@ -72,6 +61,19 @@ typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
 #define OS_MESG_BLOCK 1
 #define OS_MESG_NOBLOCK 0
+
+/**
+ * 5. SYSTEM & SDK INCLUDES
+ * Including these after scalars ensures PR/sched.h (if shadowed) 
+ * can see the u32 and OSTask definitions.
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <math.h>
+#include <unistd.h>
+#include <sched.h> 
 
 /**
  * 6. OS STRUCTURES
