@@ -35,10 +35,10 @@ def apply_fixes():
         if "error:" in line:
             match = re.search(file_regex, line.strip())
             if match:
-                filepath = match.group(1)
-                # Only touch files that are actually in our project
-                if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
-                    affected_files.add(filepath)
+                path = match.group(1)
+                # Only fix files that exist in our project space
+                if os.path.exists(path) and "ndk" not in path and "/usr/include" not in path:
+                    affected_files.add(path)
 
     for filepath in affected_files:
         try:
