@@ -3,7 +3,6 @@ import re
 import subprocess
 import time
 
-# [FIX APPLIED]: Added --no-daemon to force a fresh process that respects the 4GB memory limit
 GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace", "--no-daemon", "-Dorg.gradle.jvmargs=-Xmx4g"]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
@@ -28,9 +27,6 @@ def run_build():
     return process.returncode == 0
 
 def classify_errors(log_data):
-    """
-    Returns a dict of recognized error categories found in the log.
-    """
     categories = {
         "missing_n64_types":  [],  
         "actor_pointer":      [],  
@@ -266,9 +262,12 @@ def apply_fixes():
             with open(TYPES_HEADER, "r") as f:
                 types_content = f.read()
             
+            # [FIX APPLIED]: Enforce include guard!
+            if "#pragma once" not in types_content:
+                types_content = "#pragma once\n" + types_content
+            
             types_added = False
             for filepath, tag in set(categories["incomplete_sizeof"]):
-                # [FIX APPLIED]: Also check if the prefix (before _s) is perfectly uppercase!
                 is_sdk = False
                 if tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_")):
                     is_sdk = True
@@ -282,7 +281,7 @@ def apply_fixes():
                         types_added = True
                         print(f"  [🛠️] Injected dummy SDK struct '{tag}' into n64_types.h")
             
-            if types_added:
+            if types_added or types_content != f.read():
                 with open(TYPES_HEADER, "w") as f:
                     f.write(types_content)
                 fixes += 1
@@ -318,6 +317,10 @@ def apply_fixes():
             with open(TYPES_HEADER, "r") as f:
                 types_content = f.read()
             
+            # [FIX APPLIED]: Enforce include guard!
+            if "#pragma once" not in types_content:
+                types_content = "#pragma once\n" + types_content
+                
             macros_added = False
             for macro in set(categories["undeclared_macros"]):
                 if macro in known_macros:
@@ -327,7 +330,7 @@ def apply_fixes():
                         macros_added = True
                         print(f"  [🛠️] Injected missing SDK macro '{macro}' into n64_types.h")
             
-            if macros_added:
+            if macros_added or types_content != f.read():
                 with open(TYPES_HEADER, "w") as f:
                     f.write(types_content)
                 fixes += 1
