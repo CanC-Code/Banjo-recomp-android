@@ -33,18 +33,28 @@ def apply_fixes():
     affected_files = set()
     for line in log_data.split('\n'):
         if "error:" in line:
-            match = re.search(file_regex, line)
+            match = re.search(file_regex, line.strip())
             if match:
-                path = match.group(1)
-                # Only fix files that are actually in our work directory
-                if os.path.exists(path) and "Banjo-recomp-android" in path:
-                    affected_files.add(path)
+                filepath = match.group(1)
+                # Ignore system headers
+                if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
+                    affected_files.add(filepath)
 
     for filepath in affected_files:
-        with open(filepath, "r") as f: content = f.read()
+        try:
+            with open(filepath, "r") as f: content = f.read()
+        except: continue
+        
         original_content = content
 
-        # Apply injections
+        # FIX: The 'close' Conflict
+        if "follows non-static declaration" in log_data or "lockup.c" in filepath:
+            if "bka_close" not in content:
+                content = re.sub(r'\bclose\b', 'bka_close', content)
+                print(f"  [-] Renamed 'close' -> 'bka_close' in {os.path.basename(filepath)}")
+                fixes += 1
+
+        # FIX: Priority Injection (Ensures n64_types.h is the VERY first include)
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
             fixes += 1
