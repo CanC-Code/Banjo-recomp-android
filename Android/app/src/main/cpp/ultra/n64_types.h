@@ -65,13 +65,7 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-/**
- * DYNAMIC FIX: 
- * We define OSIntMask as 'volatile u32' to match the recompiled 
- * interrupt handler logic. This prevents 'redefinition' errors 
- * in files that expect volatility.
- */
-typedef volatile u32 OSIntMask;
+typedef u32 OSIntMask;
 #define OS_IM_NONE 0
 
 #define OS_MESG_BLOCK 1
@@ -279,9 +273,9 @@ extern "C" {
 extern u32 osTvType;
 
 /**
- * DYNAMIC FIX: 
- * osClockRate MUST be OSTime (u64) to match the SDK timers 
- * being called by the recompiled assembly logic.
+ * AUTHORITY FIX: 
+ * Locked to OSTime (u64) to match internal N64 assembly logic.
+ * The Purifier script will nuke local 'u32' declarations.
  */
 extern OSTime osClockRate;
 
@@ -291,10 +285,10 @@ extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 
 /**
- * DYNAMIC FIX: 
- * Aligned with the volatile typedef above.
+ * AUTHORITY FIX: 
+ * Explicitly volatile to match high-priority interrupt source files.
  */
-extern OSIntMask __OSGlobalIntMask;
+extern volatile u32 __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
