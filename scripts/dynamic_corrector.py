@@ -94,10 +94,12 @@ def classify_errors(log_data):
         m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
         
+        # [FIX APPLIED]: Broadened to catch ALL variations of "incomplete type" errors
         m_sizeof = "invalid application of 'sizeof'" in line
-        m_ptr = "arithmetic on a pointer to an incomplete type" in line
-        m_array = "array has incomplete element type" in line
-        m_def = "incomplete definition of type" in line
+        m_ptr = "arithmetic on a pointer" in line
+        m_array = "incomplete element type" in line
+        m_def = "incomplete definition" in line
+        m_inc = "incomplete type" in line 
 
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
             pass  
@@ -120,7 +122,7 @@ def classify_errors(log_data):
             categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
         elif m_static and filepath:
             categories["static_conflict"].append((filepath, m_static.group(1)))
-        elif (m_sizeof or m_ptr or m_array or m_def) and filepath:
+        elif (m_sizeof or m_ptr or m_array or m_def or m_inc) and filepath:
             inc_type = extract_incomplete_type(line)
             if inc_type:
                 categories["incomplete_sizeof"].append((filepath, inc_type))
@@ -174,7 +176,6 @@ def apply_fixes():
             cmake_content = f.read()
             
         if "target_link_libraries(" in cmake_content and " m " not in cmake_content:
-            # We locate the target_link_libraries block and dynamically inject the 'm' (math) and 'log' libraries
             cmake_content = re.sub(
                 r'(target_link_libraries\([^)]+)', 
                 r'\1 m log ', 
@@ -461,7 +462,6 @@ def apply_fixes():
     return fixes
 
 def main():
-    # Run the initial script sweep
     apply_fixes()
     
     for i in range(1, 100):
