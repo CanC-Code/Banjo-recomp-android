@@ -3,7 +3,10 @@ import re
 import subprocess
 import time
 
-# [FIX APPLIED]: Added --console=plain and --max-workers=1 to prevent Gradle's logger from OOM crashing during massive error cascades!
+# [FIX APPLIED]: Force Ninja and CMake to run single-threaded to prevent Clang from eating all system RAM!
+os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
+os.environ["NINJAJOBS"] = "-j1"
+
 GRADLE_CMD = [
     "gradle", "-p", "Android", "assembleDebug", 
     "--console=plain", "--max-workers=1", "--no-daemon", 
@@ -329,6 +332,7 @@ def apply_fixes():
     if categories["undeclared_macros"]:
         known_macros = {
             "ADPCMFSIZE": "9",
+            "ADPCMVSIZE": "8", # [FIX APPLIED]: Auto-inject the missing vector size!
         }
         
         if os.path.exists(TYPES_HEADER):
