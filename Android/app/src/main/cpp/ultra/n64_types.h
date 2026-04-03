@@ -44,9 +44,19 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
-/* Fix for N64 PR/sched.h shadowing system sched.h */
+/* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
+#ifdef __cplusplus
+extern "C" {
+#endif
+static inline int bka_sched_yield(void) {
+    return usleep(1);
+}
+#ifdef __cplusplus
+}
+#endif
+
 #ifndef sched_yield
-  #define sched_yield() usleep(1)
+  #define sched_yield bka_sched_yield
 #endif
 
 /**
