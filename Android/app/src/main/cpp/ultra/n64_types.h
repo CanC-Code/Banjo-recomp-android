@@ -17,7 +17,7 @@
 #define _GU_H_
 
 /**
- * 3. CORE N64 SCALARS (Moved to top)
+ * 3. CORE N64 SCALARS (Moved to top for pre-emptive definition)
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -34,7 +34,8 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 4. N64 OS TYPES (FOUNDATION)
+ * 4. N64 OS FOUNDATION TYPES
+ * These must be defined before any system includes to resolve SDK shadowing.
  */
 #define OS_NUM_EVENTS 15
 typedef u32 OSEvent;
@@ -64,8 +65,7 @@ typedef volatile u32 OSIntMask;
 
 /**
  * 5. SYSTEM & SDK INCLUDES
- * Including these after scalars ensures PR/sched.h (if shadowed) 
- * can see the u32 and OSTask definitions.
+ * Scalar types are now defined, so PR/sched.h (if shadowed) will compile.
  */
 #include <sys/types.h>
 #include <stddef.h>
