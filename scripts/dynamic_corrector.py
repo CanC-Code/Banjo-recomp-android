@@ -6,7 +6,6 @@ import time
 GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
-SDK_INCLUDE_DIR = "include"
 
 def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -32,11 +31,7 @@ def apply_fixes():
     file_regex = r"(\S+\.[ch](?:pp)?)"
     CORE_N64 = {"__OSGlobalIntMask", "osClockRate", "osResetType", "osAppNMIBuffer", "Actor", "ActorMarker", "OSContPad"}
 
-    error_lines = [line for line in log_data.split('\n') if "error:" in line]
-    affected_files = set()
-    for line in error_lines:
-        match = re.search(file_regex, line)
-        if match: affected_files.add(match.group(1))
+    affected_files = set([re.search(file_regex, line).group(1) for line in log_data.split('\n') if "error:" in line])
 
     for filepath in affected_files:
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
@@ -50,14 +45,12 @@ def apply_fixes():
                 print(f"  [-] Renamed internal 'close' -> 'bka_close' in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # FIX B: Intelligent Purifier (Purge empty declarations, keep bodies)
-        for symbol in CORE_N64:
-            pattern = rf"^(?:extern|volatile|static|typedef)?\s+[^;{{}}]+\s+{re.escape(symbol)}\b[^;{{}}]*;"
-            match = re.search(pattern, content, re.MULTILINE)
-            if match and '{' not in match.group(0):
-                content = re.sub(pattern, f"/* Authority Strategy Purge: {symbol} */", content, flags=re.MULTILINE)
-                print(f"  [🪠] Purged local redeclaration of {symbol}")
-                fixes += 1
+        # FIX B: Shadowing/Visibility Correction
+        # We ensure n64_types.h is ALWAYS the very first inclusion
+        if 'include "ultra/n64_types.h"' not in content:
+            content = '#include "ultra/n64_types.h"\n' + content
+            print(f"  [+] Injected n64_types.h as priority in {os.path.basename(filepath)}")
+            fixes += 1
 
         # FIX C: 'actor' pointer correction
         if "use of undeclared identifier 'actor'" in log_data and "this" in content:
