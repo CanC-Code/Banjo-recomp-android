@@ -32,17 +32,17 @@ def classify_errors(log_data):
     Values are lists of (filepath, extra_context) tuples where relevant.
     """
     categories = {
-        "missing_n64_types":  [],  # file needs n64_types.h include
-        "actor_pointer":      [],  # 'actor' undeclared in a TU
-        "local_struct_fwd":   [],  # unknown type name for a local struct
-        "libaudio_types":     [],  # Acmd / ADPCM_STATE missing (header-level)
-        "null_float":         [],  # NULL assigned to f32 (header-level)
+        "missing_n64_types":  [],  
+        "actor_pointer":      [],  
+        "local_struct_fwd":   [],  
+        "libaudio_types":     [],  
+        "null_float":         [],  
+        "typedef_redef":      [],  # tuples of (filepath, actual_tag, injected_tag)
+        "static_conflict":    [],  # tuples of (filepath, func_name)
         "unknown":            [],
     }
 
     # ── Header-level traps ────────────────────────────────────────────────
-    # These originate inside shared headers, not individual TUs.
-    # Looping cannot fix them; they require n64_types.h changes.
     libaudio_patterns = [
         r"libaudio\.h.*unknown type name 'Acmd'",
         r"libaudio\.h.*unknown type name 'ADPCM_STATE'",
@@ -51,14 +51,11 @@ def classify_errors(log_data):
         if re.search(pattern, log_data):
             categories["libaudio_types"].append(pattern)
 
-    # NULL → f32 errors come from stddef.h redefining NULL as (void*)0
-    # after n64_types.h; the fix is in n64_types.h, not per-TU.
     if re.search(r"initializing 'f32'.*incompatible type 'void \*'", log_data):
         categories["null_float"].append("NULL=(void*)0 assigned to f32 field")
 
     # ── Per-file error parsing ─────────────────────────────────────────────
     file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
-    # Map filepath → set of unknown type names from that file
     local_struct_map = {}
 
     for line in log_data.split('\n'):
@@ -68,39 +65,44 @@ def classify_errors(log_data):
         match = re.search(file_regex, line)
         filepath = match.group(1) if match else None
 
-        # Skip NDK/sysroot headers — we can't patch those
+        # Skip NDK/sysroot headers
         if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
             filepath = None
 
+        m_redef = re.search(r"typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", line)
+        m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
+        m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
+
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
-            pass  # already captured at header level
-
+            pass  
         elif "initializing 'f32'" in line and "void *" in line:
-            pass  # already captured at header level
-
+            pass  
         elif "use of undeclared identifier 'actor'" in line and filepath:
             categories["actor_pointer"].append(filepath)
-
+        elif m_redef:
+            if filepath:
+                categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
+        elif m_static:
+            if filepath:
+                categories["static_conflict"].append((filepath, m_static.group(1)))
+        elif m_unknown:
+            type_name = m_unknown.group(1)
+            if filepath:
+                local_struct_map.setdefault(filepath, set()).add(type_name)
+            else:
+                categories["unknown"].append(line.strip())
+        elif filepath and os.path.exists(filepath):
+            categories["missing_n64_types"].append(filepath)
         else:
-            m = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
-            if m:
-                type_name = m.group(1)
-                if filepath:
-                    local_struct_map.setdefault(filepath, set()).add(type_name)
-                else:
-                    categories["unknown"].append(line.strip())
-            elif filepath and os.path.exists(filepath):
-                categories["missing_n64_types"].append(filepath)
-            elif line.strip():
+            if line.strip():
                 categories["unknown"].append(line.strip())
 
-    # Resolve local_struct_map into actionable entries.
+    # Resolve local_struct_map
     known_global_types = {
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
         "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
         "Actor", "ActorMarker",
-        # scalars
         "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
         "f32", "f64", "n64_bool", "OSPri", "OSId",
     }
@@ -120,17 +122,12 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── HALT: header-level libaudio type errors ───────────────────────────
     if categories["libaudio_types"]:
         print("\n🛑 HEADER-LEVEL ERRORS in libaudio.h:")
-        print("   → unknown type name 'Acmd' and/or 'ADPCM_STATE'")
-        print("   Fix required in n64_types.h: add stubs before #include <PR/libaudio.h>")
         return -1
 
-    # ── HALT: NULL→f32 errors (header-level) ─────────────────────────────
     if categories["null_float"]:
         print("\n🛑 HEADER-LEVEL ERROR: NULL=(void*)0 assigned to f32 fields.")
-        print("   Fix required in n64_types.h: redefine NULL to 0 before system includes.")
         return -1
 
     # ── FIX A: Priority inclusion of n64_types.h ─────────────────────────
@@ -171,7 +168,6 @@ def apply_fixes():
 
     # ── FIX C: Local struct forward declaration injection ─────────────────
     if categories["local_struct_fwd"]:
-        # Group by file
         file_to_types = {}
         for filepath, type_name in categories["local_struct_fwd"]:
             file_to_types.setdefault(filepath, set()).add(type_name)
@@ -184,13 +180,8 @@ def apply_fixes():
             
             fwd_lines = []
             for t in sorted(type_names):
-                # Derive tag: strip leading 's'/'S' prefix for tag name
                 tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
-                
-                # Build the complete typedef string
                 fwd_decl = f"typedef struct {tag}_s {t};"
-                
-                # [FIX APPLIED]: Simply check if this exact declaration is missing from the file
                 if fwd_decl not in content:
                     fwd_lines.append(fwd_decl)
 
@@ -200,8 +191,51 @@ def apply_fixes():
                 content = injection + content
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into "
-                      f"{os.path.basename(filepath)}")
+                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                fixes += 1
+
+    # ── FIX D: Typedef Redefinition (Resolving mismatched tags) ───────────
+    if categories["typedef_redef"]:
+        for filepath, actual_tag, injected_tag in set(categories["typedef_redef"]):
+            if not os.path.exists(filepath):
+                continue
+            with open(filepath, "r") as f:
+                content = f.read()
+            original = content
+            
+            # Rewrite the incorrect injected tag to match the actual tag found in the file
+            if "anonymous" in actual_tag:
+                content = content.replace("typedef struct {", f"typedef struct {injected_tag} {{", 1)
+            else:
+                content = content.replace(f"struct {injected_tag} ", f"struct {actual_tag} ")
+                content = content.replace(f"struct {injected_tag};", f"struct {actual_tag};")
+                
+            if content != original:
+                with open(filepath, "w") as f:
+                    f.write(content)
+                print(f"  [🛠️] Harmonized typedef tag from {injected_tag} to {actual_tag} in {os.path.basename(filepath)}")
+                fixes += 1
+
+    # ── FIX E: Static Function Conflict (Resolving close() collision) ──────
+    if categories["static_conflict"]:
+        for filepath, func_name in set(categories["static_conflict"]):
+            if not os.path.exists(filepath):
+                continue
+            with open(filepath, "r") as f:
+                content = f.read()
+            original = content
+            
+            # Use preprocessor macro to safely rename the function locally without breaking code
+            macro_fix = f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{func_name}\n"
+            if macro_fix not in content:
+                if '#include "ultra/n64_types.h"' in content:
+                    content = content.replace('#include "ultra/n64_types.h"', f'#include "ultra/n64_types.h"{macro_fix}')
+                else:
+                    content = macro_fix + content
+                
+                with open(filepath, "w") as f:
+                    f.write(content)
+                print(f"  [🛠️] Protected local function '{func_name}' via macro in {os.path.basename(filepath)}")
                 fixes += 1
 
     # ── UNKNOWN errors: report but don't fix ─────────────────────────────
