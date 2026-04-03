@@ -27,7 +27,7 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Robust regex for paths starting from root
+    # Robust regex for paths starting from root; handles files without extensions (STL headers)
     file_regex = r"(/[^:\s]+):"
     
     affected_files = set()
@@ -36,7 +36,7 @@ def apply_fixes():
             match = re.search(file_regex, line.strip())
             if match:
                 filepath = match.group(1)
-                # Ignore system headers
+                # Ignore system headers and STL files without extensions
                 if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
                     affected_files.add(filepath)
 
@@ -61,7 +61,7 @@ def apply_fixes():
             print(f"  [+] Forced n64_types.h priority in {os.path.basename(filepath)}")
             fixes += 1
 
-        # FIX: 'actor' pointer correction
+        # FIX: 'actor' pointer correction for recompiled character logic
         if "use of undeclared identifier 'actor'" in log_data and "this" in content:
             if "Actor *actor =" not in content:
                 content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
