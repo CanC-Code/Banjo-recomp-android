@@ -82,7 +82,6 @@ def classify_errors(log_data):
             categories["actor_pointer"].append(filepath)
 
         else:
-            # [FIX APPLIED]: Removed the walrus (:=) operator for compatibility 
             m = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
             if m:
                 type_name = m.group(1)
@@ -182,19 +181,18 @@ def apply_fixes():
                 continue
             with open(filepath, "r") as f:
                 content = f.read()
-            original = content
-
+            
             fwd_lines = []
             for t in sorted(type_names):
-                # Only inject if not already declared in this file
-                if f"typedef struct" not in content or t not in content.split("typedef struct")[0]:
-                    
-                    # Properly targets the substring after 's' or 'S'
-                    tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
-                    
-                    fwd_decl = f"typedef struct {tag}_s {t};"
-                    if fwd_decl not in content:
-                        fwd_lines.append(fwd_decl)
+                # Derive tag: strip leading 's'/'S' prefix for tag name
+                tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
+                
+                # Build the complete typedef string
+                fwd_decl = f"typedef struct {tag}_s {t};"
+                
+                # [FIX APPLIED]: Simply check if this exact declaration is missing from the file
+                if fwd_decl not in content:
+                    fwd_lines.append(fwd_decl)
 
             if fwd_lines:
                 injection = "/* AUTO: forward declarations */\n" + \
