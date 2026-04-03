@@ -35,8 +35,6 @@ typedef s32 OSId;
 
 /**
  * 4. SYSTEM INCLUDES & THREADING POLYFILL
- * Authority Strategy: We define sched_yield manually to bypass the 
- * shadowing caused by the N64 SDK's sched.h.
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -45,10 +43,11 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
+/* Authority Strategy: Manually declare sched_yield to bypass shadowing */
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Real inline function to satisfy both C and C++ logic (handles ::sched_yield) */
+// Use usleep as a polyfill for yielding on Android
 static inline int bka_sched_yield(void) { return usleep(1); }
 #ifdef __cplusplus
 }
@@ -116,20 +115,14 @@ struct OSThread_s {
     struct OSThread_s *tlprev;
 };
 
-typedef volatile u32 OSIntMask;
-#define OS_IM_NONE 0
-#define OS_MESG_BLOCK 1
-#define OS_MESG_NOBLOCK 0
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern u32 osTvType;
 extern OSTime osClockRate;
-extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
-extern OSIntMask __OSGlobalIntMask;
+extern volatile u32 __OSGlobalIntMask;
 
 #include <PR/libaudio.h>
 #include <PR/os_cont.h>
