@@ -94,7 +94,6 @@ def classify_errors(log_data):
         m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
         
-        # [FIX APPLIED]: Broadened to catch ALL variations of "incomplete type" errors
         m_sizeof = "invalid application of 'sizeof'" in line
         m_ptr = "arithmetic on a pointer" in line
         m_array = "incomplete element type" in line
@@ -138,6 +137,7 @@ def classify_errors(log_data):
             if line.strip():
                 categories["unknown"].append(line.strip())
 
+    # [FIX APPLIED]: Added OSHWIntr to known global types so it is NEVER treated as a struct
     known_global_types = {
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
@@ -145,6 +145,7 @@ def classify_errors(log_data):
         "Actor", "ActorMarker",
         "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
         "f32", "f64", "n64_bool", "OSPri", "OSId",
+        "OSHWIntr"
     }
     for filepath, type_names in local_struct_map.items():
         for t in type_names:
@@ -362,6 +363,7 @@ def apply_fixes():
             "UNITY_PITCH": "32768.0f",
             "OSIntMask": "u32",
             "OS_IM_NONE": "0",
+            "OSHWIntr": "u32" # [FIX APPLIED]: Added the correct declaration for OSHWIntr!
         }
         
         if os.path.exists(TYPES_HEADER):
