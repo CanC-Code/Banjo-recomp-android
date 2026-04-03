@@ -3,7 +3,7 @@ import re
 import subprocess
 import time
 
-# [FIX APPLIED]: Force Ninja and CMake to run single-threaded to prevent Clang from eating all system RAM!
+# Force Ninja and CMake to run single-threaded to prevent Clang from eating all system RAM
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -14,6 +14,8 @@ GRADLE_CMD = [
 ]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
+# NEW: A file to hold our auto-generated empty functions
+STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
 def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -46,6 +48,7 @@ def classify_errors(log_data):
         "incomplete_sizeof":  [],
         "undeclared_macros":  [], 
         "implicit_func":      [], 
+        "undefined_symbols":  [], # NEW: Catches linker errors
         "unknown":            [],
     }
 
@@ -73,7 +76,7 @@ def classify_errors(log_data):
         return None
 
     for line in log_data.split('\n'):
-        if "error:" not in line:
+        if "error:" not in line and "undefined reference" not in line and "undefined symbol" not in line:
             continue
 
         match = re.search(file_regex, line)
@@ -88,6 +91,10 @@ def classify_errors(log_data):
         m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
         
+        # [NEW]: Linker error regex catchers
+        m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
+        m_undef_sym = re.search(r"undefined symbol: (.*)", line)
+        
         m_sizeof = "invalid application of 'sizeof'" in line
         m_ptr = "arithmetic on a pointer to an incomplete type" in line
         m_array = "array has incomplete element type" in line
@@ -100,6 +107,12 @@ def classify_errors(log_data):
             pass  
         elif "initializing 'f32'" in line and "void *" in line:
             pass  
+        elif m_undef_ref:
+            categories["undefined_symbols"].append(m_undef_ref.group(1).strip())
+        elif m_undef_sym:
+            # Clean up C++ mangled names if present, or strip quotes
+            sym = m_undef_sym.group(1).replace("'", "").strip()
+            categories["undefined_symbols"].append(sym)
         elif m_implicit:
             categories["implicit_func"].append(m_implicit.group(1))
         elif m_ident:
@@ -332,7 +345,7 @@ def apply_fixes():
     if categories["undeclared_macros"]:
         known_macros = {
             "ADPCMFSIZE": "9",
-            "ADPCMVSIZE": "8", # [FIX APPLIED]: Auto-inject the missing vector size!
+            "ADPCMVSIZE": "8", 
         }
         
         if os.path.exists(TYPES_HEADER):
@@ -382,6 +395,45 @@ def apply_fixes():
                 with open(TYPES_HEADER, "w") as f:
                     f.write(types_content)
                 fixes += 1
+
+    # ── FIX I: Auto-Generate Linker Stubs ──────────────────────────────
+    if categories["undefined_symbols"]:
+        stubs_added = False
+        
+        # Create the stubs file if it doesn't exist
+        if not os.path.exists(STUBS_FILE):
+            os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
+            with open(STUBS_FILE, "w") as f:
+                f.write('#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
+            
+            # Make sure CMake compiles the stubs file!
+            cmake_file = "Android/app/src/main/cpp/CMakeLists.txt"
+            if os.path.exists(cmake_file):
+                with open(cmake_file, "r") as f:
+                    cmake_content = f.read()
+                if "ultra/n64_stubs.c" not in cmake_content:
+                    cmake_content = cmake_content.replace("add_library(", "add_library(\n        ultra/n64_stubs.c")
+                    with open(cmake_file, "w") as f:
+                        f.write(cmake_content)
+
+        with open(STUBS_FILE, "r") as f:
+            existing_stubs = f.read()
+            
+        for sym in set(categories["undefined_symbols"]):
+            # Ignore standard C++ mangled things, just focus on C functions
+            if sym.startswith("_Z") or "vtable" in sym:
+                continue
+                
+            stub_code = f"long long int {sym}() {{ return 0; }}\n"
+            if f" {sym}(" not in existing_stubs:
+                existing_stubs += stub_code
+                stubs_added = True
+                print(f"  [🛠️] Generated linker stub for missing N64 function '{sym}'")
+                
+        if stubs_added:
+            with open(STUBS_FILE, "w") as f:
+                f.write(existing_stubs)
+            fixes += 1
 
     # ── UNKNOWN errors: report but don't fix ─────────────────────────────
     if categories["unknown"] and fixes == 0:
