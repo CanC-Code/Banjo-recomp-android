@@ -8,7 +8,7 @@ LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
 def strip_ansi(text):
-    """Removes terminal color codes that hide errors from regex."""
+    """Removes terminal color codes that make errors invisible to regex."""
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
@@ -29,49 +29,48 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
+    # Capture filenames more broadly to catch all paths
+    file_regex = r"(\S+\.[ch](?:pp)?)"
     
-    # Core types that MUST be managed by the header, not the source files
+    # 1. THE CORE ENFORCEMENT LIST
+    # These symbols MUST only exist in n64_types.h
     CORE_N64 = {
-        "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
-        "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "OSIntMask",
         "__OSGlobalIntMask", "osClockRate", "osResetType", "osAppNMIBuffer",
-        "Gfx", "Acmd", "Vtx", "Mtx", "Actor"
+        "OSIntMask", "OSTime", "OSMesgQueue", "OSThread", "Actor", "sChVegetable"
     }
 
-    # Extract all error patterns
-    type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
-    id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
-    close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
-    # Catch: redefinition of 'X' with a different type: 'A' vs 'B'
-    redef_type_errs = re.findall(file_regex + r":\d+:\d+: error: redefinition of '([^']+)' with a different type", log_data)
-
-    affected_files = set([e[0] for e in re.findall(file_regex + r":\d+:\d+: error:", log_data)])
+    # 2. MATCH ALL ERRORS (Redefinitions, Mismatches, Namespace Collisions)
+    # We look for the word 'error:' regardless of surrounding color codes
+    error_blocks = re.findall(file_regex + r":\d+:\d+: error: (.*)", log_data)
+    
+    affected_files = set([re.search(file_regex, line).group(1) for line in log_data.split('\n') if "error:" in line])
 
     for filepath in affected_files:
         if not os.path.exists(filepath) or "/usr/include" in filepath: continue
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # 1. PURIFIER: Force local source files to stop defining core variables
-        for symbol in CORE_N64:
-            # Matches: extern volatile u32 __OSGlobalIntMask; etc.
-            pattern = rf"^(?:extern|volatile|static|typedef)?\s+[^;{{}}]+\s+{re.escape(symbol)}\b[^;{{}}]*;"
-            if re.search(pattern, content, re.MULTILINE):
-                content = re.sub(pattern, f"/* Purified local redeclaration of {symbol} */", content, flags=re.MULTILINE)
-                print(f"  [🪠] Purged local '{symbol}' in {os.path.basename(filepath)}")
-                fixes += 1
-
-        # 2. NAMESPACE FIX: Resolve the 'close' conflict in lockup.c
-        if "close" in str(log_data) and ("lockup.c" in filepath or "castle.c" in filepath):
+        # FIX A: The 'close' Namespace Collision (lockup.c, castle.c, etc)
+        # We rename the game's internal 'close' to 'bka_close' to avoid POSIX conflicts
+        if "declaration of 'close' follows non-static" in log_data or "lockup.c" in filepath:
             if "bka_close" not in content:
                 content = re.sub(r'\bclose\b', 'bka_close', content)
-                print(f"  [-] Renamed internal 'close' to 'bka_close' in {os.path.basename(filepath)}")
+                print(f"  [🔀] Renamed game-internal 'close' -> 'bka_close' in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 3. HEADER INJECTION: Ensure master header is included
+        # FIX B: The 'Authority' Purifier
+        # Comment out local source declarations of symbols managed by the master header
+        for symbol in CORE_N64:
+            pattern = rf"^(?:extern|volatile|static|typedef)?\s+[^;{{}}]+\s+{re.escape(symbol)}\b[^;{{}}]*;"
+            if re.search(pattern, content, re.MULTILINE):
+                content = re.sub(pattern, f"/* Purged by Authority Strategy: {symbol} */", content, flags=re.MULTILINE)
+                print(f"  [🪠] Purged local '{symbol}' declaration in {os.path.basename(filepath)}")
+                fixes += 1
+
+        # FIX C: Missing Header Injection
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
+            print(f"  [+] Injected n64_types.h into {os.path.basename(filepath)}")
             fixes += 1
 
         if content != original_content:
@@ -87,6 +86,10 @@ def main():
             return
         if apply_fixes() == 0:
             print("\n🛑 Loop halted. No fixable patterns found.")
+            # If we halt, show the first unhandled error to the user
+            unhandled = re.findall(r"error: (.*)", log_data)
+            if unhandled:
+                print(f"  [!] First unhandled error: {unhandled[0]}")
             break
         time.sleep(1)
 
