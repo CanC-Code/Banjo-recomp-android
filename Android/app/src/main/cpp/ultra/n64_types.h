@@ -17,7 +17,18 @@
 #define _GU_H_
 
 /**
- * 3. CORE N64 SCALARS
+ * 3. SYSTEM & SDK INCLUDES (Foundation)
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <math.h>
+#include <unistd.h>
+#include <sched.h>  // Authority for sched_yield
+
+/**
+ * 4. CORE N64 SCALARS
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -34,7 +45,7 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 4. N64 OS TYPES (FOUNDATION)
+ * 5. N64 OS TYPES (FOUNDATION)
  */
 #define OS_NUM_EVENTS 15
 typedef u32 OSEvent;
@@ -63,7 +74,7 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_NOBLOCK 0
 
 /**
- * 5. OS STRUCTURES
+ * 6. OS STRUCTURES
  */
 typedef struct {
     u64 at, v0, v1, a0, a1, a2, a3;
@@ -139,13 +150,13 @@ typedef struct {
 } OSIoMesg;
 
 /**
- * 6. INPUT Foundation
+ * 7. INPUT Foundation
  */
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
 /**
- * 7. GRAPHICS TYPES
+ * 8. GRAPHICS & SDK TYPES
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -170,36 +181,20 @@ extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
+
+#include <PR/libaudio.h>
+#include <PR/os_cont.h>
 #ifdef __cplusplus
 }
 #endif
 
 /**
- * 8. GAME-SPECIFIC TAG HARMONIZATION
+ * 9. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
 typedef struct ch_vegatable sChVegetable;
 typedef struct LetterFloorTile LetterFloorTile;
 typedef struct ActorLocal_Lockup ActorLocal_Lockup;
-
-/**
- * 9. SYSTEM & SDK INCLUDES
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <math.h>
-#include <unistd.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-#include <PR/libaudio.h>
-#include <PR/os_cont.h>
-#ifdef __cplusplus
-}
-#endif
 
 #endif
