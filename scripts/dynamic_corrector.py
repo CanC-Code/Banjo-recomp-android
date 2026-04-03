@@ -5,7 +5,6 @@ import time
 
 GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
 LOG_FILE = "Android/full_build_log.txt"
-TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
 def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -28,46 +27,27 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Robust regex to capture full paths even without extensions
+    # Robust regex for paths
     file_regex = r"(/[^:\s]+):"
     
-    CORE_N64 = {"__OSGlobalIntMask", "osClockRate", "osResetType", "osAppNMIBuffer", "Actor", "ActorMarker", "OSContPad"}
-
     affected_files = set()
     for line in log_data.split('\n'):
         if "error:" in line:
-            match = re.search(file_regex, line.strip())
+            match = re.search(file_regex, line)
             if match:
-                filepath = match.group(1)
-                # Ignore system/NDK headers for correction
-                if os.path.exists(filepath) and "/usr/include" not in filepath and "ndk" not in filepath:
-                    affected_files.add(filepath)
+                path = match.group(1)
+                # Only fix files that are actually in our work directory
+                if os.path.exists(path) and "Banjo-recomp-android" in path:
+                    affected_files.add(path)
 
     for filepath in affected_files:
-        try:
-            with open(filepath, "r") as f: content = f.read()
-        except: continue
-        
+        with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # FIX: The 'close' Conflict
-        if "follows non-static declaration" in log_data or "lockup.c" in filepath:
-            if "bka_close" not in content:
-                content = re.sub(r'\bclose\b', 'bka_close', content)
-                print(f"  [-] Renamed 'close' -> 'bka_close' in {os.path.basename(filepath)}")
-                fixes += 1
-
-        # FIX: Priority Injection
+        # Apply injections
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
             fixes += 1
-
-        # FIX: 'actor' pointer correction
-        if "use of undeclared identifier 'actor'" in log_data and "this" in content:
-            if "Actor *actor =" not in content:
-                content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
-                print(f"  [🛠️] Injected 'actor' pointer into {os.path.basename(filepath)}")
-                fixes += 1
 
         if content != original_content:
             with open(filepath, "w") as f: f.write(content)
