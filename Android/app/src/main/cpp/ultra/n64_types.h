@@ -71,7 +71,7 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_NOBLOCK 0
 
 /**
- * 5. OS STRUCTURES (CRITICAL RESTORATION)
+ * 5. OS STRUCTURES
  */
 typedef struct {
     u64 at, v0, v1, a0, a1, a2, a3;
@@ -147,7 +147,15 @@ typedef struct {
 } OSIoMesg;
 
 /**
- * 6. GRAPHICS & AUDIO TYPES
+ * 6. INPUT & AUDIO Foundation
+ */
+typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
+typedef struct { u16 type; u8 status, errno; } OSContStatus;
+typedef struct { u8 *base, *cur; s32 len, count; } ALHeap;
+typedef struct { void *drvr; ALHeap *heap; } ALGlobals;
+
+/**
+ * 7. GRAPHICS TYPES
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -174,12 +182,18 @@ extern OSIntMask __OSGlobalIntMask;
 #endif
 
 /**
- * 7. GAME-SPECIFIC BASE TYPES
+ * 8. GAME-SPECIFIC TAG HARMONIZATION
+ * We use the exact struct tags found in 'prop.h' (actor_s, actorMarker_s)
+ * to prevent redefinition conflicts.
  */
-typedef struct Actor Actor;
-typedef struct ActorMarker ActorMarker;
+typedef struct actor_s Actor;
+typedef struct actorMarker_s ActorMarker;
 typedef struct ch_vegatable sChVegetable;
+typedef struct LetterFloorTile LetterFloorTile;
 
+/**
+ * 9. SYSTEM INCLUDES
+ */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
