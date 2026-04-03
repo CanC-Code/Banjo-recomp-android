@@ -71,18 +71,90 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_NOBLOCK 0
 
 /**
- * 5. GRAPHICS & AUDIO TYPES
+ * 5. OS STRUCTURES (CRITICAL RESTORATION)
+ */
+typedef struct {
+    u64 at, v0, v1, a0, a1, a2, a3;
+    u64 t0, t1, t2, t3, t4, t5, t6, t7;
+    u64 s0, s1, s2, s3, s4, s5, s6, s7;
+    u64 t8, t9, k0, k1, gp, sp, s8, ra;
+    u64 lo, hi, pc;
+    union { u32 sr; u32 status; }; 
+    u32 cause, badvaddr, rcp;
+    u32 fpcsr;
+    f64 fp0,  fp2,  fp4,  fp6,  fp8, fp10, fp12, fp14;
+    f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
+} CPUState;
+
+typedef struct OSMesgQueue_s {
+    struct OSThread_s *mtqueue;
+    struct OSThread_s *fullqueue;
+    s32 validCount;
+    s32 first;
+    s32 msgCount;
+    OSMesg *msg;
+} OSMesgQueue;
+
+typedef struct OSTimer_s {
+    struct OSTimer_s *next;
+    struct OSTimer_s *prev;
+    u64 interval;
+    u64 value;
+    OSMesgQueue *mq;
+    OSMesg msg;
+} OSTimer;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri priority;
+    struct OSMesgQueue_s *queue;
+    OSMesg msg;
+    u32 contextId;
+    u32 state;
+    u32 flags;
+    OSId id;
+    int fp;
+    CPUState context;
+    struct OSThread_s *tlnext; 
+    struct OSThread_s *tlprev;
+} OSThread;
+
+typedef struct {
+    u16 type;
+    u8 pri;
+    u8 cmp;
+    OSMesgQueue *retQueue;
+} OSIoMesgHdr;
+
+typedef struct OSPiHandle_s {
+    struct OSPiHandle_s *next;
+    u8 type;
+    u8 latency;
+    u8 pageSize;
+    u8 relDuration;
+    u8 pulse;
+    u8 domain;
+    u32 baseAddress;
+    u32 speed;
+} OSPiHandle;
+
+typedef struct {
+    OSIoMesgHdr hdr;
+    void *dramAddr;
+    u32 devAddr;
+    u32 size;
+    OSPiHandle *piHandle; 
+} OSIoMesg;
+
+/**
+ * 6. GRAPHICS & AUDIO TYPES
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
-
 typedef s16 ADPCM_STATE[16];
 typedef s16 POLEF_STATE[16];
 typedef s16 RESAMPLE_STATE[16];
 typedef s16 ENVMIX_STATE[40];
-
-#define ADPCMFSIZE 9
-#define ADPCMVSIZE 8
 
 typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
@@ -97,24 +169,17 @@ extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 extern OSIntMask __OSGlobalIntMask;
-
-extern void guMtxIdentF(float mf[4][4]);
-extern void guMtxF2L(float mf[4][4], Mtx *m);
-
 #ifdef __cplusplus
 }
 #endif
 
 /**
- * 6. GAME-SPECIFIC BASE TYPES
+ * 7. GAME-SPECIFIC BASE TYPES
  */
 typedef struct Actor Actor;
 typedef struct ActorMarker ActorMarker;
 typedef struct ch_vegatable sChVegetable;
 
-/**
- * 7. SYSTEM INCLUDES
- */
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdint.h>
