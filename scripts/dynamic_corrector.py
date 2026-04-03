@@ -27,7 +27,7 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Robust regex for paths
+    # Robust regex for paths; handles files without extensions (STL headers)
     file_regex = r"(/[^:\s]+):"
     
     affected_files = set()
@@ -35,22 +35,38 @@ def apply_fixes():
         if "error:" in line:
             match = re.search(file_regex, line.strip())
             if match:
-                path = match.group(1)
-                # Only fix files that exist in our project space
-                if os.path.exists(path) and "ndk" not in path and "/usr/include" not in path:
-                    affected_files.add(path)
+                filepath = match.group(1)
+                # Only attempt to fix files that are in our project space
+                if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
+                    affected_files.add(filepath)
 
     for filepath in affected_files:
         try:
             with open(filepath, "r") as f: content = f.read()
-        except: continue
+        except Exception:
+            continue
         
         original_content = content
 
-        # FIX: Priority Injection (Ensures n64_types.h is ALWAYS the first line)
+        # FIX: The 'close' Conflict
+        if "follows non-static declaration" in log_data or "lockup.c" in filepath:
+            if "bka_close" not in content:
+                content = re.sub(r'\bclose\b', 'bka_close', content)
+                print(f"  [-] Renamed internal 'close' -> 'bka_close' in {os.path.basename(filepath)}")
+                fixes += 1
+
+        # FIX: Priority Injection (Ensures n64_types.h is the VERY first include)
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
+            print(f"  [+] Forced n64_types.h priority in {os.path.basename(filepath)}")
             fixes += 1
+
+        # FIX: 'actor' pointer correction for recompiled character logic
+        if "use of undeclared identifier 'actor'" in log_data and "this" in content:
+            if "Actor *actor =" not in content:
+                content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
+                print(f"  [🛠️] Injected 'actor' pointer into {os.path.basename(filepath)}")
+                fixes += 1
 
         if content != original_content:
             with open(filepath, "w") as f: f.write(content)
