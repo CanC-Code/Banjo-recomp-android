@@ -15,6 +15,7 @@ GRADLE_CMD = [
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
+CMAKE_FILE = "Android/app/src/main/cpp/CMakeLists.txt"
 
 def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -98,9 +99,6 @@ def classify_errors(log_data):
         m_array = "array has incomplete element type" in line
         m_def = "incomplete definition of type" in line
 
-        if "redefinition of" in line and filepath:
-            pass
-
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
             pass  
         elif "initializing 'f32'" in line and "void *" in line:
@@ -169,6 +167,23 @@ def apply_fixes():
     if categories["null_float"]:
         print("\n🛑 HEADER-LEVEL ERROR: NULL=(void*)0 assigned to f32 fields.")
         return -1
+
+    # ── FIX J: Ensure Android NDK Linker Libraries are present ────────────
+    if os.path.exists(CMAKE_FILE):
+        with open(CMAKE_FILE, "r") as f:
+            cmake_content = f.read()
+            
+        if "target_link_libraries(" in cmake_content and " m " not in cmake_content:
+            # We locate the target_link_libraries block and dynamically inject the 'm' (math) and 'log' libraries
+            cmake_content = re.sub(
+                r'(target_link_libraries\([^)]+)', 
+                r'\1 m log ', 
+                cmake_content
+            )
+            with open(CMAKE_FILE, "w") as f:
+                f.write(cmake_content)
+            print("  [🛠️] Injected Android NDK standard libraries (m, log) into CMakeLists.txt")
+            fixes += 1
 
     # ── FIX 0: Header Protection ───────────────────────────────────────────
     if os.path.exists(TYPES_HEADER):
@@ -343,7 +358,6 @@ def apply_fixes():
         known_macros = {
             "ADPCMFSIZE": "9",
             "ADPCMVSIZE": "8", 
-            # [FIX APPLIED]: Auto-inject newly discovered N64 definitions!
             "UNITY_PITCH": "32768.0f",
             "OSIntMask": "u32",
             "OS_IM_NONE": "0",
@@ -392,7 +406,6 @@ def apply_fixes():
                     includes_added = True
                     print(f"  [🛠️] Injected {header_to_add} into n64_types.h to fix implicit '{func}'")
                 elif not header_to_add:
-                    # [FIX APPLIED]: Automatically declare unknown system functions directly in the header!
                     decl = f"\nlong long int {func}();\n"
                     if decl not in types_content and f" {func}(" not in types_content:
                         types_content += decl
@@ -413,13 +426,12 @@ def apply_fixes():
             with open(STUBS_FILE, "w") as f:
                 f.write('#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
             
-            cmake_file = "Android/app/src/main/cpp/CMakeLists.txt"
-            if os.path.exists(cmake_file):
-                with open(cmake_file, "r") as f:
+            if os.path.exists(CMAKE_FILE):
+                with open(CMAKE_FILE, "r") as f:
                     cmake_content = f.read()
                 if "ultra/n64_stubs.c" not in cmake_content:
-                    cmake_content = cmake_content.replace("add_library(", "add_library(\n        ultra/n64_stubs.c")
-                    with open(cmake_file, "w") as f:
+                    cmake_content = cmake_content.replace("add_library(", "add_library(\n        ultra/n64_stubs.c\n")
+                    with open(CMAKE_FILE, "w") as f:
                         f.write(cmake_content)
 
         with open(STUBS_FILE, "r") as f:
@@ -449,10 +461,13 @@ def apply_fixes():
     return fixes
 
 def main():
+    # Run the initial script sweep
+    apply_fixes()
+    
     for i in range(1, 100):
         print(f"\n--- Cycle {i} ---")
         if run_build():
-            print("\n✅ Build Successful!")
+            print("\n✅ Build Successful! You have an APK!")
             return
 
         result = apply_fixes()
