@@ -3,7 +3,8 @@ import re
 import subprocess
 import time
 
-GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
+# [FIX APPLIED]: Added -Dorg.gradle.jvmargs=-Xmx4g to give Gradle enough memory to prevent OOM crashes!
+GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace", "-Dorg.gradle.jvmargs=-Xmx4g"]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
@@ -39,6 +40,7 @@ def classify_errors(log_data):
         "typedef_redef":      [],  
         "static_conflict":    [],  
         "incomplete_sizeof":  [],
+        "undeclared_macros":  [], # NEW: Catches missing N64 constants
         "unknown":            [],
     }
 
@@ -78,6 +80,7 @@ def classify_errors(log_data):
         m_redef = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
         m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
+        m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         
         m_sizeof = "invalid application of 'sizeof'" in line
         m_ptr = "arithmetic on a pointer to an incomplete type" in line
@@ -88,8 +91,12 @@ def classify_errors(log_data):
             pass  
         elif "initializing 'f32'" in line and "void *" in line:
             pass  
-        elif "use of undeclared identifier 'actor'" in line and filepath:
-            categories["actor_pointer"].append(filepath)
+        elif m_ident:
+            ident = m_ident.group(1)
+            if ident == "actor" and filepath:
+                categories["actor_pointer"].append(filepath)
+            else:
+                categories["undeclared_macros"].append(ident)
         elif m_redef and filepath:
             categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
         elif m_static and filepath:
@@ -221,7 +228,6 @@ def apply_fixes():
             tag1 = t1_match.group(1) if t1_match else None
             tag2 = t2_match.group(1) if t2_match else None
 
-            # [FIX APPLIED]: Handle named struct mismatches (e.g. 'chVegetable_s' vs 'ch_vegatable')
             if tag1 and tag2 and tag1 != tag2:
                 lines = content.split('\n')
                 for i, line in enumerate(lines):
@@ -234,7 +240,6 @@ def apply_fixes():
                         break
                 content = '\n'.join(lines)
             
-            # Fallback for anonymous structs
             elif tag1 or tag2:
                 tag = tag1 or tag2
                 lines = content.split('\n')
@@ -294,6 +299,31 @@ def apply_fixes():
                 with open(filepath, "w") as f:
                     f.write(content)
                 print(f"  [🛠️] Protected local function '{func_name}' via macro in {os.path.basename(filepath)}")
+                fixes += 1
+
+    # ── FIX G: Missing SDK Macros (e.g. ADPCMFSIZE) ────────────────────────
+    if categories["undeclared_macros"]:
+        known_macros = {
+            "ADPCMFSIZE": "9",
+            # We can easily add other missing N64 constants here if they pop up!
+        }
+        
+        if os.path.exists(TYPES_HEADER):
+            with open(TYPES_HEADER, "r") as f:
+                types_content = f.read()
+            
+            macros_added = False
+            for macro in set(categories["undeclared_macros"]):
+                if macro in known_macros:
+                    macro_def = f"\n#ifndef {macro}\n#define {macro} {known_macros[macro]}\n#endif\n"
+                    if f"#define {macro}" not in types_content:
+                        types_content += macro_def
+                        macros_added = True
+                        print(f"  [🛠️] Injected missing SDK macro '{macro}' into n64_types.h")
+            
+            if macros_added:
+                with open(TYPES_HEADER, "w") as f:
+                    f.write(types_content)
                 fixes += 1
 
     # ── UNKNOWN errors: report but don't fix ─────────────────────────────
