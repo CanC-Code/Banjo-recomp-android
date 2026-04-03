@@ -27,7 +27,7 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Robust regex for paths that may lack extensions (STL internal headers)
+    # Robust regex to capture full paths even without extensions (STL headers)
     file_regex = r"(/[^:\s]+):"
     
     affected_files = set()
@@ -35,10 +35,10 @@ def apply_fixes():
         if "error:" in line:
             match = re.search(file_regex, line.strip())
             if match:
-                path = match.group(1)
+                filepath = match.group(1)
                 # Only fix project files, ignore system/NDK headers
-                if os.path.exists(path) and "ndk" not in path and "/usr/include" not in path:
-                    affected_files.add(path)
+                if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
+                    affected_files.add(filepath)
 
     for filepath in affected_files:
         try:
@@ -57,7 +57,15 @@ def apply_fixes():
         # FIX: Priority Injection (Ensures n64_types.h is the VERY first include)
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
+            print(f"  [+] Forced n64_types.h priority in {os.path.basename(filepath)}")
             fixes += 1
+
+        # FIX: 'actor' pointer correction
+        if "use of undeclared identifier 'actor'" in log_data and "this" in content:
+            if "Actor *actor =" not in content:
+                content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
+                print(f"  [🛠️] Injected 'actor' pointer into {os.path.basename(filepath)}")
+                fixes += 1
 
         if content != original_content:
             with open(filepath, "w") as f: f.write(content)
