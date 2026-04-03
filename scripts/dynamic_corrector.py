@@ -27,6 +27,9 @@ def run_build():
     return process.returncode == 0
 
 def classify_errors(log_data):
+    """
+    Returns a dict of recognized error categories found in the log.
+    """
     categories = {
         "missing_n64_types":  [],  
         "actor_pointer":      [],  
@@ -37,6 +40,7 @@ def classify_errors(log_data):
         "static_conflict":    [],  
         "incomplete_sizeof":  [],
         "undeclared_macros":  [], 
+        "implicit_func":      [], # NEW: Catches missing standard C functions
         "unknown":            [],
     }
 
@@ -77,6 +81,7 @@ def classify_errors(log_data):
         m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
         m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
+        m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
         
         m_sizeof = "invalid application of 'sizeof'" in line
         m_ptr = "arithmetic on a pointer to an incomplete type" in line
@@ -87,6 +92,8 @@ def classify_errors(log_data):
             pass  
         elif "initializing 'f32'" in line and "void *" in line:
             pass  
+        elif m_implicit:
+            categories["implicit_func"].append(m_implicit.group(1))
         elif m_ident:
             ident = m_ident.group(1)
             if ident == "actor" and filepath:
@@ -262,10 +269,6 @@ def apply_fixes():
             with open(TYPES_HEADER, "r") as f:
                 types_content = f.read()
             
-            # [FIX APPLIED]: Enforce include guard!
-            if "#pragma once" not in types_content:
-                types_content = "#pragma once\n" + types_content
-            
             types_added = False
             for filepath, tag in set(categories["incomplete_sizeof"]):
                 is_sdk = False
@@ -281,7 +284,7 @@ def apply_fixes():
                         types_added = True
                         print(f"  [🛠️] Injected dummy SDK struct '{tag}' into n64_types.h")
             
-            if types_added or types_content != f.read():
+            if types_added:
                 with open(TYPES_HEADER, "w") as f:
                     f.write(types_content)
                 fixes += 1
@@ -307,7 +310,7 @@ def apply_fixes():
                 print(f"  [🛠️] Protected local function '{func_name}' via macro in {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX G: Missing SDK Macros (e.g. ADPCMFSIZE) ────────────────────────
+    # ── FIX G: Missing SDK Macros ────────────────────────
     if categories["undeclared_macros"]:
         known_macros = {
             "ADPCMFSIZE": "9",
@@ -317,10 +320,6 @@ def apply_fixes():
             with open(TYPES_HEADER, "r") as f:
                 types_content = f.read()
             
-            # [FIX APPLIED]: Enforce include guard!
-            if "#pragma once" not in types_content:
-                types_content = "#pragma once\n" + types_content
-                
             macros_added = False
             for macro in set(categories["undeclared_macros"]):
                 if macro in known_macros:
@@ -330,7 +329,38 @@ def apply_fixes():
                         macros_added = True
                         print(f"  [🛠️] Injected missing SDK macro '{macro}' into n64_types.h")
             
-            if macros_added or types_content != f.read():
+            if macros_added:
+                with open(TYPES_HEADER, "w") as f:
+                    f.write(types_content)
+                fixes += 1
+
+    # ── FIX H: Missing Standard C Libraries ────────────────────────
+    if categories["implicit_func"]:
+        math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
+        string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
+        stdlib_funcs = {"malloc", "free", "exit", "atoi", "rand", "srand"}
+        
+        if os.path.exists(TYPES_HEADER):
+            with open(TYPES_HEADER, "r") as f:
+                types_content = f.read()
+            
+            includes_added = False
+            for func in set(categories["implicit_func"]):
+                header_to_add = None
+                if func in math_funcs:
+                    header_to_add = "<math.h>"
+                elif func in string_funcs:
+                    header_to_add = "<string.h>"
+                elif func in stdlib_funcs:
+                    header_to_add = "<stdlib.h>"
+                
+                if header_to_add and f"#include {header_to_add}" not in types_content:
+                    # Inject standard includes right at the top, just under any include guards
+                    types_content = types_content.replace("#define N64_TYPES_H", f"#define N64_TYPES_H\n#include {header_to_add}")
+                    includes_added = True
+                    print(f"  [🛠️] Injected {header_to_add} into n64_types.h to fix implicit '{func}'")
+            
+            if includes_added:
                 with open(TYPES_HEADER, "w") as f:
                     f.write(types_content)
                 fixes += 1
@@ -338,7 +368,8 @@ def apply_fixes():
     # ── UNKNOWN errors: report but don't fix ─────────────────────────────
     if categories["unknown"] and fixes == 0:
         print("\n⚠️  Unrecognized errors (no automatic fix available):")
-        for msg in list(dict.fromkeys(categories["unknown"]))[:10]:
+        # Print a bit more of the error log to help us diagnose next time!
+        for msg in list(dict.fromkeys(categories["unknown"]))[:15]:
             print(f"   {msg}")
 
     return fixes
