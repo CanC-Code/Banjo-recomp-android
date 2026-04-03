@@ -1,139 +1,72 @@
-#ifndef N64_TYPES_H
-#define N64_TYPES_H
+import os
+import re
+import subprocess
+import time
 
-/**
- * 1. MANDATORY FEATURE MACROS
- */
-#define _POSIX_C_SOURCE 200809L
-#define _GNU_SOURCE
-#define _USE_MATH_DEFINES
+GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace"]
+LOG_FILE = "Android/full_build_log.txt"
 
-/**
- * 2. THE NUCLEAR BLOCKADE
- */
-#define _OS_H_
-#define _ULTRA64_H_
-#define _GBI_H_
-#define _GU_H_
+def strip_ansi(text):
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
 
-/**
- * 3. CORE N64 SCALARS
- */
-typedef signed char s8;
-typedef unsigned char u8;
-typedef short s16;
-typedef unsigned short u16;
-typedef int s32;
-typedef unsigned int u32;
-typedef long long s64;
-typedef unsigned long long u64;
-typedef float f32;
-typedef double f64;
-typedef int n64_bool;
-typedef s32 OSPri;
-typedef s32 OSId; 
+def run_build():
+    print("\n🚀 Starting Build Cycle...")
+    if not os.path.exists("Android"): os.makedirs("Android")
+    with open(LOG_FILE, "w") as log:
+        process = subprocess.Popen(GRADLE_CMD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            clean_line = strip_ansi(line)
+            log.write(clean_line)
+            print(clean_line, end="") 
+        process.wait()
+    return process.returncode == 0
 
-/**
- * 4. SYSTEM INCLUDES & THREADING POLYFILL
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <math.h>
-#include <unistd.h>
+def apply_fixes():
+    if not os.path.exists(LOG_FILE): return 0
+    with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
-/* Authority Strategy: If sched_yield is missing due to shadowing, 
-   provide a static inline version to satisfy C++ STL requirements. */
-#ifdef __cplusplus
-extern "C" {
-#endif
-static inline int bka_sched_yield(void) { return usleep(1); }
-#ifdef __cplusplus
-}
-#endif
+    fixes = 0
+    # Robust regex for paths
+    file_regex = r"(/[^:\s]+):"
+    
+    affected_files = set()
+    for line in log_data.split('\n'):
+        if "error:" in line:
+            match = re.search(file_regex, line.strip())
+            if match:
+                filepath = match.group(1)
+                # Only touch files that are actually in our project
+                if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
+                    affected_files.add(filepath)
 
-#ifndef sched_yield
-  #define sched_yield bka_sched_yield
-#endif
+    for filepath in affected_files:
+        try:
+            with open(filepath, "r") as f: content = f.read()
+        except: continue
+        
+        original_content = content
 
-/**
- * 5. N64 OS FOUNDATION STRUCTURES
- */
-typedef u32 OSEvent;
-typedef u64 OSTime;
-typedef void* OSMesg;
+        # FIX: Priority Injection (Ensures n64_types.h is ALWAYS the first line)
+        if 'include "ultra/n64_types.h"' not in content:
+            content = '#include "ultra/n64_types.h"\n' + content
+            fixes += 1
 
-typedef struct {
-    u32 type; u32 flags;
-    u64 *ucode_boot; u32 ucode_boot_size;
-    u64 *ucode; u32 ucode_size;
-    u64 *ucode_data; u32 ucode_data_size;
-    u64 *dram_stack; u32 dram_stack_size;
-    u64 *output_buff; u64 *output_buff_size;
-    u64 *data_ptr; u32 data_size;
-    u64 *yield_data_ptr; u32 yield_data_size;
-} OSTask_t;
+        if content != original_content:
+            with open(filepath, "w") as f: f.write(content)
 
-typedef union { OSTask_t t; long long int force_align[32]; } OSTask;
+    return fixes
 
-typedef struct {
-    u64 at, v0, v1, a0, a1, a2, a3;
-    u64 t0, t1, t2, t3, t4, t5, t6, t7;
-    u64 s0, s1, s2, s3, s4, s5, s6, s7;
-    u64 t8, t9, k0, k1, gp, sp, s8, ra;
-    u64 lo, hi, pc;
-    union { u32 sr; u32 status; }; 
-    u32 cause, badvaddr, rcp;
-    u32 fpcsr;
-    f64 fp0,  fp2,  fp4,  fp6,  fp8, fp10, fp12, fp14;
-    f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
-} CPUState;
+def main():
+    for i in range(1, 100):
+        print(f"\n--- Cycle {i} ---")
+        if run_build():
+            print("\n✅ Build Successful!")
+            return
+        if apply_fixes() == 0:
+            print("\n🛑 Loop halted. No fixable patterns found.")
+            break
+        time.sleep(1)
 
-typedef struct OSThread_s OSThread;
-typedef struct OSMesgQueue_s {
-    struct OSThread_s *mtqueue;
-    struct OSThread_s *fullqueue;
-    s32 validCount;
-    s32 first;
-    s32 msgCount;
-    OSMesg *msg;
-} OSMesgQueue;
-
-struct OSThread_s {
-    struct OSThread_s *next;
-    OSPri priority;
-    OSMesgQueue *queue;
-    OSMesg msg;
-    u32 contextId;
-    u32 state;
-    u32 flags;
-    OSId id;
-    int fp;
-    CPUState context;
-    struct OSThread_s *tlnext; 
-    struct OSThread_s *tlprev;
-};
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-extern u32 osTvType;
-extern OSTime osClockRate;
-extern u32 osResetType;
-extern u32 osAppNMIBuffer;
-extern volatile u32 __OSGlobalIntMask;
-
-#include <PR/libaudio.h>
-#include <PR/os_cont.h>
-#ifdef __cplusplus
-}
-#endif
-
-/**
- * 6. GAME-SPECIFIC TAG HARMONIZATION
- */
-typedef struct actor_s Actor;
-typedef struct actorMarker_s ActorMarker;
-
-#endif
+if __name__ == "__main__":
+    main()
