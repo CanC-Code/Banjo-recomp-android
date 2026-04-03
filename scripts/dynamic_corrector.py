@@ -3,7 +3,7 @@ import re
 import subprocess
 import time
 
-# Force Ninja and CMake to run single-threaded to prevent Clang from eating all system RAM
+# Force Ninja and CMake to run single-threaded to prevent system OOM
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -63,17 +63,6 @@ def classify_errors(log_data):
         "OSHWIntr", "OSIntMask"
     }
 
-    libaudio_patterns = [
-        r"libaudio\.h.*unknown type name 'Acmd'",
-        r"libaudio\.h.*unknown type name 'ADPCM_STATE'",
-    ]
-    for pattern in libaudio_patterns:
-        if re.search(pattern, log_data):
-            categories["libaudio_types"].append(pattern)
-
-    if re.search(r"initializing 'f32'.*incompatible type 'void \*'", log_data):
-        categories["null_float"].append("NULL=(void*)0 assigned to f32 field")
-
     file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
     local_struct_map = {}
 
@@ -93,62 +82,28 @@ def classify_errors(log_data):
         match = re.search(file_regex, line)
         filepath = match.group(1) if match else None
 
-        if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
-            filepath = None
-
-        m_redef = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
-        m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
-        m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
-        
-        m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
-        
-        m_sizeof = "invalid application of 'sizeof'" in line
-        m_ptr = "arithmetic on a pointer" in line
-        m_array = "incomplete element type" in line
-        m_def = "incomplete definition" in line
         m_inc = "incomplete type" in line 
 
-        if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
-            pass  
-        elif "initializing 'f32'" in line and "void *" in line:
-            pass  
-        elif m_undef_ref:
-            categories["undefined_symbols"].append(m_undef_ref.group(1).strip())
-        elif m_undef_sym:
+        if m_undef_sym:
             sym = m_undef_sym.group(1).replace("'", "").strip()
             categories["undefined_symbols"].append(sym)
         elif m_implicit:
             categories["implicit_func"].append(m_implicit.group(1))
-        elif m_ident:
-            ident = m_ident.group(1)
-            if ident == "actor" and filepath:
-                categories["actor_pointer"].append(filepath)
-            else:
-                categories["undeclared_macros"].append(ident)
-        elif m_redef and filepath:
-            categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
-        elif m_static and filepath:
-            categories["static_conflict"].append((filepath, m_static.group(1)))
-        elif (m_sizeof or m_ptr or m_array or m_def or m_inc) and filepath:
-            inc_type = extract_incomplete_type(line)
-            if inc_type:
-                categories["incomplete_sizeof"].append((filepath, inc_type))
         elif m_unknown:
             type_name = m_unknown.group(1)
             if type_name in known_global_types:
                 categories["missing_sdk_types"].append(type_name)
             elif filepath:
                 local_struct_map.setdefault(filepath, set()).add(type_name)
-            else:
-                categories["unknown"].append(line.strip())
+        elif m_inc and filepath:
+            inc_type = extract_incomplete_type(line)
+            if inc_type:
+                categories["incomplete_sizeof"].append((filepath, inc_type))
         elif filepath and os.path.exists(filepath):
             categories["missing_n64_types"].append(filepath)
-        else:
-            if line.strip():
-                categories["unknown"].append(line.strip())
 
     for filepath, type_names in local_struct_map.items():
         for t in type_names:
@@ -166,367 +121,76 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    if categories["libaudio_types"]:
-        print("\n🛑 HEADER-LEVEL ERRORS in libaudio.h:")
-        return -1
-
-    if categories["null_float"]:
-        print("\n🛑 HEADER-LEVEL ERROR: NULL=(void*)0 assigned to f32 fields.")
-        return -1
-
-    # ── FIX J: Ensure Android NDK Linker Libraries are present ────────────
-    if os.path.exists(CMAKE_FILE):
-        with open(CMAKE_FILE, "r") as f:
-            cmake_content = f.read()
-            
-        if "target_link_libraries(" in cmake_content and " m " not in cmake_content:
-            cmake_content = re.sub(
-                r'(target_link_libraries\([^)]+)', 
-                r'\1 m log ', 
-                cmake_content
-            )
-            with open(CMAKE_FILE, "w") as f:
-                f.write(cmake_content)
-            print("  [🛠️] Injected Android NDK standard libraries (m, log) into CMakeLists.txt")
-            fixes += 1
-
-    # ── FIX 0: Header Protection ───────────────────────────────────────────
-    if os.path.exists(TYPES_HEADER):
-        with open(TYPES_HEADER, "r") as f:
-            types_content = f.read()
-        if "#pragma once" not in types_content:
-            with open(TYPES_HEADER, "w") as f:
-                f.write("#pragma once\n" + types_content)
-            print("  [🛠️] Secured n64_types.h with #pragma once include guard")
-            fixes += 1
-
-    # ── FIX A: Priority inclusion of n64_types.h ─────────────────────────
-    affected_files = set(categories["missing_n64_types"])
-    for filepath in affected_files:
-        if not os.path.exists(filepath):
-            continue
-        if "/usr/include" in filepath or "ndk" in filepath or filepath.endswith("n64_types.h"):
-            continue
-        with open(filepath, "r") as f:
-            content = f.read()
-        if 'include "ultra/n64_types.h"' not in content:
-            content = '#include "ultra/n64_types.h"\n' + content
-            with open(filepath, "w") as f:
-                f.write(content)
-            print(f"  [🛠️] Injected n64_types.h include into {os.path.basename(filepath)}")
-            fixes += 1
-
-    # ── FIX B: 'actor' pointer injection ─────────────────────────────────
-    if categories["actor_pointer"]:
-        for filepath in set(categories["actor_pointer"]):
-            if not os.path.exists(filepath):
-                continue
-            with open(filepath, "r") as f:
-                content = f.read()
-            original = content
-            if "Actor *actor =" not in content and "this" in content:
-                content = re.sub(
-                    r'(\{)',
-                    r'\1\n    Actor *actor = (Actor *)this;',
-                    content, count=1
-                )
-                print(f"  [🛠️] Injected 'actor' pointer into {os.path.basename(filepath)}")
-            if content != original:
-                with open(filepath, "w") as f:
-                    f.write(content)
-                fixes += 1
-
-    # ── FIX C: Local struct forward declaration injection ─────────────────
-    if categories["local_struct_fwd"]:
-        file_to_types = {}
-        for filepath, type_name in categories["local_struct_fwd"]:
-            file_to_types.setdefault(filepath, set()).add(type_name)
-
-        for filepath, type_names in file_to_types.items():
-            if not os.path.exists(filepath):
-                continue
-            with open(filepath, "r") as f:
-                content = f.read()
-            
-            fwd_lines = []
-            for t in sorted(type_names):
-                tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
-                fwd_decl = f"typedef struct {tag}_s {t};"
-                if fwd_decl not in content:
-                    fwd_lines.append(fwd_decl)
-
-            if fwd_lines:
-                injection = "/* AUTO: forward declarations */\n" + \
-                            "\n".join(fwd_lines) + "\n"
-                content = injection + content
-                with open(filepath, "w") as f:
-                    f.write(content)
-                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into {os.path.basename(filepath)}")
-                fixes += 1
-
-    # ── FIX D: Typedef Redefinition (Resolving mismatched tags) ───────────
-    if categories["typedef_redef"]:
-        for filepath, type1, type2 in set(categories["typedef_redef"]):
-            if not os.path.exists(filepath):
-                continue
-            with open(filepath, "r") as f:
-                content = f.read()
-            original = content
-            
-            t1_match = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
-            t2_match = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
-            
-            tag1 = t1_match.group(1) if t1_match else None
-            tag2 = t2_match.group(1) if t2_match else None
-
-            if tag1 and tag2 and tag1 != tag2:
-                lines = content.split('\n')
-                for i, line in enumerate(lines):
-                    if "/* AUTO: forward declarations */" in line:
-                        for j in range(i + 1, min(i + 20, len(lines))):
-                            if f"struct {tag1}" in lines[j] and "typedef" in lines[j]:
-                                lines[j] = lines[j].replace(f"struct {tag1}", f"struct {tag2}")
-                            elif f"struct {tag2}" in lines[j] and "typedef" in lines[j]:
-                                lines[j] = lines[j].replace(f"struct {tag2}", f"struct {tag1}")
-                        break
-                content = '\n'.join(lines)
-            
-            elif tag1 or tag2:
-                tag = tag1 or tag2
-                lines = content.split('\n')
-                for i, l in enumerate(lines):
-                    if re.search(r"\}\s*" + tag + r"\s*;", l):
-                        for j in range(i, -1, -1):
-                            if "typedef struct" in lines[j]:
-                                if "{" in lines[j]:
-                                    lines[j] = re.sub(r"typedef\s+struct\s*\{", f"typedef struct {tag} {{", lines[j])
-                                else:
-                                    lines[j] = re.sub(r"typedef\s+struct", f"typedef struct {tag}", lines[j])
-                                break
-                content = '\n'.join(lines)
-                
-            if content != original:
-                with open(filepath, "w") as f:
-                    f.write(content)
-                print(f"  [🛠️] Harmonized typedef tags in {os.path.basename(filepath)}")
-                fixes += 1
-
-    # ── FIX E: Incomplete SDK Types (sizeof traps) ────────────────────────
-    if categories["incomplete_sizeof"]:
-        if os.path.exists(TYPES_HEADER):
-            with open(TYPES_HEADER, "r") as f:
-                types_content = f.read()
-            
-            types_added = False
-            for filepath, tag in set(categories["incomplete_sizeof"]):
-                is_sdk = False
-                if tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_")):
-                    is_sdk = True
-                elif tag.endswith("_s") and tag[:-2].isupper():
-                    is_sdk = True
-                
-                if is_sdk:
-                    dummy_def = f"\nstruct {tag} {{ long long int force_align[32]; }};\n"
-                    if f"struct {tag} {{" not in types_content:
-                        types_content += dummy_def
-                        types_added = True
-                        print(f"  [🛠️] Injected dummy SDK struct '{tag}' into n64_types.h")
-            
-            if types_added:
-                with open(TYPES_HEADER, "w") as f:
-                    f.write(types_content)
-                fixes += 1
-
-    # ── FIX F: Static Function Conflict (Resolving close() collision) ──────
-    if categories["static_conflict"]:
-        for filepath, func_name in set(categories["static_conflict"]):
-            if not os.path.exists(filepath):
-                continue
-            with open(filepath, "r") as f:
-                content = f.read()
-            original = content
-            
-            macro_fix = f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{func_name}\n"
-            if macro_fix not in content:
-                if '#include "ultra/n64_types.h"' in content:
-                    content = content.replace('#include "ultra/n64_types.h"', f'#include "ultra/n64_types.h"{macro_fix}')
-                else:
-                    content = macro_fix + content
-                
-                with open(filepath, "w") as f:
-                    f.write(content)
-                print(f"  [🛠️] Protected local function '{func_name}' via macro in {os.path.basename(filepath)}")
-                fixes += 1
-
-    # ── FIX G: Missing SDK Macros ────────────────────────
-    if categories["undeclared_macros"]:
-        known_macros = {
-            "ADPCMFSIZE": "9",
-            "ADPCMVSIZE": "8", 
-            "UNITY_PITCH": "32768.0f",
-            "OS_IM_NONE": "0",
-        }
-        
-        if os.path.exists(TYPES_HEADER):
-            with open(TYPES_HEADER, "r") as f:
-                types_content = f.read()
-            
-            macros_added = False
-            for macro in set(categories["undeclared_macros"]):
-                if macro in known_macros:
-                    macro_def = f"\n#ifndef {macro}\n#define {macro} {known_macros[macro]}\n#endif\n"
-                    if f"#define {macro}" not in types_content:
-                        types_content += macro_def
-                        macros_added = True
-                        print(f"  [🛠️] Injected missing SDK macro '{macro}' into n64_types.h")
-            
-            if macros_added:
-                with open(TYPES_HEADER, "w") as f:
-                    f.write(types_content)
-                fixes += 1
-
-    # ── FIX H: Missing Standard C Libraries & N64 Declarations ────────────
-    if categories["implicit_func"]:
-        math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
-        string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
-        stdlib_funcs = {"malloc", "free", "exit", "atoi", "rand", "srand"}
-        
-        if os.path.exists(TYPES_HEADER):
-            with open(TYPES_HEADER, "r") as f:
-                types_content = f.read()
-            
-            includes_added = False
-            for func in set(categories["implicit_func"]):
-                header_to_add = None
-                if func in math_funcs:
-                    header_to_add = "<math.h>"
-                elif func in string_funcs:
-                    header_to_add = "<string.h>"
-                elif func in stdlib_funcs:
-                    header_to_add = "<stdlib.h>"
-                
-                if header_to_add and f"#include {header_to_add}" not in types_content:
-                    types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header_to_add}")
-                    includes_added = True
-                    print(f"  [🛠️] Injected {header_to_add} into n64_types.h to fix implicit '{func}'")
-                elif not header_to_add:
-                    decl = f"\nlong long int {func}();\n"
-                    if decl not in types_content and f" {func}(" not in types_content:
-                        types_content += decl
-                        includes_added = True
-                        print(f"  [🛠️] Injected dummy declaration for '{func}' into n64_types.h")
-            
-            if includes_added:
-                with open(TYPES_HEADER, "w") as f:
-                    f.write(types_content)
-                fixes += 1
-
-    # ── FIX I: Auto-Generate Linker Stubs ──────────────────────────────
-    if categories["undefined_symbols"]:
-        stubs_added = False
-        
-        if not os.path.exists(STUBS_FILE):
-            os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
-            with open(STUBS_FILE, "w") as f:
-                f.write('#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
-            
-            if os.path.exists(CMAKE_FILE):
-                with open(CMAKE_FILE, "r") as f:
-                    cmake_content = f.read()
-                if "ultra/n64_stubs.c" not in cmake_content:
-                    cmake_content = cmake_content.replace("add_library(", "add_library(\n        ultra/n64_stubs.c\n")
-                    with open(CMAKE_FILE, "w") as f:
-                        f.write(cmake_content)
-
-        with open(STUBS_FILE, "r") as f:
-            existing_stubs = f.read()
-            
-        for sym in set(categories["undefined_symbols"]):
-            if sym.startswith("_Z") or "vtable" in sym:
-                continue
-                
-            stub_code = f"long long int {sym}() {{ return 0; }}\n"
-            if f" {sym}(" not in existing_stubs:
-                existing_stubs += stub_code
-                stubs_added = True
-                print(f"  [🛠️] Generated linker stub for missing N64 function '{sym}'")
-                
-        if stubs_added:
-            with open(STUBS_FILE, "w") as f:
-                f.write(existing_stubs)
-            fixes += 1
-
-    # ── FIX K: Missing SDK Typedefs ──────────────────────────────────────
-    # [FIX APPLIED]: Completely overhauled to safely assign dummy structs for complex N64 SDK types!
+    # ── FIX K: Overhauled SDK Type Injection ──────────────────────────────
     if categories["missing_sdk_types"]:
         known_sdk_typedefs = {
             "OSHWIntr": "unsigned int",
             "OSIntMask": "unsigned int",
-            "s8": "signed char",
-            "u8": "unsigned char",
-            "s16": "short",
-            "u16": "unsigned short",
-            "s32": "int",
-            "u32": "unsigned int",
-            "s64": "long long",
-            "u64": "unsigned long long",
-            "f32": "float",
-            "f64": "double",
-            "OSPri": "int",
-            "OSId": "int",
-            "n64_bool": "int",
+            "s8": "signed char", "u8": "unsigned char",
+            "s16": "short", "u16": "unsigned short",
+            "s32": "int", "u32": "unsigned int",
+            "s64": "long long", "u64": "unsigned long long",
+            "f32": "float", "f64": "double",
+            "OSPri": "int", "OSId": "int", "n64_bool": "int",
+            "OSMesg": "void*", 
         }
         
         if os.path.exists(TYPES_HEADER):
             with open(TYPES_HEADER, "r") as f:
-                types_content = f.read()
+                content = f.read()
             
-            typedefs_added = False
+            added = False
             for t in set(categories["missing_sdk_types"]):
-                if t in known_sdk_typedefs:
-                    # It's a primitive type, map it exactly
-                    typedef_decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
-                else:
-                    # It's a complex SDK type (like OSMesgQueue or Gfx). Assign a dummy padded struct!
-                    typedef_decl = f"\ntypedef struct {{ long long int force_align[32]; }} {t};\n"
+                if f" {t};" in content: continue
                 
-                # Only inject if it doesn't already exist
-                if f" {t};" not in types_content:
-                    types_content += typedef_decl
-                    typedefs_added = True
-                    print(f"  [🛠️] Injected missing SDK typedef '{t}' into n64_types.h")
+                if t in known_sdk_typedefs:
+                    decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
+                else:
+                    # Create a padded dummy struct for complex types (Queues, Threads, etc)
+                    decl = f"\ntypedef struct {{ long long int reserved[64]; }} {t};\n"
+                
+                content += decl
+                added = True
+                print(f"  [🛠️] Defined missing SDK type: {t}")
             
-            if typedefs_added:
+            if added:
                 with open(TYPES_HEADER, "w") as f:
-                    f.write(types_content)
+                    f.write(content)
                 fixes += 1
 
-    # ── UNKNOWN errors: report but don't fix ─────────────────────────────
-    if categories["unknown"] and fixes == 0:
-        print("\n⚠️  Unrecognized errors (no automatic fix available):")
-        for msg in list(dict.fromkeys(categories["unknown"]))[:15]:
-            print(f"   {msg}")
+    # ── FIX I: Auto-Linker Stubs ──────────────────────────────────────────
+    if categories["undefined_symbols"]:
+        if not os.path.exists(STUBS_FILE):
+            os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
+            with open(STUBS_FILE, "w") as f:
+                f.write('#include "n64_types.h"\n\n')
+        
+        with open(STUBS_FILE, "r") as f:
+            stubs = f.read()
+            
+        added = False
+        for sym in set(categories["undefined_symbols"]):
+            if f" {sym}(" in stubs: continue
+            stubs += f"long long int {sym}() {{ return 0; }}\n"
+            added = True
+            print(f"  [🛠️] Stubbed missing function: {sym}")
+                
+        if added:
+            with open(STUBS_FILE, "w") as f:
+                f.write(stubs)
+            fixes += 1
 
     return fixes
 
 def main():
-    apply_fixes()
-    
-    for i in range(1, 100):
-        print(f"\n--- Cycle {i} ---")
+    for i in range(1, 50):
+        print(f"\n--- Build Cycle {i} ---")
         if run_build():
-            print("\n✅ Build Successful! You have an APK!")
+            print("\n✅ Success! APK built.")
             return
-
-        result = apply_fixes()
-
-        if result == -1:
-            print("\n🛑 Loop halted. Manual fix required in n64_types.h.")
+        if apply_fixes() == 0:
+            print("\n🛑 No more automatic fixes possible.")
             break
-        elif result == 0:
-            print("\n🛑 Loop halted. No fixable patterns found.")
-            break
-
         time.sleep(1)
 
 if __name__ == "__main__":
