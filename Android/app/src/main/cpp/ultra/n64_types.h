@@ -18,7 +18,6 @@
 
 /**
  * 3. CORE N64 SCALARS
- * Defined before any includes to prevent SDK shadowing errors.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -36,6 +35,7 @@ typedef s32 OSId;
 
 /**
  * 4. SYSTEM INCLUDES & THREADING POLYFILL
+ * Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -44,14 +44,21 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
-/* Authority Strategy: Fix 'sched_yield' for Android NDK C++ STL compatibility 
-   This bypasses the shadowing caused by the N64 SDK's sched.h */
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* Real inline function to satisfy both C and C++ (handles ::sched_yield) */
+static inline int bka_sched_yield(void) { return usleep(1); }
+#ifdef __cplusplus
+}
+#endif
+
 #ifndef sched_yield
-  #define sched_yield() usleep(1)
+  #define sched_yield bka_sched_yield
 #endif
 
 /**
- * 5. N64 OS STRUCTURES
+ * 5. N64 OS FOUNDATION STRUCTURES
  */
 typedef u32 OSEvent;
 typedef u64 OSTime;
