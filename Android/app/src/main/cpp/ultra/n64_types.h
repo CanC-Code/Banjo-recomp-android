@@ -3,6 +3,7 @@
 
 /**
  * 1. MANDATORY FEATURE MACROS
+ * These ensure modern POSIX support and mathematical constants on Android.
  */
 #define _POSIX_C_SOURCE 200809L
 #define _GNU_SOURCE
@@ -10,6 +11,8 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
+ * Prevent N64 SDK headers from attempting to define their own core types
+ * which would conflict with our Android-compatible definitions.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -18,6 +21,7 @@
 
 /**
  * 3. CORE N64 SCALARS
+ * Defined at the very top so any subsequent SDK includes see these first.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -48,7 +52,7 @@ typedef s32 OSId;
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Real inline function to satisfy both C and C++ scoped logic (handles ::sched_yield) */
+/* Static inline yield function to satisfy both C and C++ scoped logic (handles ::sched_yield) */
 static inline int bka_sched_yield(void) { 
     return usleep(1); 
 }
@@ -117,6 +121,11 @@ struct OSThread_s {
     struct OSThread_s *tlnext; 
     struct OSThread_s *tlprev;
 };
+
+typedef volatile u32 OSIntMask;
+#define OS_IM_NONE 0
+#define OS_MESG_BLOCK 1
+#define OS_MESG_NOBLOCK 0
 
 #ifdef __cplusplus
 extern "C" {
