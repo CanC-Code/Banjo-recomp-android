@@ -3,7 +3,6 @@
 
 /**
  * 1. MANDATORY FEATURE MACROS
- * These ensure modern POSIX support and mathematical constants on Android.
  */
 #define _POSIX_C_SOURCE 200809L
 #define _GNU_SOURCE
@@ -11,8 +10,6 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
- * Prevent N64 SDK headers from attempting to define their own core types
- * which would conflict with our Android-compatible definitions.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -21,7 +18,6 @@
 
 /**
  * 3. CORE N64 SCALARS
- * Defined at the very top so any subsequent SDK includes see these first.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -38,9 +34,7 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 4. SYSTEM INCLUDES & THREADING POLYFILL
- * Authority Strategy: We provide a manual polyfill for sched_yield to 
- * satisfy libc++ even when the system sched.h is shadowed by the SDK.
+ * 4. SYSTEM INCLUDES & POLYFILLS
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -49,19 +43,9 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-/* Static inline yield function to satisfy both C and C++ scoped logic (handles ::sched_yield) */
-static inline int bka_sched_yield(void) { 
-    return usleep(1); 
-}
-#ifdef __cplusplus
-}
-#endif
-
+/* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
 #ifndef sched_yield
-  #define sched_yield bka_sched_yield
+  #define sched_yield() usleep(1)
 #endif
 
 /**
@@ -122,17 +106,11 @@ struct OSThread_s {
     struct OSThread_s *tlprev;
 };
 
-typedef volatile u32 OSIntMask;
-#define OS_IM_NONE 0
-#define OS_MESG_BLOCK 1
-#define OS_MESG_NOBLOCK 0
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern u32 osTvType;
 extern OSTime osClockRate;
-extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 extern volatile u32 __OSGlobalIntMask;
@@ -148,6 +126,5 @@ extern volatile u32 __OSGlobalIntMask;
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
-typedef struct ch_vegatable sChVegetable;
 
 #endif
