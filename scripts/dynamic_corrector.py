@@ -49,7 +49,18 @@ def classify_errors(log_data):
         "undeclared_macros":  [], 
         "implicit_func":      [], 
         "undefined_symbols":  [], 
+        "missing_sdk_types":  [], # NEW: Safely handles missing N64 type definitions
         "unknown":            [],
+    }
+
+    known_global_types = {
+        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
+        "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
+        "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
+        "Actor", "ActorMarker",
+        "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
+        "f32", "f64", "n64_bool", "OSPri", "OSId",
+        "OSHWIntr", "OSIntMask"
     }
 
     libaudio_patterns = [
@@ -127,7 +138,10 @@ def classify_errors(log_data):
                 categories["incomplete_sizeof"].append((filepath, inc_type))
         elif m_unknown:
             type_name = m_unknown.group(1)
-            if filepath:
+            # [FIX APPLIED]: Intercept known N64 SDK Types and shuttle them to FIX K instead of creating structs!
+            if type_name in known_global_types:
+                categories["missing_sdk_types"].append(type_name)
+            elif filepath:
                 local_struct_map.setdefault(filepath, set()).add(type_name)
             else:
                 categories["unknown"].append(line.strip())
@@ -137,16 +151,6 @@ def classify_errors(log_data):
             if line.strip():
                 categories["unknown"].append(line.strip())
 
-    # [FIX APPLIED]: Added OSHWIntr to known global types so it is NEVER treated as a struct
-    known_global_types = {
-        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
-        "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
-        "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
-        "Actor", "ActorMarker",
-        "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
-        "f32", "f64", "n64_bool", "OSPri", "OSId",
-        "OSHWIntr"
-    }
     for filepath, type_names in local_struct_map.items():
         for t in type_names:
             if t not in known_global_types:
@@ -361,9 +365,7 @@ def apply_fixes():
             "ADPCMFSIZE": "9",
             "ADPCMVSIZE": "8", 
             "UNITY_PITCH": "32768.0f",
-            "OSIntMask": "u32",
             "OS_IM_NONE": "0",
-            "OSHWIntr": "u32" # [FIX APPLIED]: Added the correct declaration for OSHWIntr!
         }
         
         if os.path.exists(TYPES_HEADER):
@@ -454,6 +456,45 @@ def apply_fixes():
             with open(STUBS_FILE, "w") as f:
                 f.write(existing_stubs)
             fixes += 1
+
+    # ── FIX K: Missing SDK Typedefs ──────────────────────────────────────
+    if categories["missing_sdk_types"]:
+        # We safely map all known N64 specific types directly to standard C primitives!
+        known_sdk_typedefs = {
+            "OSHWIntr": "unsigned int",
+            "OSIntMask": "unsigned int",
+            "s8": "signed char",
+            "u8": "unsigned char",
+            "s16": "short",
+            "u16": "unsigned short",
+            "s32": "int",
+            "u32": "unsigned int",
+            "s64": "long long",
+            "u64": "unsigned long long",
+            "f32": "float",
+            "f64": "double",
+            "OSPri": "int",
+            "OSId": "int",
+            "n64_bool": "int",
+        }
+        
+        if os.path.exists(TYPES_HEADER):
+            with open(TYPES_HEADER, "r") as f:
+                types_content = f.read()
+            
+            typedefs_added = False
+            for t in set(categories["missing_sdk_types"]):
+                if t in known_sdk_typedefs:
+                    typedef_decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
+                    if f"typedef {known_sdk_typedefs[t]} {t};" not in types_content:
+                        types_content += typedef_decl
+                        typedefs_added = True
+                        print(f"  [🛠️] Injected missing SDK typedef '{t}' into n64_types.h")
+            
+            if typedefs_added:
+                with open(TYPES_HEADER, "w") as f:
+                    f.write(types_content)
+                fixes += 1
 
     # ── UNKNOWN errors: report but don't fix ─────────────────────────────
     if categories["unknown"] and fixes == 0:
