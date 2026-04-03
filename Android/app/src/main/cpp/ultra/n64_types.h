@@ -35,6 +35,8 @@ typedef s32 OSId;
 
 /**
  * 4. SYSTEM INCLUDES & THREADING POLYFILL
+ * Authority Strategy: We provide a manual polyfill for sched_yield to 
+ * satisfy libc++ even when the system sched.h is shadowed by the SDK.
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -43,11 +45,10 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
-/* Authority Strategy: If sched_yield is missing due to shadowing, 
-   provide a static inline version to satisfy C++ STL requirements. */
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* Real inline function to satisfy C++ scoped logic (handles ::sched_yield) */
 static inline int bka_sched_yield(void) { return usleep(1); }
 #ifdef __cplusplus
 }
@@ -120,6 +121,7 @@ extern "C" {
 #endif
 extern u32 osTvType;
 extern OSTime osClockRate;
+extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 extern volatile u32 __OSGlobalIntMask;
