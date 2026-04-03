@@ -35,7 +35,8 @@ typedef s32 OSId;
 
 /**
  * 4. SYSTEM INCLUDES & THREADING POLYFILL
- * Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility.
+ * Authority Strategy: We provide a manual polyfill for sched_yield to 
+ * satisfy libc++ even when the system sched.h is shadowed by the SDK.
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -47,7 +48,7 @@ typedef s32 OSId;
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Static inline yield function to satisfy both C and C++ scoped logic (handles ::sched_yield) */
+/* Real inline function to satisfy both C and C++ scoped logic (handles ::sched_yield) */
 static inline int bka_sched_yield(void) { 
     return usleep(1); 
 }
@@ -116,11 +117,6 @@ struct OSThread_s {
     struct OSThread_s *tlnext; 
     struct OSThread_s *tlprev;
 };
-
-typedef volatile u32 OSIntMask;
-#define OS_IM_NONE 0
-#define OS_MESG_BLOCK 1
-#define OS_MESG_NOBLOCK 0
 
 #ifdef __cplusplus
 extern "C" {
