@@ -3,8 +3,8 @@
 
 /**
  * 1. MANDATORY FEATURE MACROS
- *    These MUST appear before any system header inclusion.
- *    _GNU_SOURCE unlocks M_PI and other GNU extensions in glibc/NDK headers.
+ *    Must appear before ANY system header inclusion.
+ *    _GNU_SOURCE unlocks M_PI and other GNU extensions in NDK headers.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -40,42 +40,61 @@ typedef s32 OSPri;
 typedef s32 OSId;
 
 /**
- * 4. SYSTEM INCLUDES & POLYFILLS
+ * 4. NULL REDEFINITION
+ *    NDK Clang defines NULL as ((void*)0) which is not implicitly
+ *    convertible to f32/s16/u32 in C mode with strict typing.
+ *    The decomp sources use NULL as a numeric zero sentinel in struct
+ *    initializers (e.g. {NULL, NULL} where fields are f32).
+ *    Redefine NULL to plain 0 before stddef.h locks it in.
+ *    This must come before ALL system includes.
+ */
+#ifdef NULL
+#undef NULL
+#endif
+#define NULL 0
+
+/**
+ * 5. SYSTEM INCLUDES & POLYFILLS
  */
 #include <sys/types.h>
 #include <stddef.h>
+/* Re-assert NULL=0 in case stddef.h redefined it to ((void*)0) */
+#ifdef NULL
+#undef NULL
+#endif
+#define NULL 0
+
 #include <stdint.h>
 #include <time.h>
 #include <math.h>
 #include <unistd.h>
 
-/* Fallback: guarantee M_PI is always defined regardless of include order.
- * On Android NDK, math.h only exposes M_PI when _GNU_SOURCE is set at the
- * time the header is first processed.  If any prior include already pulled
- * in math.h without that guard, M_PI will be absent.  This catches it.   */
+/* Guarantee M_PI family regardless of include order.
+ * NDK math.h only exposes these when _GNU_SOURCE is active at first
+ * inclusion; any prior transitive include seals their absence.         */
 #ifndef M_PI
-#define M_PI 3.14159265358979323846
+#define M_PI     3.14159265358979323846
 #endif
 #ifndef M_PI_2
-#define M_PI_2 1.57079632679489661923
+#define M_PI_2   1.57079632679489661923
 #endif
 #ifndef M_PI_4
-#define M_PI_4 0.78539816339744830962
+#define M_PI_4   0.78539816339744830962
 #endif
 #ifndef M_SQRT2
-#define M_SQRT2 1.41421356237309504880
+#define M_SQRT2  1.41421356237309504880
 #endif
 #ifndef M_E
-#define M_E 2.71828182845904523536
+#define M_E      2.71828182845904523536
 #endif
 
-/* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
+/* sched_yield polyfill for Android NDK C++ STL compatibility */
 #ifndef sched_yield
   #define sched_yield() usleep(1)
 #endif
 
 /**
- * 5. N64 OS FOUNDATION STRUCTURES
+ * 6. N64 OS FOUNDATION STRUCTURES
  */
 typedef u32 OSEvent;
 typedef u64 OSTime;
@@ -133,12 +152,10 @@ struct OSThread_s {
 };
 
 /**
- * 6. GBI / RSP / OS STUBS
+ * 7. GBI / RSP / OS STUBS
  *
- * _GBI_H_ blocks the real gbi.h and _OS_H_ blocks os.h, but several
- * game headers (model.h, structs.h, prop.h, mlmtx.h, modelRender.h,
- * pfsmanager.h) depend on the types below.  Minimal stubs provided so
- * those headers parse cleanly without the full N64 SDK.
+ * _GBI_H_ blocks gbi.h and _OS_H_ blocks os.h, but game headers depend
+ * on the types below. Minimal stubs provided; all guarded for idempotency.
  */
 
 /* ── Acmd ─────────────────────────────────────────────────────────────── */
@@ -206,6 +223,22 @@ typedef struct {
 } OSContPad;
 #endif
 
+/* ── OSTimer ─────────────────────────────────────────────────────────────
+ * OS countdown timer struct. Normally from os.h, blocked by _OS_H_.
+ * Required by: osint.h:24,34,35 (via src/core1/os/seteventmesg.c and
+ * any other TU that includes osint.h).                                  */
+#ifndef OS_TIMER_DEFINED
+#define OS_TIMER_DEFINED
+typedef struct OSTimer_s {
+    struct OSTimer_s *next;
+    struct OSTimer_s *prev;
+    OSTime            interval;
+    OSTime            value;
+    OSMesgQueue      *mq;
+    OSMesg            msg;
+} OSTimer;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -222,7 +255,7 @@ extern volatile u32 __OSGlobalIntMask;
 #endif
 
 /**
- * 7. GAME-SPECIFIC TAG HARMONIZATION
+ * 8. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
