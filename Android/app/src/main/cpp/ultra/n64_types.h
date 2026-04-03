@@ -17,7 +17,7 @@
 #define _GU_H_
 
 /**
- * 3. CORE N64 SCALARS (Moved to top for pre-emptive definition)
+ * 3. CORE N64 SCALARS
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -34,10 +34,10 @@ typedef s32 OSPri;
 typedef s32 OSId; 
 
 /**
- * 4. N64 OS FOUNDATION TYPES
- * These must be defined before any system includes to resolve SDK shadowing.
+ * 4. N64 OS FOUNDATION STRUCTURES (Moved to Top)
+ * These must be defined before any includes to prevent 'unknown type' errors
+ * if an SDK header shadows a system header.
  */
-#define OS_NUM_EVENTS 15
 typedef u32 OSEvent;
 typedef u64 OSTime;
 typedef void* OSMesg;
@@ -58,26 +58,6 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-typedef volatile u32 OSIntMask;
-#define OS_IM_NONE 0
-#define OS_MESG_BLOCK 1
-#define OS_MESG_NOBLOCK 0
-
-/**
- * 5. SYSTEM & SDK INCLUDES
- * Scalar types are now defined, so PR/sched.h (if shadowed) will compile.
- */
-#include <sys/types.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <time.h>
-#include <math.h>
-#include <unistd.h>
-#include <sched.h> 
-
-/**
- * 6. OS STRUCTURES
- */
 typedef struct {
     u64 at, v0, v1, a0, a1, a2, a3;
     u64 t0, t1, t2, t3, t4, t5, t6, t7;
@@ -91,6 +71,7 @@ typedef struct {
     f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
 } CPUState;
 
+typedef struct OSThread_s OSThread;
 typedef struct OSMesgQueue_s {
     struct OSThread_s *mtqueue;
     struct OSThread_s *fullqueue;
@@ -100,19 +81,10 @@ typedef struct OSMesgQueue_s {
     OSMesg *msg;
 } OSMesgQueue;
 
-typedef struct OSTimer_s {
-    struct OSTimer_s *next;
-    struct OSTimer_s *prev;
-    u64 interval;
-    u64 value;
-    OSMesgQueue *mq;
-    OSMesg msg;
-} OSTimer;
-
-typedef struct OSThread_s {
+struct OSThread_s {
     struct OSThread_s *next;
     OSPri priority;
-    struct OSMesgQueue_s *queue;
+    OSMesgQueue *queue;
     OSMesg msg;
     u32 contextId;
     u32 state;
@@ -122,8 +94,40 @@ typedef struct OSThread_s {
     CPUState context;
     struct OSThread_s *tlnext; 
     struct OSThread_s *tlprev;
-} OSThread;
+};
 
+typedef volatile u32 OSIntMask;
+#define OS_IM_NONE 0
+#define OS_MESG_BLOCK 1
+#define OS_MESG_NOBLOCK 0
+
+/**
+ * 5. SYSTEM INCLUDES
+ */
+#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+#include <math.h>
+#include <unistd.h>
+#include <sched.h> 
+
+/**
+ * 6. SDK FALLBACK & POLYFILLS
+ */
+#ifndef sched_yield
+  // If sched.h was shadowed by the SDK, polyfill sched_yield to keep C++ happy.
+  #ifdef __cplusplus
+    #include <thread>
+    #define sched_yield() std::this_thread::yield()
+  #else
+    #define sched_yield() usleep(1)
+  #endif
+#endif
+
+/**
+ * 7. ADDITIONAL OS TYPES
+ */
 typedef struct {
     u16 type;
     u8 pri;
@@ -151,14 +155,11 @@ typedef struct {
     OSPiHandle *piHandle; 
 } OSIoMesg;
 
-/**
- * 7. INPUT Foundation
- */
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
 /**
- * 8. GRAPHICS & SDK TYPES
+ * 8. GRAPHICS & SDK SYMBOLS
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
