@@ -147,15 +147,7 @@ typedef struct {
 } OSIoMesg;
 
 /**
- * 6. INPUT & AUDIO Foundation
- */
-typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
-typedef struct { u16 type; u8 status, errno; } OSContStatus;
-typedef struct { u8 *base, *cur; s32 len, count; } ALHeap;
-typedef struct { void *drvr; ALHeap *heap; } ALGlobals;
-
-/**
- * 7. GRAPHICS TYPES
+ * 6. GRAPHICS & AUDIO TYPES (Foundation)
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -177,22 +169,25 @@ extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 extern OSIntMask __OSGlobalIntMask;
+
+extern void guMtxIdentF(float mf[4][4]);
+extern void guMtxF2L(float mf[4][4], Mtx *m);
 #ifdef __cplusplus
 }
 #endif
 
 /**
- * 8. GAME-SPECIFIC TAG HARMONIZATION
- * We use the exact struct tags found in 'prop.h' (actor_s, actorMarker_s)
- * to prevent redefinition conflicts.
+ * 7. GAME-SPECIFIC TAG HARMONIZATION
+ * We use the exact struct tags expected by the recompiled logic.
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
 typedef struct ch_vegatable sChVegetable;
 typedef struct LetterFloorTile LetterFloorTile;
+typedef struct ActorLocal_Lockup ActorLocal_Lockup;
 
 /**
- * 9. SYSTEM INCLUDES
+ * 8. SYSTEM & SDK INCLUDES
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -205,6 +200,7 @@ typedef struct LetterFloorTile LetterFloorTile;
 extern "C" {
 #endif
 #include <PR/libaudio.h>
+#include <PR/os_cont.h>
 #ifdef __cplusplus
 }
 #endif
