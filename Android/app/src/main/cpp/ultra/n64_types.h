@@ -31,7 +31,7 @@ typedef float f32;
 typedef double f64;
 typedef int n64_bool;
 typedef s32 OSPri;
-typedef s32 OSId; 
+typedef s32 OSId;
 
 /**
  * 4. SYSTEM INCLUDES & POLYFILLS
@@ -74,7 +74,7 @@ typedef struct {
     u64 s0, s1, s2, s3, s4, s5, s6, s7;
     u64 t8, t9, k0, k1, gp, sp, s8, ra;
     u64 lo, hi, pc;
-    union { u32 sr; u32 status; }; 
+    union { u32 sr; u32 status; };
     u32 cause, badvaddr, rcp;
     u32 fpcsr;
     f64 fp0,  fp2,  fp4,  fp6,  fp8, fp10, fp12, fp14;
@@ -102,9 +102,30 @@ struct OSThread_s {
     OSId id;
     int fp;
     CPUState context;
-    struct OSThread_s *tlnext; 
+    struct OSThread_s *tlnext;
     struct OSThread_s *tlprev;
 };
+
+/**
+ * 6. GBI / RSP STUBS REQUIRED BY libaudio.h
+ *    _GBI_H_ is defined above to block the real gbi.h, so we must
+ *    manually provide the types that libaudio.h pulls from that header.
+ *
+ *    Acmd: a 64-bit audio RSP command word (union of word/bytes).
+ *    ADPCM_STATE: a 16-entry s16 array holding ADPCM predictor state.
+ */
+#ifndef ACMD_DEFINED
+#define ACMD_DEFINED
+typedef union {
+    struct { u32 w0; u32 w1; } words;
+    long long int force_align;
+} Acmd;
+#endif
+
+#ifndef ADPCM_STATE_DEFINED
+#define ADPCM_STATE_DEFINED
+typedef s16 ADPCM_STATE[16];
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,7 +143,7 @@ extern volatile u32 __OSGlobalIntMask;
 #endif
 
 /**
- * 6. GAME-SPECIFIC TAG HARMONIZATION
+ * 7. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
