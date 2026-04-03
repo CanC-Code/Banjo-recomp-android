@@ -18,7 +18,7 @@
 
 /**
  * 3. CORE N64 SCALARS
- * Defined before includes so shadowed SDK headers (like PR/sched.h) don't fail.
+ * Defined before any includes to prevent SDK shadowing errors.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -44,19 +44,10 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
-/* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
-#ifdef __cplusplus
-extern "C" {
-#endif
-static inline int bka_sched_yield(void) {
-    return usleep(1);
-}
-#ifdef __cplusplus
-}
-#endif
-
+/* Authority Strategy: Fix 'sched_yield' for Android NDK C++ STL compatibility 
+   This bypasses the shadowing caused by the N64 SDK's sched.h */
 #ifndef sched_yield
-  #define sched_yield bka_sched_yield
+  #define sched_yield() usleep(1)
 #endif
 
 /**
@@ -122,12 +113,6 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_BLOCK 1
 #define OS_MESG_NOBLOCK 0
 
-/**
- * 6. INPUT & AUDIO Foundation
- */
-typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
-typedef struct { u16 type; u8 status, errno; } OSContStatus;
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -145,10 +130,9 @@ extern OSIntMask __OSGlobalIntMask;
 #endif
 
 /**
- * 7. GAME-SPECIFIC TAG HARMONIZATION
+ * 6. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
-typedef struct ch_vegatable sChVegetable;
 
 #endif
