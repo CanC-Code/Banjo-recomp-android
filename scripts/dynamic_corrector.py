@@ -8,7 +8,7 @@ LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
 def strip_ansi(text):
-    """Removes hidden terminal color codes that break regex matching."""
+    """Removes terminal color codes that hide errors from regex."""
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
@@ -31,7 +31,7 @@ def apply_fixes():
     fixes = 0
     file_regex = r"(\S+\.(?:c|cpp|h|hpp))"
     
-    # Symbols managed strictly in n64_types.h
+    # Core types that MUST be managed by the header, not the source files
     CORE_N64 = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
         "OSTask", "OSMesgQueue", "OSMesg", "OSTime", "OSThread", "OSIntMask",
@@ -39,11 +39,12 @@ def apply_fixes():
         "Gfx", "Acmd", "Vtx", "Mtx", "Actor"
     }
 
-    # Enhanced error capturing
+    # Extract all error patterns
     type_errs = re.findall(file_regex + r":\d+:\d+: error: unknown type name '([^']+)'", log_data)
     id_errs = re.findall(file_regex + r":\d+:\d+: error: use of undeclared identifier '([^']+)'", log_data)
     close_errs = re.findall(file_regex + r":\d+:\d+: error: static declaration of 'close' follows non-static declaration", log_data)
-    redef_errs = re.findall(file_regex + r":\d+:\d+: error: .*?redefinition.*?'(?:struct )?([a-zA-Z0-9_]+)'", log_data)
+    # Catch: redefinition of 'X' with a different type: 'A' vs 'B'
+    redef_type_errs = re.findall(file_regex + r":\d+:\d+: error: redefinition of '([^']+)' with a different type", log_data)
 
     affected_files = set([e[0] for e in re.findall(file_regex + r":\d+:\d+: error:", log_data)])
 
@@ -52,32 +53,23 @@ def apply_fixes():
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # 1. PURIFIER: Force local source files to use the Header's version of core variables
+        # 1. PURIFIER: Force local source files to stop defining core variables
         for symbol in CORE_N64:
+            # Matches: extern volatile u32 __OSGlobalIntMask; etc.
             pattern = rf"^(?:extern|volatile|static|typedef)?\s+[^;{{}}]+\s+{re.escape(symbol)}\b[^;{{}}]*;"
             if re.search(pattern, content, re.MULTILINE):
-                content = re.sub(pattern, f"/* Purged local redeclaration of {symbol} */", content, flags=re.MULTILINE)
+                content = re.sub(pattern, f"/* Purified local redeclaration of {symbol} */", content, flags=re.MULTILINE)
                 print(f"  [🪠] Purged local '{symbol}' in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 2. LOCKUP FIX: Rename game's 'close' function to avoid conflict with unistd.h
-        if "close" in close_errs or any(f in filepath for f in ["lockup.c", "castle.c"]):
+        # 2. NAMESPACE FIX: Resolve the 'close' conflict in lockup.c
+        if "close" in str(log_data) and ("lockup.c" in filepath or "castle.c" in filepath):
             if "bka_close" not in content:
                 content = re.sub(r'\bclose\b', 'bka_close', content)
-                print(f"  [-] Safely renamed internal 'close' to 'bka_close' in {os.path.basename(filepath)}")
+                print(f"  [-] Renamed internal 'close' to 'bka_close' in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # 3. TYPE HARMONIZER: Resolve redefinitions by commenting out local versions
-        for name in [r[1] for r in redef_errs if r[0] == filepath]:
-            if name in CORE_N64:
-                pattern_struct = rf"(typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{{.*?\}}\s*{name}\s*;)"
-                content = re.sub(pattern_struct, r"/* \1 (Master Header Fix) */", content, flags=re.DOTALL)
-                pattern_simple = rf"(typedef\s+[^;{{}}]+\s+{name}\s*;)"
-                content = re.sub(pattern_simple, r"/* \1 (Master Header Fix) */", content)
-                print(f"  [-] Resolved redefinition of {name} in {os.path.basename(filepath)}")
-                fixes += 1
-
-        # 4. INJECTOR: Ensure master header is present
+        # 3. HEADER INJECTION: Ensure master header is included
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
             fixes += 1
