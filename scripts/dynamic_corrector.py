@@ -27,7 +27,7 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Robust regex for paths
+    # Robust regex to capture full paths even without extensions (STL headers)
     file_regex = r"(/[^:\s]+):"
     
     affected_files = set()
@@ -35,10 +35,10 @@ def apply_fixes():
         if "error:" in line:
             match = re.search(file_regex, line.strip())
             if match:
-                filepath = match.group(1)
-                # Ignore system headers
-                if os.path.exists(filepath) and "ndk" not in filepath and "/usr/include" not in filepath:
-                    affected_files.add(filepath)
+                path = match.group(1)
+                # Only fix files that exist and are part of the recompilation project
+                if os.path.exists(path) and "ndk" not in path and "/usr/include" not in path:
+                    affected_files.add(path)
 
     for filepath in affected_files:
         try:
@@ -46,13 +46,6 @@ def apply_fixes():
         except: continue
         
         original_content = content
-
-        # FIX: The 'close' Conflict
-        if "follows non-static declaration" in log_data or "lockup.c" in filepath:
-            if "bka_close" not in content:
-                content = re.sub(r'\bclose\b', 'bka_close', content)
-                print(f"  [-] Renamed 'close' -> 'bka_close' in {os.path.basename(filepath)}")
-                fixes += 1
 
         # FIX: Priority Injection (Ensures n64_types.h is the VERY first include)
         if 'include "ultra/n64_types.h"' not in content:
