@@ -29,18 +29,20 @@ def run_build():
 def classify_errors(log_data):
     """
     Returns a dict of recognized error categories found in the log.
-    Each category maps to a list of relevant context strings.
+    Values are lists of (filepath, extra_context) tuples where relevant.
     """
     categories = {
-        "missing_n64_types": [],   # file needs n64_types.h include
-        "actor_pointer": [],       # 'actor' undeclared in a TU
-        "libaudio_types": [],      # Acmd / ADPCM_STATE missing (header-level, not per-file)
-        "unknown": [],
+        "missing_n64_types":  [],  # file needs n64_types.h include
+        "actor_pointer":      [],  # 'actor' undeclared in a TU
+        "local_struct_fwd":   [],  # unknown type name for a local struct
+        "libaudio_types":     [],  # Acmd / ADPCM_STATE missing (header-level)
+        "null_float":         [],  # NULL assigned to f32 (header-level)
+        "unknown":            [],
     }
 
-    # Header-level libaudio errors — these are always in libaudio.h itself,
-    # not in individual TUs. Flag them so the loop can halt with a clear message
-    # instead of spinning forever.
+    # ── Header-level traps ────────────────────────────────────────────────
+    # These originate inside shared headers, not individual TUs.
+    # Looping cannot fix them; they require n64_types.h changes.
     libaudio_patterns = [
         r"libaudio\.h.*unknown type name 'Acmd'",
         r"libaudio\.h.*unknown type name 'ADPCM_STATE'",
@@ -49,22 +51,67 @@ def classify_errors(log_data):
         if re.search(pattern, log_data):
             categories["libaudio_types"].append(pattern)
 
-    file_regex = r"(/[^:\s]+):"
+    # NULL → f32 errors come from stddef.h redefining NULL as (void*)0
+    # after n64_types.h; the fix is in n64_types.h, not per-TU.
+    if re.search(r"initializing 'f32'.*incompatible type 'void \*'", log_data):
+        categories["null_float"].append("NULL=(void*)0 assigned to f32 field")
+
+    # ── Per-file error parsing ─────────────────────────────────────────────
+    file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
+    # Map filepath → set of unknown type names from that file
+    local_struct_map = {}
+
     for line in log_data.split('\n'):
         if "error:" not in line:
             continue
+
         match = re.search(file_regex, line)
         filepath = match.group(1) if match else None
 
+        # Skip NDK/sysroot headers — we can't patch those
+        if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
+            filepath = None
+
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
-            # Already captured above at header level; skip per-file noise.
-            pass
+            pass  # already captured at header level
+
+        elif "initializing 'f32'" in line and "void *" in line:
+            pass  # already captured at header level
+
         elif "use of undeclared identifier 'actor'" in line and filepath:
             categories["actor_pointer"].append(filepath)
+
+        elif m := re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line):
+            type_name = m.group(1)
+            if filepath:
+                local_struct_map.setdefault(filepath, set()).add(type_name)
+            else:
+                categories["unknown"].append(line.strip())
+
         elif filepath and os.path.exists(filepath):
             categories["missing_n64_types"].append(filepath)
+
         else:
-            categories["unknown"].append(line.strip())
+            if line.strip():
+                categories["unknown"].append(line.strip())
+
+    # Resolve local_struct_map into actionable entries.
+    # If a type is unknown in a .c file and not defined anywhere in n64_types.h,
+    # it's almost certainly a local struct that needs a forward declaration
+    # injected at the top of that specific source file.
+    known_global_types = {
+        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
+        "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
+        "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
+        "Actor", "ActorMarker",
+        # scalars
+        "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
+        "f32", "f64", "n64_bool", "OSPri", "OSId",
+    }
+    for filepath, type_names in local_struct_map.items():
+        for t in type_names:
+            if t not in known_global_types:
+                categories["local_struct_fwd"].append((filepath, t))
 
     return categories
 
@@ -77,21 +124,20 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── HALT CONDITION: libaudio header-level type errors ─────────────────────
-    # These errors originate inside libaudio.h itself because _GBI_H_ suppresses
-    # the gbi.h definitions that libaudio.h depends on (Acmd, ADPCM_STATE).
-    # The fix belongs in n64_types.h (stub those types before #include libaudio.h),
-    # NOT in individual TU files. Continuing the loop cannot resolve this.
+    # ── HALT: header-level libaudio type errors ───────────────────────────
     if categories["libaudio_types"]:
-        print("\n🛑 HEADER-LEVEL ERRORS DETECTED in libaudio.h:")
+        print("\n🛑 HEADER-LEVEL ERRORS in libaudio.h:")
         print("   → unknown type name 'Acmd' and/or 'ADPCM_STATE'")
-        print("   Root cause: _GBI_H_ guard blocks gbi.h, which defines these types.")
-        print("   Fix required in n64_types.h: add Acmd and ADPCM_STATE stubs")
-        print("   BEFORE the '#include <PR/libaudio.h>' line.")
-        print("   The corrector loop cannot resolve header-level type errors automatically.")
-        return -1  # Sentinel: signals main() to halt immediately
+        print("   Fix required in n64_types.h: add stubs before #include <PR/libaudio.h>")
+        return -1
 
-    # ── FIX A: Priority Inclusion ──────────────────────────────────────────────
+    # ── HALT: NULL→f32 errors (header-level) ─────────────────────────────
+    if categories["null_float"]:
+        print("\n🛑 HEADER-LEVEL ERROR: NULL=(void*)0 assigned to f32 fields.")
+        print("   Fix required in n64_types.h: redefine NULL to 0 before system includes.")
+        return -1
+
+    # ── FIX A: Priority inclusion of n64_types.h ─────────────────────────
     affected_files = set(categories["missing_n64_types"])
     for filepath in affected_files:
         if not os.path.exists(filepath):
@@ -107,10 +153,9 @@ def apply_fixes():
             print(f"  [🛠️] Injected n64_types.h include into {os.path.basename(filepath)}")
             fixes += 1
 
-    # ── FIX B: 'actor' pointer injection ──────────────────────────────────────
+    # ── FIX B: 'actor' pointer injection ─────────────────────────────────
     if categories["actor_pointer"]:
-        actor_files = set(categories["actor_pointer"])
-        for filepath in actor_files:
+        for filepath in set(categories["actor_pointer"]):
             if not os.path.exists(filepath):
                 continue
             with open(filepath, "r") as f:
@@ -120,8 +165,7 @@ def apply_fixes():
                 content = re.sub(
                     r'(\{)',
                     r'\1\n    Actor *actor = (Actor *)this;',
-                    content,
-                    count=1
+                    content, count=1
                 )
                 print(f"  [🛠️] Injected 'actor' pointer into {os.path.basename(filepath)}")
             if content != original:
@@ -129,10 +173,50 @@ def apply_fixes():
                     f.write(content)
                 fixes += 1
 
-    # ── UNKNOWN errors: report but don't fix ──────────────────────────────────
+    # ── FIX C: Local struct forward declaration injection ─────────────────
+    # Groups all unknown local type names per file, then injects a single
+    # block of forward declarations at the top of each affected source file.
+    # Pattern: typedef struct typeName_s typeName;
+    # This covers the 'sChVegetable' class of errors where a .c file uses
+    # a struct type in a forward prototype before defining it.
+    if categories["local_struct_fwd"]:
+        # Group by file
+        file_to_types = {}
+        for filepath, type_name in categories["local_struct_fwd"]:
+            file_to_types.setdefault(filepath, set()).add(type_name)
+
+        for filepath, type_names in file_to_types.items():
+            if not os.path.exists(filepath):
+                continue
+            with open(filepath, "r") as f:
+                content = f.read()
+            original = content
+
+            fwd_lines = []
+            for t in sorted(type_names):
+                # Only inject if not already declared in this file
+                if f"typedef struct" not in content or t not in content.split("typedef struct")[0]:
+                    # Derive tag: strip leading 's'/'S' prefix for tag name
+                    # e.g. sChVegetable → chVegetable_s, or just use t + _s
+                    tag = t[0].lower() + t[1:] if t[0] in ('s', 'S') else t
+                    fwd_decl = f"typedef struct {tag}_s {t};"
+                    if fwd_decl not in content:
+                        fwd_lines.append(fwd_decl)
+
+            if fwd_lines:
+                injection = "/* AUTO: forward declarations */\n" + \
+                            "\n".join(fwd_lines) + "\n"
+                content = injection + content
+                with open(filepath, "w") as f:
+                    f.write(content)
+                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into "
+                      f"{os.path.basename(filepath)}")
+                fixes += 1
+
+    # ── UNKNOWN errors: report but don't fix ─────────────────────────────
     if categories["unknown"] and fixes == 0:
         print("\n⚠️  Unrecognized errors (no automatic fix available):")
-        for msg in categories["unknown"][:10]:
+        for msg in list(dict.fromkeys(categories["unknown"]))[:10]:
             print(f"   {msg}")
 
     return fixes
@@ -147,7 +231,6 @@ def main():
         result = apply_fixes()
 
         if result == -1:
-            # Header-level error; looping is useless.
             print("\n🛑 Loop halted. Manual fix required in n64_types.h.")
             break
         elif result == 0:
