@@ -18,7 +18,6 @@
 
 /**
  * 3. CORE N64 SCALARS
- * Defined before any includes to prevent shadowed SDK headers from failing.
  */
 typedef signed char s8;
 typedef unsigned char u8;
@@ -36,8 +35,6 @@ typedef s32 OSId;
 
 /**
  * 4. SYSTEM INCLUDES & THREADING POLYFILL
- * Authority: We define sched_yield manually to bypass the 
- * shadowing caused by the N64 SDK's sched.h.
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -46,13 +43,12 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
+/* Authority Strategy: If sched_yield is missing due to shadowing, 
+   provide a static inline version to satisfy C++ STL requirements. */
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Real inline function to satisfy both C and C++ logic (handles ::sched_yield) */
-static inline int bka_sched_yield(void) { 
-    return usleep(1); 
-}
+static inline int bka_sched_yield(void) { return usleep(1); }
 #ifdef __cplusplus
 }
 #endif
@@ -79,10 +75,7 @@ typedef struct {
     u64 *yield_data_ptr; u32 yield_data_size;
 } OSTask_t;
 
-typedef union { 
-    OSTask_t t; 
-    long long int force_align[32]; 
-} OSTask;
+typedef union { OSTask_t t; long long int force_align[32]; } OSTask;
 
 typedef struct {
     u64 at, v0, v1, a0, a1, a2, a3;
@@ -122,17 +115,11 @@ struct OSThread_s {
     struct OSThread_s *tlprev;
 };
 
-typedef volatile u32 OSIntMask;
-#define OS_IM_NONE 0
-#define OS_MESG_BLOCK 1
-#define OS_MESG_NOBLOCK 0
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern u32 osTvType;
 extern OSTime osClockRate;
-extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
 extern volatile u32 __OSGlobalIntMask;
@@ -148,6 +135,5 @@ extern volatile u32 __OSGlobalIntMask;
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
-typedef struct ch_vegatable sChVegetable;
 
 #endif
