@@ -3,7 +3,12 @@ import re
 import subprocess
 import time
 
-GRADLE_CMD = ["gradle", "-p", "Android", "assembleDebug", "--stacktrace", "--no-daemon", "-Dorg.gradle.jvmargs=-Xmx4g"]
+# [FIX APPLIED]: Added --console=plain and --max-workers=1 to prevent Gradle's logger from OOM crashing during massive error cascades!
+GRADLE_CMD = [
+    "gradle", "-p", "Android", "assembleDebug", 
+    "--console=plain", "--max-workers=1", "--no-daemon", 
+    "-Dorg.gradle.jvmargs=-Xmx4g"
+]
 LOG_FILE = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 
@@ -85,12 +90,8 @@ def classify_errors(log_data):
         m_array = "array has incomplete element type" in line
         m_def = "incomplete definition of type" in line
 
-        # Clang redefinition errors where it mentions unguarded headers
         if "redefinition of" in line and filepath:
-            m_struct_redef = re.search(r"redefinition of '([^']+)'", line)
-            if m_struct_redef:
-                # We will handle this gracefully with the pragma once fix!
-                pass
+            pass
 
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
             pass  
@@ -157,7 +158,6 @@ def apply_fixes():
         return -1
 
     # ── FIX 0: Header Protection ───────────────────────────────────────────
-    # [NEW]: Ensure n64_types.h has #pragma once to prevent multiple inclusion errors
     if os.path.exists(TYPES_HEADER):
         with open(TYPES_HEADER, "r") as f:
             types_content = f.read()
