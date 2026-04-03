@@ -10,7 +10,6 @@
 
 /**
  * 2. THE NUCLEAR BLOCKADE
- * Prevents original SDK headers from overriding our recompiled types.
  */
 #define _OS_H_
 #define _ULTRA64_H_
@@ -66,15 +65,8 @@ typedef union {
     long long int force_align[32];
 } OSTask;
 
-/**
- * AUTHORITY FIX: 
- * OSIntMask is made volatile in the typedef. This ensures that any 
- * declaration using OSIntMask (like __OSGlobalIntMask) is globally 
- * consistent as a volatile type, satisfying the hardware interrupt logic.
- */
 typedef volatile u32 OSIntMask;
 #define OS_IM_NONE 0
-
 #define OS_MESG_BLOCK 1
 #define OS_MESG_NOBLOCK 0
 
@@ -92,230 +84,32 @@ typedef s16 ENVMIX_STATE[40];
 #define ADPCMFSIZE 9
 #define ADPCMVSIZE 8
 
-#ifndef UNITY_PITCH
-  #define UNITY_PITCH 0x8000
-#endif
-
-#ifndef MAX_RATIO
-  #define MAX_RATIO 1.99996
-#endif
-
 typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
 typedef union { Vtx_t v; long long force_align; } Vtx;
 typedef union { struct { s32 m[4][4]; }; long long force_align; } Mtx;
-
-typedef struct { unsigned char col[3], pad1; unsigned char colc[3], pad2; signed char dir[3], pad3; } Light_t;
-typedef union { Light_t l; long long force_align[2]; } Light;
-typedef struct { Light l[2]; } LookAt;
-
-#define OS_TV_NTSC 0
-#define OS_TV_PAL 1
-#define OS_TV_MPAL 2
-
-#define PFS_ERR_DEVICE 11
-#define PFS_ERR_ID_FATAL 12
-
-typedef struct OSMesgQueue_s {
-    struct OSThread_s *mtqueue;
-    struct OSThread_s *fullqueue;
-    s32 validCount;
-    s32 first;
-    s32 msgCount;
-    OSMesg *msg;
-} OSMesgQueue;
-
-typedef struct OSTimer_s {
-    struct OSTimer_s *next;
-    struct OSTimer_s *prev;
-    u64 interval;
-    u64 value;
-    OSMesgQueue *mq;
-    OSMesg msg;
-} OSTimer;
-
-typedef struct {
-    u16 type;
-    u8 pri;
-    u8 cmp;
-    OSMesgQueue *retQueue;
-} OSIoMesgHdr;
-
-typedef struct {
-    u32 errStatus;
-    void *dramAddr;
-    void *C2Addr;
-    u32 sectorSize;
-    u32 C1ErrNum;
-    u32 C1ErrSector[4];
-} __OSBlockInfo;
-
-typedef struct {
-    u32 cmdType;
-    u16 transferMode;
-    u16 blockNum;
-    s32 sectorNum;
-    u32 devAddr;
-    u32 bmCtlShadow;
-    u32 seqCtlShadow;
-    __OSBlockInfo block[2];
-} __OSTranxInfo;
-
-typedef struct OSPiHandle_s {
-    struct OSPiHandle_s *next;
-    u8 type;
-    u8 latency;
-    u8 pageSize;
-    u8 relDuration;
-    u8 pulse;
-    u8 domain;
-    u32 baseAddress;
-    u32 speed;
-    __OSTranxInfo transferInfo;
-} OSPiHandle;
-
-struct OSThread_s;
-
-typedef struct {
-    s32 active;
-    struct OSThread_s *thread; 
-    OSMesgQueue *cmdQueue;
-    OSMesgQueue *evtQueue;
-    OSMesgQueue *acsQueue;
-    s32 (*dma)(s32, u32, void *, u32);
-    s32 (*edma)(OSPiHandle *, s32, u32, void *, u32);
-} OSDevMgr;
-
-typedef struct {
-    OSIoMesgHdr hdr;
-    void *dramAddr;
-    u32 devAddr;
-    u32 size;
-    OSPiHandle *piHandle; 
-} OSIoMesg;
-
-typedef struct {
-    int queue;
-    int channel;
-    u8 id[32];
-    u8 label[32];
-    int version;
-    int dir_size;
-    int inode_table;
-    int minode_table;
-    int dir_table;
-    int inode_start_page;
-    u8 banks;
-    u8 activebank;
-    u8 status;
-} OSPfs;
-
-typedef struct {
-    u32 ctrl;
-    u32 width;
-    u32 burst;
-    u32 vSync;
-    u32 hSync;
-    u32 leap;
-    u32 hStart;
-    u32 xScale;
-    u32 vCurrent;
-} OSViCommonRegs;
-
-typedef struct {
-    u32 origin;
-    u32 yScale;
-    u32 vStart;
-    u32 vBurst;
-    u32 vIntr;
-} OSViFieldRegs;
-
-typedef struct {
-    u8 type;
-    OSViCommonRegs comRegs;
-    OSViFieldRegs fldRegs[2];
-} OSViMode;
-
-typedef u32 OSYieldResult;
-
-typedef struct {
-    OSMesgQueue *queue;
-    OSMesg msg;
-} OSHWIntr;
-
-typedef struct {
-    u64 at, v0, v1, a0, a1, a2, a3;
-    u64 t0, t1, t2, t3, t4, t5, t6, t7;
-    u64 s0, s1, s2, s3, s4, s5, s6, s7;
-    u64 t8, t9, k0, k1, gp, sp, s8, ra;
-    u64 lo, hi, pc;
-    union { u32 sr; u32 status; }; 
-    u32 cause, badvaddr, rcp;
-    u32 fpcsr;
-    f64 fp0,  fp2,  fp4,  fp6,  fp8, fp10, fp12, fp14;
-    f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
-} CPUState;
-
-typedef struct OSThread_s {
-    struct OSThread_s *next;
-    OSPri priority;
-    struct OSMesgQueue_s *queue;
-    OSMesg msg;
-    u32 contextId;
-    u32 state;
-    u32 flags;
-    OSId id;
-    int fp;
-    CPUState context;
-    struct OSThread_s *tlnext; 
-    struct OSThread_s *tlprev;
-} OSThread;
-
-#undef errno
-typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
-typedef struct { u16 type; u8 status, errno; } OSContStatus;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern u32 osTvType;
-
-/**
- * AUTHORITY FIX: 
- * osClockRate MUST be OSTime (u64) to match the SDK timers 
- * and internal recompiled cycle calculations.
- */
 extern OSTime osClockRate;
-
-extern OSPiHandle *__osPiTable;
 extern u32 osRomBase;
 extern u32 osResetType;
 extern u32 osAppNMIBuffer;
-
-/**
- * AUTHORITY FIX: 
- * Declared as OSIntMask (which is now volatile u32). 
- */
 extern OSIntMask __OSGlobalIntMask;
 
 extern void guMtxIdentF(float mf[4][4]);
 extern void guMtxF2L(float mf[4][4], Mtx *m);
-
-extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
-extern s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *vAddr, u32 nbytes);
-
-extern OSViMode osViModeNtscLan1;
-extern OSViMode osViModePalLan1;
-extern OSViMode osViModeMpalLan1;
-
-extern OSYieldResult osSpTaskYielded(OSTask *t);
 
 #ifdef __cplusplus
 }
 #endif
 
 /**
- * 6. RECOMPILATION SPECIFIC TYPES
+ * 6. GAME-SPECIFIC BASE TYPES
  */
+typedef struct Actor Actor;
+typedef struct ActorMarker ActorMarker;
 typedef struct ch_vegatable sChVegetable;
 
 /**
@@ -328,29 +122,10 @@ typedef struct ch_vegatable sChVegetable;
 #include <math.h>
 #include <unistd.h>
 
-#undef NULL
-#define NULL 0
-
-#ifndef M_PI
-  #define M_PI 3.14159265358979323846
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/**
- * 8. N64 SDK INCLUDES
- */
 #include <PR/libaudio.h>
-
-/**
- * 9. POLYFILLS
- */
-static inline int sched_yield_polyfill(void) { return usleep(1); }
-#undef sched_yield
-#define sched_yield sched_yield_polyfill
-
 #ifdef __cplusplus
 }
 #endif
