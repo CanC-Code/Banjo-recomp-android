@@ -3,9 +3,15 @@
 
 /**
  * 1. MANDATORY FEATURE MACROS
+ *    These MUST appear before any system header inclusion.
+ *    _GNU_SOURCE unlocks M_PI and other GNU extensions in glibc/NDK headers.
  */
-#define _POSIX_C_SOURCE 200809L
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #define _USE_MATH_DEFINES
 
 /**
@@ -42,6 +48,26 @@ typedef s32 OSId;
 #include <time.h>
 #include <math.h>
 #include <unistd.h>
+
+/* Fallback: guarantee M_PI is always defined regardless of include order.
+ * On Android NDK, math.h only exposes M_PI when _GNU_SOURCE is set at the
+ * time the header is first processed.  If any prior include already pulled
+ * in math.h without that guard, M_PI will be absent.  This catches it.   */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
+#ifndef M_PI_4
+#define M_PI_4 0.78539816339744830962
+#endif
+#ifndef M_SQRT2
+#define M_SQRT2 1.41421356237309504880
+#endif
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
 
 /* Authority: Fix 'sched_yield' for Android NDK C++ STL compatibility */
 #ifndef sched_yield
@@ -111,15 +137,11 @@ struct OSThread_s {
  *
  * _GBI_H_ blocks the real gbi.h and _OS_H_ blocks os.h, but several
  * game headers (model.h, structs.h, prop.h, mlmtx.h, modelRender.h,
- * pfsmanager.h) depend on the types below.  We provide minimal stubs
- * so those headers parse cleanly without dragging in the full N64 SDK.
- *
- * All guards follow the pattern used by the upstream SDK so that if any
- * include path ever resolves the real header first, these stubs are skipped.
+ * pfsmanager.h) depend on the types below.  Minimal stubs provided so
+ * those headers parse cleanly without the full N64 SDK.
  */
 
-/* ── Acmd ─────────────────────────────────────────────────────────────────
- * 64-bit RSP audio command word.  Required by libaudio.h.              */
+/* ── Acmd ─────────────────────────────────────────────────────────────── */
 #ifndef ACMD_DEFINED
 #define ACMD_DEFINED
 typedef union {
@@ -128,39 +150,34 @@ typedef union {
 } Acmd;
 #endif
 
-/* ── ADPCM_STATE ──────────────────────────────────────────────────────────
- * 16-entry s16 predictor-state array.  Required by libaudio.h.         */
+/* ── ADPCM_STATE ─────────────────────────────────────────────────────── */
 #ifndef ADPCM_STATE_DEFINED
 #define ADPCM_STATE_DEFINED
 typedef s16 ADPCM_STATE[16];
 #endif
 
-/* ── Vtx ──────────────────────────────────────────────────────────────────
- * Vertex union used in RSP display lists.
- * Required by: model.h, structs.h, prop.h                              */
+/* ── Vtx ─────────────────────────────────────────────────────────────── */
 #ifndef VTX_DEFINED
 #define VTX_DEFINED
 typedef union {
     struct {
-        s16 ob[3];   /* object-space position x,y,z */
+        s16 ob[3];
         u16 flag;
-        s16 tc[2];   /* texture coords s,t           */
-        u8  cn[4];   /* colour/normal r,g,b,a        */
+        s16 tc[2];
+        u8  cn[4];
     } v;
     struct {
         s16 ob[3];
         u16 flag;
         s16 tc[2];
-        s8  n[3];    /* normal x,y,z                 */
-        u8  a;       /* alpha                        */
+        s8  n[3];
+        u8  a;
     } n;
     long long int force_align;
 } Vtx;
 #endif
 
-/* ── Gfx ──────────────────────────────────────────────────────────────────
- * Display list command word pair.
- * Required by: model.h, structs.h, prop.h, modelRender.h               */
+/* ── Gfx ─────────────────────────────────────────────────────────────── */
 #ifndef GFX_DEFINED
 #define GFX_DEFINED
 typedef union {
@@ -169,11 +186,7 @@ typedef union {
 } Gfx;
 #endif
 
-/* ── Mtx ──────────────────────────────────────────────────────────────────
- * Fixed-point 4x4 matrix (16 x s16 integer + 16 x u16 fraction).
- * Required by: structs.h, prop.h, mlmtx.h, modelRender.h
- * NOTE: the game's structs.h already defines MtxF (float 4x4); Clang
- * suggests MtxF for Mtx, confirming these are two distinct types.      */
+/* ── Mtx ─────────────────────────────────────────────────────────────── */
 #ifndef MTX_DEFINED
 #define MTX_DEFINED
 typedef struct {
@@ -182,10 +195,7 @@ typedef struct {
 } Mtx;
 #endif
 
-/* ── OSContPad ────────────────────────────────────────────────────────────
- * Controller pad state struct.  Normally from os_cont.h, but _OS_H_
- * prevents the os.h chain that os_cont.h depends on from loading fully.
- * Required by: pfsmanager.h (include/core1/pfsmanager.h:64)            */
+/* ── OSContPad ───────────────────────────────────────────────────────── */
 #ifndef OS_CONT_PAD_DEFINED
 #define OS_CONT_PAD_DEFINED
 typedef struct {
