@@ -28,37 +28,38 @@ def apply_fixes():
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
 
     fixes = 0
-    # Improved regex to handle files without extensions (STL internal headers)
-    file_regex = r"(/[^:\s]+):"
+    # Robust regex to capture full paths even without extensions
+    file_regex = r"^((?:/[^:/]+)+):"
     
     CORE_N64 = {"__OSGlobalIntMask", "osClockRate", "osResetType", "osAppNMIBuffer", "Actor", "ActorMarker", "OSContPad"}
 
-    # Robust parsing of affected files
     affected_files = set()
     for line in log_data.split('\n'):
         if "error:" in line:
-            match = re.search(file_regex, line)
+            match = re.search(file_regex, line.strip())
             if match:
-                affected_files.add(match.group(1))
+                filepath = match.group(1)
+                # Ignore system/NDK headers for correction
+                if os.path.exists(filepath) and "/usr/include" not in filepath and "ndk" not in filepath:
+                    affected_files.add(filepath)
 
     for filepath in affected_files:
-        if not os.path.exists(filepath) or "/usr/include" in filepath or "ndk" in filepath: continue
         with open(filepath, "r") as f: content = f.read()
         original_content = content
 
-        # FIX A: The 'close' Conflict
+        # FIX: The 'close' Conflict
         if "follows non-static declaration" in log_data or "lockup.c" in filepath:
             if "bka_close" not in content:
                 content = re.sub(r'\bclose\b', 'bka_close', content)
-                print(f"  [-] Renamed internal 'close' -> 'bka_close' in {os.path.basename(filepath)}")
+                print(f"  [-] Renamed 'close' -> 'bka_close' in {os.path.basename(filepath)}")
                 fixes += 1
 
-        # FIX B: Priority Inclusion
+        # FIX: Priority Injection
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
             fixes += 1
 
-        # FIX C: 'actor' pointer correction
+        # FIX: 'actor' pointer correction
         if "use of undeclared identifier 'actor'" in log_data and "this" in content:
             if "Actor *actor =" not in content:
                 content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
