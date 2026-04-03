@@ -27,9 +27,6 @@ def run_build():
     return process.returncode == 0
 
 def classify_errors(log_data):
-    """
-    Returns a dict of recognized error categories found in the log.
-    """
     categories = {
         "missing_n64_types":  [],  
         "actor_pointer":      [],  
@@ -40,7 +37,7 @@ def classify_errors(log_data):
         "static_conflict":    [],  
         "incomplete_sizeof":  [],
         "undeclared_macros":  [], 
-        "implicit_func":      [], # NEW: Catches missing standard C functions
+        "implicit_func":      [], 
         "unknown":            [],
     }
 
@@ -87,6 +84,13 @@ def classify_errors(log_data):
         m_ptr = "arithmetic on a pointer to an incomplete type" in line
         m_array = "array has incomplete element type" in line
         m_def = "incomplete definition of type" in line
+
+        # Clang redefinition errors where it mentions unguarded headers
+        if "redefinition of" in line and filepath:
+            m_struct_redef = re.search(r"redefinition of '([^']+)'", line)
+            if m_struct_redef:
+                # We will handle this gracefully with the pragma once fix!
+                pass
 
         if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
             pass  
@@ -151,6 +155,17 @@ def apply_fixes():
     if categories["null_float"]:
         print("\n🛑 HEADER-LEVEL ERROR: NULL=(void*)0 assigned to f32 fields.")
         return -1
+
+    # ── FIX 0: Header Protection ───────────────────────────────────────────
+    # [NEW]: Ensure n64_types.h has #pragma once to prevent multiple inclusion errors
+    if os.path.exists(TYPES_HEADER):
+        with open(TYPES_HEADER, "r") as f:
+            types_content = f.read()
+        if "#pragma once" not in types_content:
+            with open(TYPES_HEADER, "w") as f:
+                f.write("#pragma once\n" + types_content)
+            print("  [🛠️] Secured n64_types.h with #pragma once include guard")
+            fixes += 1
 
     # ── FIX A: Priority inclusion of n64_types.h ─────────────────────────
     affected_files = set(categories["missing_n64_types"])
@@ -355,8 +370,7 @@ def apply_fixes():
                     header_to_add = "<stdlib.h>"
                 
                 if header_to_add and f"#include {header_to_add}" not in types_content:
-                    # Inject standard includes right at the top, just under any include guards
-                    types_content = types_content.replace("#define N64_TYPES_H", f"#define N64_TYPES_H\n#include {header_to_add}")
+                    types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header_to_add}")
                     includes_added = True
                     print(f"  [🛠️] Injected {header_to_add} into n64_types.h to fix implicit '{func}'")
             
@@ -368,7 +382,6 @@ def apply_fixes():
     # ── UNKNOWN errors: report but don't fix ─────────────────────────────
     if categories["unknown"] and fixes == 0:
         print("\n⚠️  Unrecognized errors (no automatic fix available):")
-        # Print a bit more of the error log to help us diagnose next time!
         for msg in list(dict.fromkeys(categories["unknown"]))[:15]:
             print(f"   {msg}")
 
