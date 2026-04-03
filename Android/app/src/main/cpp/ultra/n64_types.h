@@ -63,16 +63,89 @@ typedef volatile u32 OSIntMask;
 #define OS_MESG_NOBLOCK 0
 
 /**
- * 5. INPUT & AUDIO FOUNDATION
- * These resolve the 'unknown type name OSContPad' errors.
+ * 5. OS STRUCTURES
+ */
+typedef struct {
+    u64 at, v0, v1, a0, a1, a2, a3;
+    u64 t0, t1, t2, t3, t4, t5, t6, t7;
+    u64 s0, s1, s2, s3, s4, s5, s6, s7;
+    u64 t8, t9, k0, k1, gp, sp, s8, ra;
+    u64 lo, hi, pc;
+    union { u32 sr; u32 status; }; 
+    u32 cause, badvaddr, rcp;
+    u32 fpcsr;
+    f64 fp0,  fp2,  fp4,  fp6,  fp8, fp10, fp12, fp14;
+    f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
+} CPUState;
+
+typedef struct OSMesgQueue_s {
+    struct OSThread_s *mtqueue;
+    struct OSThread_s *fullqueue;
+    s32 validCount;
+    s32 first;
+    s32 msgCount;
+    OSMesg *msg;
+} OSMesgQueue;
+
+typedef struct OSTimer_s {
+    struct OSTimer_s *next;
+    struct OSTimer_s *prev;
+    u64 interval;
+    u64 value;
+    OSMesgQueue *mq;
+    OSMesg msg;
+} OSTimer;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri priority;
+    struct OSMesgQueue_s *queue;
+    OSMesg msg;
+    u32 contextId;
+    u32 state;
+    u32 flags;
+    OSId id;
+    int fp;
+    CPUState context;
+    struct OSThread_s *tlnext; 
+    struct OSThread_s *tlprev;
+} OSThread;
+
+typedef struct {
+    u16 type;
+    u8 pri;
+    u8 cmp;
+    OSMesgQueue *retQueue;
+} OSIoMesgHdr;
+
+typedef struct OSPiHandle_s {
+    struct OSPiHandle_s *next;
+    u8 type;
+    u8 latency;
+    u8 pageSize;
+    u8 relDuration;
+    u8 pulse;
+    u8 domain;
+    u32 baseAddress;
+    u32 speed;
+} OSPiHandle;
+
+typedef struct {
+    OSIoMesgHdr hdr;
+    void *dramAddr;
+    u32 devAddr;
+    u32 size;
+    OSPiHandle *piHandle; 
+} OSIoMesg;
+
+/**
+ * 6. INPUT Foundation
  */
 typedef struct { u16 button; s8 stick_x, stick_y; u8 errno; } OSContPad;
 typedef struct { u16 type; u8 status, errno; } OSContStatus;
-typedef struct { u8 *base; u8 *cur; s32 len; s32 count; } ALHeap;
-typedef struct { void *drvr; ALHeap *heap; } ALGlobals;
 
 /**
- * 6. GRAPHICS TYPES
+ * 7. GRAPHICS TYPES
  */
 typedef u64 Gfx;
 typedef u64 Acmd;
@@ -102,7 +175,7 @@ extern void guMtxF2L(float mf[4][4], Mtx *m);
 #endif
 
 /**
- * 7. GAME-SPECIFIC TAG HARMONIZATION
+ * 8. GAME-SPECIFIC TAG HARMONIZATION
  */
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
@@ -111,7 +184,7 @@ typedef struct LetterFloorTile LetterFloorTile;
 typedef struct ActorLocal_Lockup ActorLocal_Lockup;
 
 /**
- * 8. SYSTEM INCLUDES
+ * 9. SYSTEM & SDK INCLUDES
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -124,7 +197,7 @@ typedef struct ActorLocal_Lockup ActorLocal_Lockup;
 extern "C" {
 #endif
 #include <PR/libaudio.h>
-// Note: PR/os_cont.h is blocked by _OS_H_, so OSContPad is defined above manually.
+#include <PR/os_cont.h>
 #ifdef __cplusplus
 }
 #endif
