@@ -1,14 +1,13 @@
 """
-prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
+dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
-Updates for Cycle 12.1:
-  - Semantic Tag Resolver: Now resolves typedef symbols by searching the registry 
-    for the "old" tag when the compiler error omits the symbol name.
-  - JVM Argument Fix: Corrected 'HeapDumpOnOutOfMemoryError' typo.
-  - Improved Log Parsing: Strips 'C/C++:' prefixes from NDK logs to ensure paths 
-    are resolved correctly.
-  - Redundancy Filter: Prevents the same fix from being applied multiple times 
-    in a single cycle, preventing infinite loops.
+Cycle 12.2 Updates:
+  - Fixed FileNotFoundError: Automatically searches for gradlew in root or Android/
+    and falls back to system 'gradle' if necessary.
+  - Registry Back-lookup: Resolves symbol names (e.g., sChVegetable) by searching 
+    the autodecls registry for the "old" tag when the compiler omits the symbol name.
+  - Corrected JVM Args: Fixed 'HeapDumpOnOutOfMemoryError' typo.
+  - Path Normalization: Strips 'C/C++:' prefixes from NDK logs for accurate pathing.
 """
 
 import os
@@ -24,9 +23,20 @@ os.environ["NINJAJOBS"] = "-j1"
 
 _HEAP_GB = 6
 
+def _get_gradle_executable():
+    """Finds the best available gradle/gradlew command."""
+    candidates = ["./gradlew", "./Android/gradlew", "gradle"]
+    for c in candidates:
+        if c.startswith("./") and os.path.exists(c):
+            os.chmod(c, 0o755)
+            return c
+        if c == "gradle":
+            return c
+    return "./gradlew" # Fallback to default
+
 def _gradle_cmd():
     return [
-        "./gradlew", "-p", "Android", "assembleDebug",
+        _get_gradle_executable(), "-p", "Android", "assembleDebug",
         "--console=plain", "--max-workers=1", "--no-daemon",
         f"-Dorg.gradle.jvmargs=-Xmx{_HEAP_GB}g -XX:+HeapDumpOnOutOfMemoryError",
     ]
@@ -73,7 +83,6 @@ def write_file(path, content):
 
 def source_path(path):
     if not path: return None
-    # Strip common CI/Android prefix noise
     p = path.replace("C/C++: ", "").strip()
     p_lower = p.lower()
     if any(x in p_lower for x in ["/usr/", "/ndk/", "toolchains", "include/2.0l"]):
@@ -87,21 +96,22 @@ def source_path(path):
 def run_build():
     print(f"\n🚀 Starting Build (heap={_HEAP_GB}g) ...")
     os.makedirs("Android", exist_ok=True)
-    # Ensure gradlew is executable
-    if os.path.exists("./gradlew"):
-        os.chmod("./gradlew", 0o755)
     
     with open(LOG_FILE, "w", encoding="utf-8") as log:
         cmd = _gradle_cmd()
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
-        for line in proc.stdout:
-            clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
-            log.write(clean)
-            print(clean, end="")
-        proc.wait()
-    return proc.returncode == 0
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            for line in proc.stdout:
+                clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
+                log.write(clean)
+                print(clean, end="")
+            proc.wait()
+            return proc.returncode == 0
+        except FileNotFoundError:
+            print(f"🛑 Error: Could not find gradle executable at {cmd[0]}")
+            return False
 
 # ── Error classifier ──────────────────────────────────────────────────────────
 
@@ -117,9 +127,8 @@ def classify_errors(log_data):
     }
 
     for line in log_data.splitlines():
-        if "OutOfMemoryError" in line or "Unrecognized VM option" in line: 
-            cats["oom"] = True
-            continue
+        if any(x in line for x in ["OutOfMemoryError", "Unrecognized VM option"]):
+            cats["oom"] = True; continue
         
         pm = re.search(r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))", line)
         fp = source_path(pm.group(1) if pm else None)
@@ -131,10 +140,9 @@ def classify_errors(log_data):
             cats["collision"].append({"file": fp, "sym": m_coll.group(1)})
             continue
 
-        # Tag Mismatch (Flexible Resolver)
-        # Matches: redefinition of 'sym' with different types ('struct A' vs 'struct B')
-        # OR: typedef redefinition with different types ('struct A' vs 'struct B')
-        m_tag = re.search(r"redefinition.*?types.*?struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'", line)
+        # Tag Mismatch (Flexible Parser)
+        # Matches: redefinition ... ('struct A' vs 'struct B')
+        m_tag = re.search(r"redefinition.*?struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'", line)
         if m_tag:
             sym_match = re.search(r"redefinition\s+of\s+'([^']+)'", line)
             cats["tag_mismatch"].append({
@@ -172,27 +180,21 @@ def sync_typedef_tags(cats):
     if not registry: return 0
     
     for entry in cats["tag_mismatch"]:
-        correct_tag = entry["correct_tag"]
-        old_tag     = entry["old_tag"]
-        sym         = entry["sym"]
+        correct, old, sym = entry["correct_tag"], entry["old_tag"], entry["sym"]
         
-        # Scenario A: We have the symbol name (e.g. sChVegetable)
+        # If symbol name is missing (Cycle 2/3 bug), look up the alias in registry
+        if not sym:
+            # Find which symbol is aliased to the 'old' incorrect tag
+            lookup = re.search(rf"typedef struct {old} ([A-Za-z_]\w*);", registry)
+            if lookup:
+                sym = lookup.group(1)
+        
         if sym:
             pattern = rf"typedef struct \w+ {sym};"
             if re.search(pattern, registry):
-                new_line = f"typedef struct {correct_tag} {sym};"
+                new_line = f"typedef struct {correct} {sym};"
                 registry = re.sub(pattern, new_line, registry)
-                print(f"  [S] Synced symbol {sym}: {old_tag} -> {correct_tag}")
-                fixes += 1
-        # Scenario B: We only have tags. Look for the alias in the registry.
-        else:
-            pattern = rf"typedef struct {old_tag} ([A-Za-z_]\w*);"
-            match = re.search(pattern, registry)
-            if match:
-                sym_found = match.group(1)
-                new_line = f"typedef struct {correct_tag} {sym_found};"
-                registry = re.sub(pattern, new_line, registry)
-                print(f"  [S] Synced registry tag: {old_tag} -> {correct_tag} (Aliased as {sym_found})")
+                print(f"  [S] Synced {sym}: {old} -> {correct}")
                 fixes += 1
             
     if fixes > 0: write_file(AUTO_HEADER, registry)
@@ -222,28 +224,21 @@ def fix_incomplete_types(cats):
     registry = read_file(AUTO_HEADER)
     if not registry: return 0
     
-    processed_tags = set()
+    processed = set()
     for entry in cats["incomplete_type"]:
         tag = entry["tag"]
-        if tag in processed_tags: continue
+        if tag in processed or f"struct {tag} {{ char pad" in registry: continue
         
-        # Avoid re-padding if already done
-        if f"struct {tag} {{ char pad" in registry: continue
-
-        old_forward = f"struct {tag};"
+        old = f"struct {tag};"
         pattern_typedef = rf"typedef struct {tag} (\w+);"
         
-        if old_forward in registry:
-            new_body = f"struct {tag} {{ char pad[4096]; }};"
-            registry = registry.replace(old_forward, new_body)
-            print(f"  [T] Padded struct: {tag}")
-            fixes += 1
+        if old in registry:
+            registry = registry.replace(old, f"struct {tag} {{ char pad[4096]; }};")
+            print(f"  [T] Padded struct: {tag}"); fixes += 1
         elif re.search(pattern_typedef, registry):
-            replacement = f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;"
-            registry = re.sub(pattern_typedef, replacement, registry)
-            print(f"  [T] Padded typedef: {tag}")
-            fixes += 1
-        processed_tags.add(tag)
+            registry = re.sub(pattern_typedef, f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;", registry)
+            print(f"  [T] Padded typedef: {tag}"); fixes += 1
+        processed.add(tag)
             
     if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
@@ -253,13 +248,11 @@ def fix_name_collisions(cats):
     for entry in cats["collision"]:
         fp, sym = entry["file"], entry["sym"]
         content = read_file(fp)
-        prefix = os.path.basename(fp).split('.')[0]
-        new_sym = f"{prefix}_{sym}"
+        new_sym = f"{os.path.basename(fp).split('.')[0]}_{sym}"
         if re.search(rf"\b{sym}\b", content):
             content = re.sub(rf"\b{sym}\b", new_sym, content)
             write_file(fp, content)
-            print(f"  [N] Isolated: {sym} -> {new_sym}")
-            fixes += 1
+            print(f"  [N] Isolated: {sym} -> {new_sym}"); fixes += 1
     return fixes
 
 def fix_sdk_types(cats):
@@ -268,8 +261,7 @@ def fix_sdk_types(cats):
     added = False
     for t in sorted(set(cats["sdk_type"])):
         if f" {t};" in content: continue
-        dtype = KNOWN_SDK_TYPEDEFS.get(t, "int")
-        content += f"\ntypedef {dtype} {t};\n"
+        content += f"\ntypedef {KNOWN_SDK_TYPEDEFS.get(t, 'int')} {t};\n"
         added = True
     if added: write_file(TYPES_HEADER, content)
     return 1 if added else 0
@@ -296,13 +288,13 @@ def apply_fixes():
     if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
+    # Priority: Tag Syncing must happen before registry updates
     fixes += sync_typedef_tags(cats)
     fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
     fixes += fix_name_collisions(cats)
     fixes += fix_sdk_types(cats)
     fixes += fix_undefined(cats)
-    
     return fixes
 
 def main():
@@ -310,6 +302,7 @@ def main():
         print(f"\n{'='*60}\n  Build Cycle {i}\n{'='*60}")
         if run_build():
             print("\n✅ Build Successful!"); sys.exit(0)
+        
         applied = apply_fixes()
         if applied == 0:
             print("\n🛑 No further fixable patterns detected."); sys.exit(1)
