@@ -60,7 +60,7 @@ def classify_errors(log_data):
         "Actor", "ActorMarker",
         "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
         "f32", "f64", "n64_bool", "OSPri", "OSId",
-        "OSHWIntr", "OSIntMask"
+        "OSHWIntr", "OSIntMask", "OSYieldResult"
     }
 
     file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
@@ -132,7 +132,8 @@ def apply_fixes():
             "s64": "long long", "u64": "unsigned long long",
             "f32": "float", "f64": "double",
             "OSPri": "int", "OSId": "int", "n64_bool": "int",
-            "OSMesg": "void*", 
+            "OSMesg": "unsigned long long", # FIX: Use long long to handle both ints and pointers
+            "OSYieldResult": "int"
         }
         
         if os.path.exists(TYPES_HEADER):
@@ -146,7 +147,6 @@ def apply_fixes():
                 if t in known_sdk_typedefs:
                     decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
                 else:
-                    # Create a padded dummy struct for complex types (Queues, Threads, etc)
                     decl = f"\ntypedef struct {{ long long int reserved[64]; }} {t};\n"
                 
                 content += decl
