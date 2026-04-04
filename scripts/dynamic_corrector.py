@@ -1,396 +1,457 @@
+"""
+prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
+
+Cycle logic:
+  1. Run Gradle / ninja build, stream output to log.
+  2. Parse the log for every known error pattern.
+  3. Apply targeted fixes to source / headers.
+  4. Repeat until the build succeeds or no new fixes can be applied.
+
+Error taxonomy handled
+  A  missing_n64_includes   — source file needs #include "ultra/n64_types.h"
+  C  local_struct_fwd       — unknown type that is a local game-logic struct
+  I  undefined_symbols      — linker: undefined symbol / undefined reference
+  J  cmake_libraries        — CMakeLists.txt missing -lm / -llog
+  K  missing_sdk_types      — SDK typedef (OSIntMask etc.) absent from n64_types.h
+  M  missing_macros         — macro constant (MAX_RATIO etc.) absent from n64_types.h
+  R  typedef_redef          — typedef redefinition with different types
+  S  static_conflict        — static declaration follows non-static
+  T  incomplete_sizeof      — sizeof of incomplete type
+  D  daemon_crash           — Gradle daemon OOM / message-receive failure (retryable)
+  O  oom_detected           — Gradle JVM heap exhaustion (retryable, raises heap)
+"""
+
 import os
 import re
 import subprocess
+import sys
 import time
 
-# Single-threaded build to prevent memory exhaustion on GitHub Actions runners
+# ── Build environment ────────────────────────────────────────────────────────
+
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
-GRADLE_CMD = [
-    "gradle", "-p", "Android", "assembleDebug",
-    "--console=plain", "--max-workers=1", "--no-daemon",
-    "-Dorg.gradle.jvmargs=-Xmx6g -XX:+HeapDumpOnOutOfMemoryError"
-]
-LOG_FILE   = "Android/full_build_log.txt"
+# Heap starts at 6 g; raised automatically on OOM (see oom_handler).
+_HEAP_GB = 6
+
+def _gradle_cmd():
+    return [
+        "gradle", "-p", "Android", "assembleDebug",
+        "--console=plain", "--max-workers=1", "--no-daemon",
+        f"-Dorg.gradle.jvmargs=-Xmx{_HEAP_GB}g -XX:+HeapDumpOnOutOfMemoryError",
+    ]
+
+LOG_FILE     = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 CMAKE_FILE   = "Android/app/src/main/cpp/CMakeLists.txt"
 
-# ---------------------------------------------------------------------------
-# Known SDK primitive typedefs  (used both for classification and injection)
-# ---------------------------------------------------------------------------
-KNOWN_SDK_TYPEDEFS = {
-    "OSHWIntr":    "unsigned int",
-    "OSIntMask":   "unsigned int",    # ← fixes n_csplayer.c / event.c
+# ── Known SDK typedefs ───────────────────────────────────────────────────────
+# Any identifier that appears in source as a *type* but is missing from the
+# force-included n64_types.h should be listed here.
+
+KNOWN_SDK_TYPEDEFS: dict[str, str] = {
+    "OSHWIntr":      "unsigned int",
+    "OSIntMask":     "unsigned int",   # n_csplayer.c, event.c
     "OSYieldResult": "int",
-    "OSPri":       "int",
-    "OSId":        "int",
-    "OSTime":      "unsigned long long",
-    "OSMesg":      "unsigned long long",
-    "n64_bool":    "int",
-    "s8":          "signed char",
-    "u8":          "unsigned char",
-    "s16":         "short",
-    "u16":         "unsigned short",
-    "s32":         "int",
-    "u32":         "unsigned int",
-    "s64":         "long long",
-    "u64":         "unsigned long long",
-    "f32":         "float",
-    "f64":         "double",
+    "OSPri":         "int",
+    "OSId":          "int",
+    "OSTime":        "unsigned long long",
+    "OSMesg":        "unsigned long long",
+    "n64_bool":      "int",
+    "s8":            "signed char",
+    "u8":            "unsigned char",
+    "s16":           "short",
+    "u16":           "unsigned short",
+    "s32":           "int",
+    "u32":           "unsigned int",
+    "s64":           "long long",
+    "u64":           "unsigned long long",
+    "f32":           "float",
+    "f64":           "double",
 }
 
-# Known macros/constants that appear as undeclared identifiers.
-# Maps identifier name → C expression to use in #define.
-KNOWN_MACROS = {
-    "MAX_RATIO":   "32",          # n_resample.c — audio resampler clamp
-    "OS_IM_NONE":  "0x00000000u", # interrupt-mask constant (sometimes missing)
-    "OS_IM_ALL":   "0xFFFFFFFFu",
-    "TRUE":        "1",
-    "FALSE":       "0",
-    "NULL":        "((void*)0)",
-}
-
-# Struct-like SDK types that need opaque struct stubs rather than scalar typedefs
-KNOWN_SDK_STRUCT_TYPES = {
+# SDK types that need opaque struct stubs (not scalar typedefs).
+KNOWN_SDK_STRUCT_TYPES: set[str] = {
     "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Gfx_t", "Mtx", "Mtx_t",
     "OSContPad", "OSTimer", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t",
     "OSEvent", "CPUState", "Actor", "ActorMarker",
 }
 
-KNOWN_GLOBAL_TYPES = set(KNOWN_SDK_TYPEDEFS.keys()) | KNOWN_SDK_STRUCT_TYPES
+# Union of all known global type names (used for classifier routing).
+KNOWN_GLOBAL_TYPES: set[str] = set(KNOWN_SDK_TYPEDEFS) | KNOWN_SDK_STRUCT_TYPES
 
+# ── Known macro constants ────────────────────────────────────────────────────
+# Maps macro name → C literal to emit in #define.
+# Add new entries here as new files expose missing constants.
 
-def strip_ansi(text):
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return ansi_escape.sub('', text)
+KNOWN_MACROS: dict[str, str] = {
+    "MAX_RATIO":    "32",           # n_resample.c — audio resampler clamp
+    "OS_IM_NONE":  "0x00000000u",  # interrupt-mask constants
+    "OS_IM_ALL":   "0xFFFFFFFFu",
+    "TRUE":         "1",
+    "FALSE":        "0",
+    "NULL":         "((void*)0)",
+}
 
+# ── Utilities ────────────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# Build runner
-# ---------------------------------------------------------------------------
+_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-def run_build():
-    print("\n🚀 Starting Build Cycle...")
+def strip_ansi(text: str) -> str:
+    return _ANSI.sub('', text)
+
+def read_file(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+def write_file(path: str, content: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+def source_path(path: str | None) -> str | None:
+    """Return None if the path points to NDK / system headers."""
+    if not path:
+        return None
+    if "/usr/" in path or "ndk" in path.lower():
+        return None
+    return path
+
+# ── Build runner ─────────────────────────────────────────────────────────────
+
+def run_build() -> bool:
+    """Invoke Gradle; stream output to both stdout and LOG_FILE.
+    Returns True on success."""
+    print(f"\n🚀 Starting Build (heap={_HEAP_GB}g) …")
     os.makedirs("Android", exist_ok=True)
-    with open(LOG_FILE, "w") as log:
-        process = subprocess.Popen(
-            GRADLE_CMD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    with open(LOG_FILE, "w", encoding="utf-8") as log:
+        proc = subprocess.Popen(
+            _gradle_cmd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
-        for line in process.stdout:
-            clean_line = strip_ansi(line)
-            log.write(clean_line)
-            print(clean_line, end="")
-        process.wait()
-    return process.returncode == 0
+        for line in proc.stdout:
+            clean = strip_ansi(line)
+            log.write(clean)
+            print(clean, end="")
+        proc.wait()
+    return proc.returncode == 0
 
+# ── Error classifier ──────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# Error classifier
-# ---------------------------------------------------------------------------
+_FILE_RE = re.compile(r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))")
 
-def classify_errors(log_data):
-    categories = {
-        "missing_n64_types":  [],
-        "actor_pointer":      [],
-        "local_struct_fwd":   [],
-        "typedef_redef":      [],
-        "static_conflict":    [],
-        "incomplete_sizeof":  [],
-        "undeclared_macros":  [],   # true macros / constants (not types)
-        "missing_sdk_types":  [],   # SDK types missing from n64_types.h
-        "implicit_func":      [],
-        "undefined_symbols":  [],
-        "oom_detected":       False,
-        "unknown":            [],
+def _extract_incomplete_type(line: str) -> str | None:
+    for pat in [r"\(aka 'struct ([^']+)'\)", r"'struct ([^']+)'", r"'([^']+)'"]:
+        m = re.search(pat, line)
+        if m:
+            return m.group(1)
+    return None
+
+def classify_errors(log_data: str) -> dict:
+    cats: dict = {
+        "missing_n64_includes": [],   # A
+        "local_struct_fwd":     [],   # C
+        "undefined_symbols":    [],   # I
+        "cmake_libraries":      False,# J (boolean flag)
+        "missing_sdk_types":    [],   # K
+        "missing_macros":       [],   # M
+        "typedef_redef":        [],   # R
+        "static_conflict":      [],   # S
+        "incomplete_sizeof":    [],   # T
+        "daemon_crash":         False,# D
+        "oom_detected":         False,# O
+        "implicit_func":        [],
+        "unknown_idents":       [],   # genuinely unknown — needs human review
     }
 
-    file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))"
-    local_struct_map = {}
+    local_struct_map: dict[str, set] = {}
 
-    def extract_incomplete_type(line):
-        for pattern in [r"\(aka 'struct ([^']+)'\)", r"'struct ([^']+)'", r"'([^']+)'"]:
-            m = re.search(pattern, line)
-            if m:
-                return m.group(1)
-        return None
+    for line in log_data.splitlines():
 
-    def source_path(path):
-        """Return None if path points to NDK/system headers (not our source)."""
-        if path and ("/usr/" in path or "ndk" in path.lower()):
-            return None
-        return path
-
-    for line in log_data.split('\n'):
-
-        # ── OOM / daemon crash detection ────────────────────────────────
+        # ── Retryable infrastructure failures ──────────────────────────────
+        if "Could not receive a message from the daemon" in line:
+            cats["daemon_crash"] = True
+            continue
         if "OutOfMemoryError" in line or "Java heap space" in line:
-            categories["oom_detected"] = True
+            cats["oom_detected"] = True
             continue
 
         if "error:" not in line and "undefined" not in line:
             continue
 
-        path_match = re.search(file_regex, line)
-        filepath = source_path(path_match.group(1) if path_match else None)
+        pm = _FILE_RE.search(line)
+        fp = source_path(pm.group(1) if pm else None)
 
-        # Pattern matches (order matters — most-specific first)
-        m_redef    = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
+        # Pattern matches — ordered most-specific → least-specific
+        m_redef    = re.search(r"typedef redefinition with different types \('([^']+)'.*?vs '([^']+)'.*?\)", line)
         m_static   = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
-        m_unknown  = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
+        m_unknown  = re.search(r"unknown type name '([A-Za-z_]\w*)'", line)
         m_ident    = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
-        m_undef_sym = re.search(r"undefined symbol: (.*)", line)
-        m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
+        m_undef_s  = re.search(r"undefined symbol: (.*)", line)
+        m_undef_r  = re.search(r"undefined reference to `([^']+)'", line)
         m_inc      = "incomplete type" in line
 
-        if m_undef_sym or m_undef_ref:
-            sym = (m_undef_sym or m_undef_ref).group(1).replace("'", "").replace("`", "").strip()
-            categories["undefined_symbols"].append(sym)
+        if m_undef_s or m_undef_r:
+            sym = (m_undef_s or m_undef_r).group(1).strip("`' ")
+            cats["undefined_symbols"].append(sym)
 
         elif m_implicit:
-            categories["implicit_func"].append(m_implicit.group(1))
+            cats["implicit_func"].append(m_implicit.group(1))
 
         elif m_ident:
             ident = m_ident.group(1)
-            if ident == "actor" and filepath:
-                categories["actor_pointer"].append(filepath)
-            elif ident in KNOWN_GLOBAL_TYPES:
-                # SDK type used as a variable — needs typedef, not a macro define
-                categories["missing_sdk_types"].append(ident)
+            # Cascade variable errors (e.g. 'mask') are suppressed once the
+            # root type (OSIntMask) is fixed — no direct fix needed.
+            if ident in KNOWN_GLOBAL_TYPES or ident in KNOWN_SDK_TYPEDEFS:
+                cats["missing_sdk_types"].append(ident)
             elif ident in KNOWN_MACROS:
-                categories["undeclared_macros"].append(ident)
+                cats["missing_macros"].append(ident)
+            elif re.fullmatch(r"[a-z_][a-z0-9_]*", ident):
+                # Lower-case single-word: almost certainly a cascade variable
+                # (like 'mask') from an earlier type error — skip, not actionable.
+                pass
             else:
-                # Unknown identifier — treat as a macro for now
-                categories["undeclared_macros"].append(ident)
+                cats["unknown_idents"].append((fp, ident))
 
-        elif m_redef and filepath:
-            categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
+        elif m_redef and fp:
+            cats["typedef_redef"].append((fp, m_redef.group(1), m_redef.group(2)))
 
-        elif m_static and filepath:
-            categories["static_conflict"].append((filepath, m_static.group(1)))
+        elif m_static and fp:
+            cats["static_conflict"].append((fp, m_static.group(1)))
 
         elif m_unknown:
-            type_name = m_unknown.group(1)
-            if type_name in KNOWN_GLOBAL_TYPES:
-                categories["missing_sdk_types"].append(type_name)
-            elif filepath:
-                local_struct_map.setdefault(filepath, set()).add(type_name)
+            t = m_unknown.group(1)
+            if t in KNOWN_GLOBAL_TYPES or t in KNOWN_SDK_TYPEDEFS:
+                cats["missing_sdk_types"].append(t)
+            elif fp:
+                local_struct_map.setdefault(fp, set()).add(t)
 
-        elif m_inc and filepath:
-            inc_type = extract_incomplete_type(line)
-            if inc_type:
-                categories["incomplete_sizeof"].append((filepath, inc_type))
+        elif m_inc and fp:
+            inc = _extract_incomplete_type(line)
+            if inc:
+                cats["incomplete_sizeof"].append((fp, inc))
 
-        elif filepath and os.path.exists(filepath):
-            categories["missing_n64_types"].append(filepath)
+        elif fp and os.path.exists(fp):
+            cats["missing_n64_includes"].append(fp)
 
-    for filepath, type_names in local_struct_map.items():
+    for fp, type_names in local_struct_map.items():
         for t in type_names:
             if t not in KNOWN_GLOBAL_TYPES:
-                categories["local_struct_fwd"].append((filepath, t))
+                cats["local_struct_fwd"].append((fp, t))
 
-    return categories
+    return cats
 
+# ── Fix passes ───────────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# Fix helpers
-# ---------------------------------------------------------------------------
-
-def read_file(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-def write_file(path, content):
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+def _already_defined(content: str, name: str) -> bool:
+    """True if name appears to already be defined in content."""
+    return (
+        f"typedef struct {name}" in content
+        or f"typedef {KNOWN_SDK_TYPEDEFS.get(name, '__never__')} {name};" in content
+        or f"typedef unsigned int {name};" in content
+        or f"#define {name}" in content
+    )
 
 
-# ---------------------------------------------------------------------------
-# Fix passes
-# ---------------------------------------------------------------------------
-
-def fix_cmake_libraries(fixes):
-    """FIX J: Ensure math/log libraries are linked."""
-    if not os.path.exists(CMAKE_FILE):
-        return fixes
-    cmake = read_file(CMAKE_FILE)
-    if "target_link_libraries(" in cmake and " m " not in cmake:
-        cmake = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake)
-        write_file(CMAKE_FILE, cmake)
-        print("  [🛠️] Injected math/log libraries into CMakeLists.txt")
-        fixes += 1
-    return fixes
-
-
-def fix_missing_sdk_types(categories, fixes):
-    """FIX K: Inject missing SDK typedefs into n64_types.h.
-
-    Handles both 'unknown type name' AND 'use of undeclared identifier'
-    cases so that types like OSIntMask are correctly patched regardless
-    of which Clang error message they produce.
-    """
-    missing = set(categories["missing_sdk_types"])
+def fix_missing_sdk_types(cats: dict) -> int:
+    """FIX K — inject missing SDK typedefs into n64_types.h."""
+    missing = set(cats["missing_sdk_types"])
     if not missing or not os.path.exists(TYPES_HEADER):
-        return fixes
-
+        return 0
     content = read_file(TYPES_HEADER)
     added = False
-
     for t in sorted(missing):
-        # Skip if already defined in any recognisable form
-        if (f"typedef struct {t}" in content or
-                f"typedef {KNOWN_SDK_TYPEDEFS.get(t, '__never__')} {t};" in content or
-                f"typedef unsigned int {t};" in content):
+        if _already_defined(content, t):
             continue
-
         if t in KNOWN_SDK_TYPEDEFS:
             decl = f"\ntypedef {KNOWN_SDK_TYPEDEFS[t]} {t};\n"
         else:
             decl = f"\ntypedef struct {t}_s {{ long long int reserved[64]; }} {t};\n"
-
         content += decl
         added = True
-        print(f"  [🛠️] Defined SDK type: {t}")
-
+        print(f"  [K] Defined SDK type: {t}")
     if added:
         write_file(TYPES_HEADER, content)
-        fixes += 1
-    return fixes
+        return 1
+    return 0
 
 
-def fix_missing_macros(categories, fixes):
-    """FIX M: Inject known macro #defines into n64_types.h.
-
-    Only injects macros that are in KNOWN_MACROS; truly unknown identifiers
-    are left for the user to investigate.
-    """
-    undeclared = set(categories["undeclared_macros"])
-    known_missing = {k: v for k, v in KNOWN_MACROS.items() if k in undeclared}
-    if not known_missing or not os.path.exists(TYPES_HEADER):
-        return fixes
-
+def fix_missing_macros(cats: dict) -> int:
+    """FIX M — inject #define constants into n64_types.h."""
+    needed = set(cats["missing_macros"])
+    to_inject = {k: v for k, v in KNOWN_MACROS.items() if k in needed}
+    if not to_inject or not os.path.exists(TYPES_HEADER):
+        # Report truly unknown undeclared identifiers
+        unknown = [(fp, id_) for fp, id_ in cats.get("unknown_idents", [])
+                   if id_ not in KNOWN_MACROS and id_ not in KNOWN_GLOBAL_TYPES]
+        if unknown:
+            print(f"  [⚠] Unknown identifiers (manual fix needed): "
+                  f"{sorted(set(id_ for _, id_ in unknown))}")
+        return 0
     content = read_file(TYPES_HEADER)
     added = False
-    for macro, value in sorted(known_missing.items()):
+    for macro, value in sorted(to_inject.items()):
         if f"#define {macro}" in content:
             continue
         content += f"\n#ifndef {macro}\n#define {macro} {value}\n#endif\n"
         added = True
-        print(f"  [🛠️] Injected macro #define: {macro} = {value}")
-
+        print(f"  [M] Injected macro: #define {macro} {value}")
     if added:
         write_file(TYPES_HEADER, content)
-        fixes += 1
-
-    # Report any truly unknown undeclared identifiers so the user is aware
-    unknown_idents = undeclared - set(KNOWN_MACROS.keys()) - KNOWN_GLOBAL_TYPES
-    if unknown_idents:
-        print(f"  [⚠️ ] Unknown undeclared identifiers (manual fix needed): {sorted(unknown_idents)}")
-
-    return fixes
+        return 1
+    return 0
 
 
-def fix_local_struct_fwd(categories, fixes):
-    """FIX C: Inject forward declarations for local game-logic actor structs."""
-    if not categories["local_struct_fwd"]:
-        return fixes
-    file_to_types = {}
-    for filepath, type_name in categories["local_struct_fwd"]:
-        file_to_types.setdefault(filepath, set()).add(type_name)
-    for filepath, type_names in file_to_types.items():
-        if not os.path.exists(filepath):
+def fix_local_struct_fwd(cats: dict) -> int:
+    """FIX C — inject forward declarations for local game-logic actor structs."""
+    if not cats["local_struct_fwd"]:
+        return 0
+    file_to_types: dict[str, set] = {}
+    for fp, t in cats["local_struct_fwd"]:
+        file_to_types.setdefault(fp, set()).add(t)
+    fixes = 0
+    for fp, type_names in file_to_types.items():
+        if not os.path.exists(fp):
             continue
-        content = read_file(filepath)
-        fwd_lines = []
+        content = read_file(fp)
+        new_decls = []
         for t in sorted(type_names):
-            tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
-            fwd_decl = f"typedef struct {tag}_s {t};"
-            if fwd_decl not in content:
-                fwd_lines.append(fwd_decl)
-        if fwd_lines:
-            content = "/* AUTO: forward declarations */\n" + "\n".join(fwd_lines) + "\n" + content
-            write_file(filepath, content)
-            print(f"  [🛠️] Injected actor decls {sorted(type_names)} into {os.path.basename(filepath)}")
+            tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in "sS" else t
+            fwd = f"typedef struct {tag}_s {t};"
+            if fwd not in content:
+                new_decls.append(fwd)
+        if new_decls:
+            content = "/* AUTO: forward declarations */\n" + "\n".join(new_decls) + "\n" + content
+            write_file(fp, content)
+            print(f"  [C] Injected fwd decls {sorted(type_names)} → {os.path.basename(fp)}")
             fixes += 1
     return fixes
 
 
-def fix_missing_n64_includes(categories, fixes):
-    """FIX A: Add #include 'ultra/n64_types.h' to source files that need it."""
-    for filepath in set(categories["missing_n64_types"]):
-        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
+def fix_missing_n64_includes(cats: dict) -> int:
+    """FIX A — add force-include guard to source files missing n64_types.h."""
+    fixes = 0
+    for fp in set(cats["missing_n64_includes"]):
+        if not os.path.exists(fp) or fp.endswith("n64_types.h"):
             continue
-        content = read_file(filepath)
+        content = read_file(fp)
         if 'include "ultra/n64_types.h"' not in content:
-            content = '#include "ultra/n64_types.h"\n' + content
-            write_file(filepath, content)
+            write_file(fp, '#include "ultra/n64_types.h"\n' + content)
+            print(f"  [A] Added n64_types.h include → {os.path.basename(fp)}")
             fixes += 1
     return fixes
 
 
-def fix_undefined_symbols(categories, fixes):
-    """FIX I: Generate linker stubs for undefined symbols."""
-    if not categories["undefined_symbols"]:
-        return fixes
+def fix_cmake_libraries() -> int:
+    """FIX J — ensure math and log libraries are linked."""
+    if not os.path.exists(CMAKE_FILE):
+        return 0
+    cmake = read_file(CMAKE_FILE)
+    if "target_link_libraries(" in cmake and " m " not in cmake:
+        cmake = re.sub(r"(target_link_libraries\([^)]+)", r"\1 m log ", cmake)
+        write_file(CMAKE_FILE, cmake)
+        print("  [J] Injected -lm -llog into CMakeLists.txt")
+        return 1
+    return 0
+
+
+def fix_undefined_symbols(cats: dict) -> int:
+    """FIX I — generate linker stubs for undefined symbols."""
+    syms = set(cats["undefined_symbols"])
+    if not syms:
+        return 0
+    os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
     if not os.path.exists(STUBS_FILE):
-        os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
         write_file(STUBS_FILE, '#include "n64_types.h"\n\n')
     stubs = read_file(STUBS_FILE)
     added = False
-    for sym in sorted(set(categories["undefined_symbols"])):
+    for sym in sorted(syms):
         if f" {sym}(" in stubs:
             continue
         stubs += f"\nlong long int {sym}() {{ return 0; }}\n"
         added = True
-        print(f"  [🛠️] Generated linker stub for: {sym}")
+        print(f"  [I] Generated linker stub: {sym}")
     if added:
         write_file(STUBS_FILE, stubs)
-        fixes += 1
-    return fixes
+        return 1
+    return 0
 
 
-# ---------------------------------------------------------------------------
-# Top-level fix dispatcher
-# ---------------------------------------------------------------------------
+def handle_oom(cats: dict) -> int:
+    """FIX O/D — bump heap on OOM; report daemon crash as retryable."""
+    global _HEAP_GB
+    fixed = 0
+    if cats["oom_detected"]:
+        new_heap = min(_HEAP_GB + 2, 14)  # cap at 14 g
+        if new_heap != _HEAP_GB:
+            print(f"  [O] Java OOM — raising heap {_HEAP_GB}g → {new_heap}g")
+            _HEAP_GB = new_heap
+            fixed += 1
+        else:
+            print("  [O] Java OOM — heap already at maximum (14g). "
+                  "Consider splitting the source set.")
+    if cats["daemon_crash"]:
+        print("  [D] Gradle daemon crash detected (likely OOM in daemon JVM). "
+              "Retrying with --no-daemon (already set).")
+        fixed += 1  # count as actionable so we retry
+    return fixed
 
-def apply_fixes():
+
+# ── Top-level fix dispatcher ─────────────────────────────────────────────────
+
+def apply_fixes() -> int:
     if not os.path.exists(LOG_FILE):
         return 0
     log_data = read_file(LOG_FILE)
-    categories = classify_errors(log_data)
+    cats = classify_errors(log_data)
+
     fixes = 0
+    fixes += handle_oom(cats)
+    fixes += fix_cmake_libraries()
+    fixes += fix_missing_sdk_types(cats)
+    fixes += fix_missing_macros(cats)
+    fixes += fix_local_struct_fwd(cats)
+    fixes += fix_missing_n64_includes(cats)
+    fixes += fix_undefined_symbols(cats)
 
-    if categories["oom_detected"]:
-        print("  [⚠️ ] Java OOM detected — consider raising -Xmx in GRADLE_CMD "
-              "(currently 6g) or splitting the source set.")
-
-    fixes = fix_cmake_libraries(fixes)
-    fixes = fix_missing_sdk_types(categories, fixes)
-    fixes = fix_missing_macros(categories, fixes)
-    fixes = fix_local_struct_fwd(categories, fixes)
-    fixes = fix_missing_n64_includes(categories, fixes)
-    fixes = fix_undefined_symbols(categories, fixes)
+    # Surface unknown identifiers even when nothing else was fixed
+    unknown = sorted(set(id_ for _, id_ in cats.get("unknown_idents", [])))
+    if unknown:
+        print(f"  [⚠] Unknown identifiers requiring manual investigation: {unknown}")
 
     return fixes
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
-    for i in range(1, 100):
-        print(f"\n--- Build Cycle {i} ---")
+    max_cycles = 100
+    for i in range(1, max_cycles + 1):
+        print(f"\n{'='*60}")
+        print(f"  Build Cycle {i}/{max_cycles}")
+        print(f"{'='*60}")
+
         if run_build():
-            print("\n✅ Build Successful! You have an APK!")
-            return
+            print("\n✅ Build Successful! APK is ready.")
+            sys.exit(0)
+
+        print("\n🔍 Analysing errors …")
         applied = apply_fixes()
+
         if applied == 0:
-            print("\n🛑 Build halted: No more automatic patterns detected.")
-            break
+            print("\n🛑 No fixable patterns detected. Manual intervention required.")
+            print("   Check the log at:", LOG_FILE)
+            sys.exit(1)
+
+        print(f"\n  ✔ Applied {applied} fix(es). Retrying …")
         time.sleep(1)
+
+    print(f"\n🛑 Reached cycle limit ({max_cycles}). Build did not complete.")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
