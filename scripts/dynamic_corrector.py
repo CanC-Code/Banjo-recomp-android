@@ -1,14 +1,15 @@
 """
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
-Updates for Cycle 11:
-  - Symbol Isolation Pass: Detects 'static declaration follows non-static' 
-    errors (like the 'close' conflict) and renames the local symbol to 
-    a file-prefixed version (e.g., lockup_close).
-  - JVM Flag Correction: Fixed the typo in the OutOfMemory flag that was 
-    causing the Gradle daemon to fail initialization in some environments.
-  - Case-Insensitive Tag Discovery: Improved the registry's ability to 
-    match N64 struct tags that use inconsistent casing.
+Updates for Cycle 12:
+  - Typedef Synchronizer: Robustly detects "typedef redefinition" errors and 
+    automatically syncs the Global Registry (n64_autodecls.h) with the 
+    actual struct tags found in the decompiled source.
+  - Robust NDK Regex: Updated the error parser to handle the specific quoting 
+    and parentheses used by Clang 17+ in the Android NDK.
+  - Forward-to-Body Promotion: If a type is used as an array element 
+    (incomplete type error), it is automatically promoted from a forward 
+    declaration to a padded struct to allow the build to proceed.
 """
 
 import os
@@ -25,7 +26,6 @@ os.environ["NINJAJOBS"] = "-j1"
 _HEAP_GB = 6
 
 def _gradle_cmd():
-    # Corrected -XX:+HeapDumpOnOutOfMemoryError
     return [
         "gradle", "-p", "Android", "assembleDebug",
         "--console=plain", "--max-workers=1", "--no-daemon",
@@ -117,22 +117,24 @@ def classify_errors(log_data):
         fp = source_path(pm.group(1) if pm else None)
         if not fp: continue
 
-        # Namespace Collisions (e.g. static 'close' vs unistd.h)
+        # Collisions (static vs non-static)
         m_coll = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         if m_coll:
             cats["collision"].append({"file": fp, "sym": m_coll.group(1)})
             continue
 
-        # Redefinition / Tag Learning
-        m_tag = re.search(r"redefinition of '([^']+)' with different types.*?struct ([^']+)' vs 'struct ([^']+)'", line)
+        # Redefinition / Tag Syncing (Crucial for Cycle 12)
+        # Matches: error: typedef redefinition with different types ('struct A' vs 'struct B')
+        m_tag = re.search(r"(?:typedef\s+)?redefinition\s+of\s+'([^']+)'\s+with\s+different\s+types\s*\(?'struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'\)?", line)
         if m_tag:
-            cats["tag_mismatch"].append({"file": fp, "sym": m_tag.group(1), "tag": m_tag.group(2)})
+            # Type B is usually what's in our Registry, Type A is what the compiler found in the file
+            cats["tag_mismatch"].append({"sym": m_tag.group(1), "correct_tag": m_tag.group(2)})
             continue
 
         # Incomplete Type
-        if "incomplete definition" in line:
-            m_inc = re.search(r"type 'struct ([^']+)'", line)
-            if m_inc: cats["incomplete_type"].append({"file": fp, "tag": m_inc.group(1)})
+        m_inc = re.search(r"incomplete\s+definition\s+of\s+type\s+'struct\s+([^']+)'", line)
+        if m_inc:
+            cats["incomplete_type"].append({"file": fp, "tag": m_inc.group(1)})
             continue
 
         # Unknown Type
@@ -151,41 +153,33 @@ def classify_errors(log_data):
 
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
-def fix_name_collisions(cats):
+def sync_typedef_tags(cats):
     fixes = 0
-    for entry in cats["collision"]:
-        fp, sym = entry["file"], entry["sym"]
-        content = read_file(fp)
-        # Prefix the symbol with the filename to make it unique
-        prefix = os.path.basename(fp).split('.')[0]
-        new_sym = f"{prefix}_{sym}"
-        
-        if re.search(rf"\b{sym}\b", content):
-            content = re.sub(rf"\b{sym}\b", new_sym, content)
-            write_file(fp, content)
-            print(f"  [N] Isolated colliding symbol: {sym} -> {new_sym} in {os.path.basename(fp)}")
+    registry = read_file(AUTO_HEADER)
+    if not registry: return 0
+    
+    for entry in cats["tag_mismatch"]:
+        sym, correct_tag = entry["sym"], entry["correct_tag"]
+        # Look for the old incorrect typedef in the registry
+        pattern = rf"typedef struct \w+ {sym};"
+        if re.search(pattern, registry):
+            new_line = f"typedef struct {correct_tag} {sym};"
+            registry = re.sub(pattern, new_line, registry)
+            print(f"  [S] Synced {sym} tag to {correct_tag}")
             fixes += 1
+            
+    if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
 
 def update_global_registry(cats):
     fixes = 0
     registry = read_file(AUTO_HEADER) or "#pragma once\n"
     
-    for entry in cats["tag_mismatch"]:
-        sym, tag = entry["sym"], entry["tag"]
-        pattern = rf"typedef struct \w+ {sym};"
-        if re.search(pattern, registry):
-            registry = re.sub(pattern, f"typedef struct {tag} {sym};", registry)
-            fixes += 1
-
     unknown_syms = set(e["sym"] for e in cats["local_struct"])
     for s in sorted(unknown_syms):
         if f" {s};" in registry: continue
+        # Default to a safe tag, will be synced by sync_typedef_tags if wrong
         tag = f"{s}_s"
-        for entry in cats["local_struct"]:
-            if entry["sym"] == s:
-                m = re.search(rf"typedef struct (\w+) .*?{s};", read_file(entry["file"]), flags=re.DOTALL)
-                if m: tag = m.group(1); break
         registry += f"typedef struct {tag} {s};\n"
         print(f"  [R] Registry Added: {s}")
         fixes += 1
@@ -200,14 +194,41 @@ def update_global_registry(cats):
 def fix_incomplete_types(cats):
     fixes = 0
     registry = read_file(AUTO_HEADER)
+    if not registry: return 0
+    
     for entry in cats["incomplete_type"]:
         tag = entry["tag"]
-        old, new = f"struct {tag};", f"struct {tag} {{ char pad[4096]; }};"
-        if old in registry and new not in registry:
+        # If we only have 'struct tag;', we must provide a body so arrays can be sized
+        old = f"struct {tag};"
+        # We also check for the typedef variant
+        pattern = rf"typedef struct {tag} (\w+);"
+        
+        if old in registry:
+            new = f"struct {tag} {{ char pad[4096]; }};"
             registry = registry.replace(old, new)
+            print(f"  [T] Padded incomplete struct: {tag}")
             fixes += 1
-            print(f"  [T] Escalated {tag}")
+        elif re.search(pattern, registry):
+            replacement = f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;"
+            registry = re.sub(pattern, replacement, registry)
+            print(f"  [T] Padded incomplete typedef: {tag}")
+            fixes += 1
+            
     if fixes > 0: write_file(AUTO_HEADER, registry)
+    return fixes
+
+def fix_name_collisions(cats):
+    fixes = 0
+    for entry in cats["collision"]:
+        fp, sym = entry["file"], entry["sym"]
+        content = read_file(fp)
+        prefix = os.path.basename(fp).split('.')[0]
+        new_sym = f"{prefix}_{sym}"
+        if re.search(rf"\b{sym}\b", content):
+            content = re.sub(rf"\b{sym}\b", new_sym, content)
+            write_file(fp, content)
+            print(f"  [N] Isolated symbol: {sym} -> {new_sym}")
+            fixes += 1
     return fixes
 
 def fix_sdk_types(cats):
@@ -244,9 +265,11 @@ def apply_fixes():
     if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
-    fixes += fix_name_collisions(cats)
+    # Order matters: Sync tags before doing anything else
+    fixes += sync_typedef_tags(cats)
     fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
+    fixes += fix_name_collisions(cats)
     fixes += fix_sdk_types(cats)
     fixes += fix_undefined(cats)
     
