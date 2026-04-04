@@ -1,6 +1,6 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
-v82.0 — Unrestricted n64_types inclusion, aggressive global struct collision overriding, and flawless local struct sync.
+v83.0 — Conflicting Types Resolver for implicit vs explicit definition clashes.
 """
 
 import os
@@ -223,6 +223,7 @@ def classify_errors(log_data):
         "typedef_redef":        [],
         "struct_redef":         [],
         "static_conflict":      [],
+        "conflicting_types":    set(),
         "incomplete_sizeof":    [],
         "need_struct_body":     set(),
         "need_mtx_body":        False,
@@ -261,6 +262,10 @@ def classify_errors(log_data):
         m_undef_sym    = re.search(r"undefined symbol: (.*)", line)
         m_incomplete   = re.search(r"incomplete definition of type '(?:struct\s+)?([^']+)'", line)
         m_tentative    = re.search(r"tentative definition has type '([^']+)' \(aka '(?:struct\s+)?([^']+)'\) that is never completed", line)
+        m_conflict     = re.search(r"error: conflicting types for '([^']+)'", line)
+
+        if m_conflict and filepath:
+            categories["conflicting_types"].add((filepath, m_conflict.group(1)))
 
         if m_no_member and m_no_member.group(2) in ("Mtx", "Mtx_s"):
             categories["need_mtx_body"] = True
@@ -391,6 +396,28 @@ def apply_fixes():
         if types_content != original:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
+
+    # ── FIX: Conflicting Types (Implicit vs Explicit Definition) ──────────
+    for filepath, func in sorted(categories["conflicting_types"]):
+        if not os.path.exists(filepath): continue
+        content = read_file(filepath)
+        pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
+        match = re.search(pattern, content)
+        if match:
+            sig_full = match.group(0)
+            prototype = sig_full[:sig_full.rfind('{')].strip() + ";"
+            if prototype not in content:
+                includes = list(re.finditer(r"#include\s+.*?\n", content))
+                injection = f"\n/* AUTO: resolve conflicting implicit type */\n{prototype}\n"
+                if includes:
+                    idx = includes[-1].end()
+                    content = content[:idx] + injection + content[idx:]
+                else:
+                    content = injection + content
+                write_file(filepath, content)
+                print(f"  [🛠️] Injected prototype for '{func}' into {os.path.basename(filepath)}")
+                fixed_files.add(filepath)
+                fixes += 1
 
     for filepath in sorted(categories["missing_n64_types"]):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
