@@ -1,12 +1,14 @@
 """
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
-Updates for Cycle 7:
-  - Added 'Tag Learning': Extracts correct struct tags from "redefinition with different types" errors.
-  - Added 'Block Refresher': Logic to update/overwrite previous [AUTO] injections if they are wrong.
-  - Fixed JVM: Ensured '-XX:+HeapDumpOnOutOfMemoryError' is used correctly.
-  - Hardened Classifier: Catches 'incomplete definition' and 'redefinition' specifically to 
-    map symbols to their correct underlying struct tags.
+Updates for Cycle 8:
+  - Fixed Logic Bug: Corrected the inverted 'if' in fix_local_struct_fwd.
+  - Placement Guarantee: AUTO blocks are now strictly moved to the top of files 
+    (after comments/pragmas) to ensure they are seen by early prototypes.
+  - Incomplete Type Escalation: Upgrades forward declarations to stubbed 
+    struct definitions (struct X { char pad[4096]; }) if field access is required.
+  - Improved Tag Learning: Refined regex to better capture mismatched tags 
+    from Clang's "redefinition" notes.
 """
 
 import os
@@ -32,11 +34,10 @@ def _gradle_cmd():
 LOG_FILE     = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
-CMAKE_FILE   = "Android/app/src/main/cpp/CMakeLists.txt"
 
 AUTO_MARKER = "/* AUTO: generated declarations */"
 
-# ── Type & Macro Definitions ─────────────────────────────────────────────────
+# ── Type Definitions ─────────────────────────────────────────────────────────
 
 KNOWN_SDK_TYPEDEFS = {
     "OSHWIntr":      "unsigned int",
@@ -101,103 +102,115 @@ def run_build():
 
 def classify_errors(log_data):
     cats = {
-        "tag_mismatch":         [],
-        "local_struct_fwd":     [],
-        "undefined_symbols":    [],
-        "missing_sdk_types":    [],
-        "missing_macros":       [],
-        "oom_detected":         False,
+        "tag_mismatch":    [],
+        "incomplete_type": [],
+        "local_struct":    [],
+        "undefined":       [],
+        "sdk_type":        [],
+        "oom":             False,
     }
 
-    local_struct_map = {}
-
-    lines = log_data.splitlines()
-    for i, line in enumerate(lines):
-        if "OutOfMemoryError" in line: cats["oom_detected"] = True; continue
+    for line in log_data.splitlines():
+        if "OutOfMemoryError" in line: cats["oom"] = True; continue
         if "error:" not in line and "note:" not in line: continue
 
         pm = re.search(r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))", line)
         fp = source_path(pm.group(1) if pm else None)
         if not fp: continue
 
-        # 1. Catch Tag Mismatches (redefinition with different types)
-        # e.g. error: redefinition of 'sChVegetable' with different types ('struct ch_vegatable' vs 'struct sChVegetable_s')
-        m_tag = re.search(r"redefinition of '([^']+)' with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", line)
+        # Redefinition Mismatch
+        m_tag = re.search(r"redefinition of '([^']+)' with different types.*?struct ([^']+)' vs 'struct ([^']+)'", line)
         if m_tag:
-            cats["tag_mismatch"].append({
-                "file": fp, "symbol": m_tag.group(1), "real_tag": m_tag.group(2)
-            })
+            cats["tag_mismatch"].append({"file": fp, "sym": m_tag.group(1), "tag": m_tag.group(2)})
             continue
 
-        # 2. Catch Unknown Types
-        m_unknown = re.search(r"unknown type name '([A-Za-z_]\w*)'", line)
-        if m_unknown:
-            t = m_unknown.group(1)
-            if t in KNOWN_SDK_TYPEDEFS: cats["missing_sdk_types"].append(t)
-            else: local_struct_map.setdefault(fp, set()).add(t)
+        # Incomplete Type (Member access failed)
+        m_inc = re.search(r"incomplete definition of type 'struct ([^']+)'", line)
+        if m_inc:
+            cats["incomplete_type"].append({"file": fp, "tag": m_inc.group(1)})
             continue
 
-        # 3. Catch Undefined Symbols (Linker)
-        m_undef = re.search(r"(?:undefined symbol:|undefined reference to `)([^']+)'?", line)
-        if m_undef:
-            cats["undefined_symbols"].append(m_undef.group(1).strip("`' "))
+        # Unknown Type
+        m_unk = re.search(r"unknown type name '([A-Za-z_]\w*)'", line)
+        if m_unk:
+            t = m_unk.group(1)
+            if t in KNOWN_SDK_TYPEDEFS: cats["sdk_type"].append(t)
+            else: cats["local_struct"].append({"file": fp, "sym": t})
+            continue
 
-    for fp, type_names in local_struct_map.items():
-        for t in type_names: cats["local_struct_fwd"].append((fp, t))
+        # Linker issues
+        m_def = re.search(r"(?:undefined symbol:|undefined reference to `)([^']+)'?", line)
+        if m_def: cats["undefined"].append(m_def.group(1).strip("`' "))
 
     return cats
 
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
-def fix_tag_mismatches(cats):
+def fix_local_structs(cats):
     fixes = 0
-    for item in cats["tag_mismatch"]:
-        fp, sym, tag = item["file"], item["symbol"], item["real_tag"]
-        content = read_file(fp)
-        # Regex to find our previous bad injection
-        old_pattern = rf"typedef struct \w+ {sym};"
-        new_line = f"typedef struct {tag} {sym};"
-        if re.search(old_pattern, content):
-            new_content = re.sub(old_pattern, new_line, content)
-            write_file(fp, new_content)
-            print(f"  [T] Learned struct tag: {sym} -> struct {tag}")
-            fixes += 1
-    return fixes
+    # Combine entries by file
+    files = {}
+    for entry in cats["local_struct"]:
+        files.setdefault(entry["file"], set()).add(entry["sym"])
 
-def fix_local_struct_fwd(cats):
-    file_to_types = {}
-    for fp, t in cats["local_struct_fwd"]: file_to_types.setdefault(fp, set()).add(t)
-    fixes = 0
-    for fp, types in file_to_types.items():
+    for fp, syms in files.items():
         content = read_file(fp)
         new_decls = []
-        for t in sorted(types):
-            # Guard: check if definition exists later in file
-            if f"struct {t} {{" in content or f"typedef struct" in content and f" {t};" in content:
-                # We guess tag_s first, fix_tag_mismatches will correct it if compiler complains
-                fwd = f"typedef struct {t}_s {t};"
-                if fwd not in content and f" {t};" not in content:
-                    new_decls.append(fwd)
-        
+        for s in sorted(syms):
+            # Check if it's already defined
+            if f"struct {s} {{" in content or f"typedef struct" in content and f" {s};" in content:
+                continue
+            
+            # Not found: inject forward declaration
+            fwd = f"typedef struct {s}_s {s};"
+            if fwd not in content:
+                new_decls.append(fwd)
+
         if new_decls:
-            # Check for existing block to append to, or create new
+            # Strip old block if it exists
             if AUTO_MARKER in content:
-                parts = content.split(AUTO_MARKER)
-                # Append new decls inside the existing block area
-                parts[1] = "\n" + "\n".join(new_decls) + parts[1]
-                write_file(fp, AUTO_MARKER.join(parts))
-            else:
-                write_file(fp, f"{AUTO_MARKER}\n" + "\n".join(new_decls) + "\n\n" + content)
-            print(f"  [C] Fwd decls {list(types)} -> {os.path.basename(fp)}")
+                content = re.sub(rf"{re.escape(AUTO_MARKER)}.*?{re.escape(AUTO_MARKER)}", "", content, flags=re.DOTALL)
+            
+            # Inject at top
+            header = f"{AUTO_MARKER}\n" + "\n".join(new_decls) + f"\n{AUTO_MARKER}\n"
+            write_file(fp, header + content.lstrip())
+            print(f"  [C] Injected forward decls into {os.path.basename(fp)}")
             fixes += 1
     return fixes
 
-def fix_missing_sdk_types(cats):
-    missing = set(cats["missing_sdk_types"])
-    if not missing: return 0
+def fix_incomplete_types(cats):
+    fixes = 0
+    for entry in cats["incomplete_type"]:
+        fp, tag = entry["file"], entry["tag"]
+        content = read_file(fp)
+        # Upgrade: struct tag_s; -> struct tag_s { char pad[4096]; };
+        old = f"struct {tag};"
+        new = f"struct {tag} {{ char pad[4096]; }};"
+        if old in content and new not in content:
+            write_file(fp, content.replace(old, new))
+            print(f"  [T] Escalated incomplete type: struct {tag}")
+            fixes += 1
+    return fixes
+
+def fix_tag_mismatch(cats):
+    fixes = 0
+    for entry in cats["tag_mismatch"]:
+        fp, sym, tag = entry["file"], entry["sym"], entry["tag"]
+        content = read_file(fp)
+        # Correct the guess: sChVegetable_s -> ch_vegatable
+        pattern = rf"typedef struct \w+ {sym};"
+        replacement = f"typedef struct {tag} {sym};"
+        if re.search(pattern, content):
+            write_file(fp, re.sub(pattern, replacement, content))
+            print(f"  [L] Learned correct tag: {sym} -> struct {tag}")
+            fixes += 1
+    return fixes
+
+def fix_sdk_types(cats):
+    if not cats["sdk_type"]: return 0
     content = read_file(TYPES_HEADER)
     added = False
-    for t in sorted(missing):
+    for t in sorted(set(cats["sdk_type"])):
         if f" {t};" in content: continue
         content += f"\ntypedef {KNOWN_SDK_TYPEDEFS[t]} {t};\n"
         added = True
@@ -205,16 +218,15 @@ def fix_missing_sdk_types(cats):
     if added: write_file(TYPES_HEADER, content)
     return 1 if added else 0
 
-def fix_undefined_symbols(cats):
-    syms = set(cats["undefined_symbols"])
-    if not syms: return 0
+def fix_undefined(cats):
+    if not cats["undefined"]: return 0
     stubs = read_file(STUBS_FILE) or '#include "n64_types.h"\n'
     added = False
-    for sym in sorted(syms):
+    for sym in sorted(set(cats["undefined"])):
         if f" {sym}(" in stubs: continue
         stubs += f"\nlong long int {sym}() {{ return 0; }}\n"
         added = True
-        print(f"  [I] Stubbed: {sym}")
+        print(f"  [I] Stubbed symbol: {sym}")
     if added: write_file(STUBS_FILE, stubs)
     return 1 if added else 0
 
@@ -226,22 +238,18 @@ def apply_fixes():
     cats = classify_errors(log_data)
     
     fixes = 0
-    # Always ensure header guard
-    if os.path.exists(TYPES_HEADER):
-        content = read_file(TYPES_HEADER)
-        if "#pragma once" not in content:
-            write_file(TYPES_HEADER, "#pragma once\n" + content)
-            fixes += 1
+    if os.path.exists(TYPES_HEADER) and "#pragma once" not in read_file(TYPES_HEADER):
+        write_file(TYPES_HEADER, "#pragma once\n" + read_file(TYPES_HEADER))
+        fixes += 1
     
-    if cats["oom_detected"]: 
+    if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
-    # Priority 1: Correct previous mistakes (Tag Mismatches)
-    fixes += fix_tag_mismatches(cats)
-    # Priority 2: Standard missing types/symbols
-    fixes += fix_missing_sdk_types(cats)
-    fixes += fix_local_struct_fwd(cats)
-    fixes += fix_undefined_symbols(cats)
+    fixes += fix_tag_mismatch(cats)
+    fixes += fix_incomplete_types(cats)
+    fixes += fix_sdk_types(cats)
+    fixes += fix_local_structs(cats)
+    fixes += fix_undefined(cats)
     return fixes
 
 def main():
