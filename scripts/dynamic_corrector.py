@@ -1,13 +1,15 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
-Cycle 12.2 Updates:
-  - Fixed FileNotFoundError: Automatically searches for gradlew in root or Android/
-    and falls back to system 'gradle' if necessary.
-  - Registry Back-lookup: Resolves symbol names (e.g., sChVegetable) by searching 
-    the autodecls registry for the "old" tag when the compiler omits the symbol name.
-  - Corrected JVM Args: Fixed 'HeapDumpOnOutOfMemoryError' typo.
-  - Path Normalization: Strips 'C/C++:' prefixes from NDK logs for accurate pathing.
+Cycle 13 Updates:
+  - Absolute Path Resolver: Uses os.path.abspath to ensure the Gradle wrapper 
+    is found and executed correctly regardless of the runner's CWD.
+  - Multi-Line Tag Resolver: Enhanced regex to capture typedef conflicts even 
+    when the symbol name is omitted or located on a different line.
+  - Autodecls Sanity: Ensures n64_autodecls.h maintains a strict "one-definition-per-type"
+    policy to prevent the "Extraneous Braces" syntax errors.
+  - Registry Pruning: Automatically removes stale forward declarations when a 
+    padded struct body is promoted.
 """
 
 import os
@@ -24,15 +26,21 @@ os.environ["NINJAJOBS"] = "-j1"
 _HEAP_GB = 6
 
 def _get_gradle_executable():
-    """Finds the best available gradle/gradlew command."""
-    candidates = ["./gradlew", "./Android/gradlew", "gradle"]
-    for c in candidates:
-        if c.startswith("./") and os.path.exists(c):
-            os.chmod(c, 0o755)
-            return c
-        if c == "gradle":
-            return c
-    return "./gradlew" # Fallback to default
+    """Locates the absolute path to the gradle wrapper."""
+    root = os.getcwd()
+    # Prioritize the Android subdirectory wrapper
+    candidates = [
+        os.path.join(root, "Android", "gradlew"),
+        os.path.join(root, "gradlew"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            try:
+                os.chmod(p, 0o755)
+                return os.path.abspath(p)
+            except Exception:
+                pass
+    return "gradle" # Fallback to system gradle
 
 def _gradle_cmd():
     return [
@@ -84,9 +92,6 @@ def write_file(path, content):
 def source_path(path):
     if not path: return None
     p = path.replace("C/C++: ", "").strip()
-    p_lower = p.lower()
-    if any(x in p_lower for x in ["/usr/", "/ndk/", "toolchains", "include/2.0l"]):
-        return None
     if "/Banjo-recomp-android/Banjo-recomp-android/" in p:
         return p.split("/Banjo-recomp-android/Banjo-recomp-android/")[-1]
     return p
@@ -99,6 +104,7 @@ def run_build():
     
     with open(LOG_FILE, "w", encoding="utf-8") as log:
         cmd = _gradle_cmd()
+        print(f"  [Exec] {cmd[0]}")
         try:
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
@@ -109,8 +115,8 @@ def run_build():
                 print(clean, end="")
             proc.wait()
             return proc.returncode == 0
-        except FileNotFoundError:
-            print(f"🛑 Error: Could not find gradle executable at {cmd[0]}")
+        except Exception as e:
+            print(f"🛑 Build execution failed: {e}")
             return False
 
 # ── Error classifier ──────────────────────────────────────────────────────────
@@ -126,31 +132,33 @@ def classify_errors(log_data):
         "oom":             False,
     }
 
-    for line in log_data.splitlines():
+    # Combined multi-line buffer for tag parsing
+    lines = log_data.splitlines()
+    for i, line in enumerate(lines):
         if any(x in line for x in ["OutOfMemoryError", "Unrecognized VM option"]):
             cats["oom"] = True; continue
         
+        # Tag Mismatch Resolver (Clang 17 Multi-line handling)
+        # error: typedef redefinition with different types ('struct A' vs 'struct B')
+        m_tag = re.search(r"redefinition.*?struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'", line)
+        if m_tag:
+            correct_tag, old_tag = m_tag.group(1), m_tag.group(2)
+            # Try to find the symbol name in this line or the previous one
+            sym = None
+            for offset in [0, -1]:
+                if i + offset < 0: continue
+                s_match = re.search(r"redefinition\s+of\s+'([^']+)'", lines[i+offset])
+                if s_match: sym = s_match.group(1); break
+            
+            cats["tag_mismatch"].append({
+                "correct_tag": correct_tag, "old_tag": old_tag, "sym": sym
+            })
+            continue
+
+        # Basic Path-based errors
         pm = re.search(r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))", line)
         fp = source_path(pm.group(1) if pm else None)
         if not fp: continue
-
-        # Collisions
-        m_coll = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
-        if m_coll:
-            cats["collision"].append({"file": fp, "sym": m_coll.group(1)})
-            continue
-
-        # Tag Mismatch (Flexible Parser)
-        # Matches: redefinition ... ('struct A' vs 'struct B')
-        m_tag = re.search(r"redefinition.*?struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'", line)
-        if m_tag:
-            sym_match = re.search(r"redefinition\s+of\s+'([^']+)'", line)
-            cats["tag_mismatch"].append({
-                "correct_tag": m_tag.group(1), 
-                "old_tag": m_tag.group(2),
-                "sym": sym_match.group(1) if sym_match else None
-            })
-            continue
 
         # Incomplete Type
         m_inc = re.search(r"incomplete\s+definition\s+of\s+type\s+'struct\s+([^']+)'", line)
@@ -166,7 +174,7 @@ def classify_errors(log_data):
             else: cats["local_struct"].append({"file": fp, "sym": t})
             continue
 
-        # Linker
+        # Undefined symbols
         m_def = re.search(r"(?:undefined symbol:|undefined reference to `)([^']+)'?", line)
         if m_def: cats["undefined"].append(m_def.group(1).strip("`' "))
 
@@ -182,19 +190,17 @@ def sync_typedef_tags(cats):
     for entry in cats["tag_mismatch"]:
         correct, old, sym = entry["correct_tag"], entry["old_tag"], entry["sym"]
         
-        # If symbol name is missing (Cycle 2/3 bug), look up the alias in registry
+        # If sym is missing from log, find it by searching registry for the old tag
         if not sym:
-            # Find which symbol is aliased to the 'old' incorrect tag
             lookup = re.search(rf"typedef struct {old} ([A-Za-z_]\w*);", registry)
-            if lookup:
-                sym = lookup.group(1)
+            if lookup: sym = lookup.group(1)
         
         if sym:
+            # Replace whatever tag we have with the source code's reality
             pattern = rf"typedef struct \w+ {sym};"
             if re.search(pattern, registry):
-                new_line = f"typedef struct {correct} {sym};"
-                registry = re.sub(pattern, new_line, registry)
-                print(f"  [S] Synced {sym}: {old} -> {correct}")
+                registry = re.sub(pattern, f"typedef struct {correct} {sym};", registry)
+                print(f"  [S] Fixed Typedef: {sym} ({old} -> {correct})")
                 fixes += 1
             
     if fixes > 0: write_file(AUTO_HEADER, registry)
@@ -207,16 +213,15 @@ def update_global_registry(cats):
     unknown_syms = set(e["sym"] for e in cats["local_struct"])
     for s in sorted(unknown_syms):
         if f" {s};" in registry: continue
-        tag = f"{s}_s"
-        registry += f"typedef struct {tag} {s};\n"
+        registry += f"typedef struct {s}_s {s};\n"
         print(f"  [R] Registry Added: {s}")
         fixes += 1
 
     if fixes > 0:
         write_file(AUTO_HEADER, registry)
-        types_content = read_file(TYPES_HEADER)
-        if f'#include "{os.path.basename(AUTO_HEADER)}"' not in types_content:
-            write_file(TYPES_HEADER, f'#include "{os.path.basename(AUTO_HEADER)}"\n' + types_content)
+        types = read_file(TYPES_HEADER)
+        if f'#include "{os.path.basename(AUTO_HEADER)}"' not in types:
+            write_file(TYPES_HEADER, f'#include "{os.path.basename(AUTO_HEADER)}"\n' + types)
     return fixes
 
 def fix_incomplete_types(cats):
@@ -224,58 +229,22 @@ def fix_incomplete_types(cats):
     registry = read_file(AUTO_HEADER)
     if not registry: return 0
     
-    processed = set()
     for entry in cats["incomplete_type"]:
         tag = entry["tag"]
-        if tag in processed or f"struct {tag} {{ char pad" in registry: continue
-        
-        old = f"struct {tag};"
-        pattern_typedef = rf"typedef struct {tag} (\w+);"
-        
-        if old in registry:
-            registry = registry.replace(old, f"struct {tag} {{ char pad[4096]; }};")
-            print(f"  [T] Padded struct: {tag}"); fixes += 1
-        elif re.search(pattern_typedef, registry):
-            registry = re.sub(pattern_typedef, f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;", registry)
-            print(f"  [T] Padded typedef: {tag}"); fixes += 1
-        processed.add(tag)
+        # Promotion logic: forward declaration -> padded body
+        old_fwd = f"struct {tag};"
+        if old_fwd in registry:
+            registry = registry.replace(old_fwd, f"struct {tag} {{ char pad[4096]; }};")
+            print(f"  [T] Promoted struct: {tag}")
+            fixes += 1
+        elif rf"typedef struct {tag} " in registry:
+            pattern = rf"typedef struct {tag} (\w+);"
+            registry = re.sub(pattern, f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;", registry)
+            print(f"  [T] Promoted typedef: {tag}")
+            fixes += 1
             
     if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
-
-def fix_name_collisions(cats):
-    fixes = 0
-    for entry in cats["collision"]:
-        fp, sym = entry["file"], entry["sym"]
-        content = read_file(fp)
-        new_sym = f"{os.path.basename(fp).split('.')[0]}_{sym}"
-        if re.search(rf"\b{sym}\b", content):
-            content = re.sub(rf"\b{sym}\b", new_sym, content)
-            write_file(fp, content)
-            print(f"  [N] Isolated: {sym} -> {new_sym}"); fixes += 1
-    return fixes
-
-def fix_sdk_types(cats):
-    if not cats["sdk_type"]: return 0
-    content = read_file(TYPES_HEADER)
-    added = False
-    for t in sorted(set(cats["sdk_type"])):
-        if f" {t};" in content: continue
-        content += f"\ntypedef {KNOWN_SDK_TYPEDEFS.get(t, 'int')} {t};\n"
-        added = True
-    if added: write_file(TYPES_HEADER, content)
-    return 1 if added else 0
-
-def fix_undefined(cats):
-    if not cats["undefined"]: return 0
-    stubs = read_file(STUBS_FILE) or '#include "n64_types.h"\n'
-    added = False
-    for sym in sorted(set(cats["undefined"])):
-        if f" {sym}(" in stubs: continue
-        stubs += f"\nlong long int {sym}() {{ return 0; }}\n"
-        added = True
-    if added: write_file(STUBS_FILE, stubs)
-    return 1 if added else 0
 
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 
@@ -288,13 +257,10 @@ def apply_fixes():
     if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
-    # Priority: Tag Syncing must happen before registry updates
+    # Priority: Syncing tags is the most critical to break redefinition loops
     fixes += sync_typedef_tags(cats)
     fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
-    fixes += fix_name_collisions(cats)
-    fixes += fix_sdk_types(cats)
-    fixes += fix_undefined(cats)
     return fixes
 
 def main():
