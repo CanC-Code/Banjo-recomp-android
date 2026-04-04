@@ -1,6 +1,6 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
-v83.0 — Conflicting Types Resolver for implicit vs explicit definition clashes.
+v84.0 — Global SDK Type enforcement and complex alias preservation during struct retagging.
 """
 
 import os
@@ -161,7 +161,6 @@ def write_file(path, content):
     with open(path, "w", encoding="utf-8") as f: f.write(content)
 
 def is_defined_locally(filepath, tag):
-    """Checks if the struct is genuinely defined lower down in the local file."""
     if not filepath or not os.path.exists(filepath): return False
     c = read_file(filepath)
     pattern1 = rf"typedef\s+struct[^{{]*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;"
@@ -345,6 +344,15 @@ def classify_errors(log_data):
                 new_local_fwd.append((filepath, type_name))
     categories["local_fwd_only"] = new_local_fwd
 
+    # Ensure known global types caught in missing_types or globals trigger n64_types.h inclusion
+    for type_name, filepaths in categories["missing_types"].items():
+        if type_name in known_global_types:
+            for fp in filepaths: categories["missing_n64_types"].add(fp)
+
+    for ident, filepaths in categories["missing_globals"].items():
+        if ident in known_global_types:
+            for fp in filepaths: categories["missing_n64_types"].add(fp)
+
     return categories
 
 
@@ -397,7 +405,6 @@ def apply_fixes():
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ── FIX: Conflicting Types (Implicit vs Explicit Definition) ──────────
     for filepath, func in sorted(categories["conflicting_types"]):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
@@ -415,7 +422,6 @@ def apply_fixes():
                 else:
                     content = injection + content
                 write_file(filepath, content)
-                print(f"  [🛠️] Injected prototype for '{func}' into {os.path.basename(filepath)}")
                 fixed_files.add(filepath)
                 fixes += 1
 
@@ -473,7 +479,6 @@ def apply_fixes():
 
         content = strip_auto_preamble(content)
 
-        # Deep 4-level brace matcher cleanly wipes duplicate structure bodies safely using [^;]*
         tagged_body_re = re.compile(
             rf'(?:typedef\s+)?struct\s+(\w+)\s*\{{({BRACE_MATCH})\}}\s*[^;]*;',
             re.DOTALL
@@ -496,7 +501,6 @@ def apply_fixes():
             alias = tag1 if target_tag == tag2 else tag2
 
             if alias in known_global_types or target_tag in known_global_types:
-                # Delete conflicting local definition for established global types
                 content, cnt = re.subn(
                     rf'(?:typedef\s+)?struct\s+{re.escape(target_tag)}?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
                     "", content
@@ -504,11 +508,12 @@ def apply_fixes():
                 content = re.sub(rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?', '', content)
                 continue
             
-            anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{re.escape(alias)}\s*;"
+            # Complex Alias Preserving Regex
+            anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
                 content, cnt = re.subn(
                     anon_body_pattern,
-                    lambda m: f"typedef struct {target_tag} {{{m.group(1)}}} {alias};",
+                    lambda m: f"typedef struct {target_tag} {{{m.group(1)}}} {m.group(2)};",
                     content
                 )
             else:
