@@ -327,7 +327,6 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # FIX: Using highly specific checks to avoid false positive matches on common words like "errno"
     if categories["need_struct_body"]:
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
@@ -340,6 +339,7 @@ def apply_fixes(categories):
             elif tag == "OSPfs": check_str = "u8 activebank;"
             elif tag == "OSContStatus": check_str = "u16 type;"
             elif tag == "OSContPad": check_str = "s8  stick_x;"
+            elif tag == "OSPiHandle": check_str = "u8 pageSize;"
             
             if body and check_str not in types_content:
                 types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
