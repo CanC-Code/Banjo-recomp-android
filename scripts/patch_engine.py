@@ -112,7 +112,8 @@ def apply_fixes(categories):
     for filepath, _ in categories["struct_redef"]: fixd_files.add(filepath)
 
     for filepath in sorted(fixd_files):
-        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
+        # FIX: Allow n64_types.h to be cleaned by typedef_redef to unblock stalls!
+        if not os.path.exists(filepath): continue
         content = read_file(filepath)
         original = content
 
@@ -130,23 +131,38 @@ def apply_fixes(categories):
 
         for fp2, type1, type2 in categories["typedef_redef"]:
             if fp2 != filepath: continue
-            t1_m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
-            t2_m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
-            tag1 = t1_m.group(1) if t1_m else None
-            tag2 = t2_m.group(1) if t2_m else None
-            if not (tag1 and tag2 and tag1 != tag2): continue
             
-            target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
-            alias = tag1 if target_tag == tag2 else tag2
+            # FIX: Safely parse anonymous and malformed struct tags
+            t1 = type1.replace("struct ", "").strip()
+            t2 = type2.replace("struct ", "").strip()
+            if t1.startswith("("): t1 = ""
+            if t2.startswith("("): t2 = ""
+            
+            tag1 = t1 if t1 else None
+            tag2 = t2 if t2 else None
+            
+            if tag1 and not tag2:
+                target_tag = tag1
+                alias = tag1[:-2] if tag1.endswith("_s") else tag1
+            elif tag2 and not tag1:
+                target_tag = tag2
+                alias = tag2[:-2] if tag2.endswith("_s") else tag2
+            elif tag1 and tag2:
+                target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
+                alias = tag1 if target_tag == tag2 else tag2
+            else:
+                continue
 
             if alias in KNOWN_GLOBAL_TYPES or target_tag in KNOWN_GLOBAL_TYPES:
+                # Wipes corrupted duplicates allowing the script to rebuild them cleanly
                 content, cnt = re.subn(
-                    rf'(?:typedef\s+)?struct\s+{re.escape(target_tag)}?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
+                    rf'(?:typedef\s+)?struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
                     "", content
                 )
-                content = re.sub(rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?', '', content)
+                content = re.sub(rf'typedef\s+struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})\s+[^;]*\b{re.escape(alias)}\b[^;]*;\n?', '', content)
                 continue
             
+            # Safely retags anonymous structs while preserving pointers
             anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
                 content, cnt = re.subn(
@@ -318,10 +334,9 @@ def apply_fixes(categories):
     if categories["need_mtx_body"]:
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s+Mtx(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:Mtx\s*)?;?\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*Mtx\s*;\n?", "", types_content)
-            types_content = re.sub(r"typedef\s+struct\s+Mtx(?:_s)?\s+Mtx\s*;\n?", "", types_content)
-            types_content = re.sub(r"struct\s+Mtx(?:_s)?\s*;\n?", "", types_content)
+            types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\bMtx\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+struct\s+(?:Mtx|Mtx_s)\s+[^;]*\bMtx\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
             
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
@@ -342,10 +357,9 @@ def apply_fixes(categories):
             elif tag == "OSPiHandle": check_str = "u8 pageSize;"
             
             if body and check_str not in types_content:
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{re.escape(tag)}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", types_content)
+                types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
+                types_content = re.sub(rf"typedef\s+struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
+                types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
                 types_content += "\n" + body
                 bodies_added = True
         if bodies_added:
