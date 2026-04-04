@@ -46,8 +46,12 @@ typedef struct LookAt_s {
     "OSPfs": """\
 /* N64 OSPfs */
 typedef struct OSPfs_s {
+    void* queue;
+    int channel;
+    u8 id[32];
+    u8 label[32];
     int errNum;
-    void *inodeTable;
+    u32 status;
     u32 dirTable;
     u32 inodeStartTable;
     u32 initFlag;
@@ -55,9 +59,27 @@ typedef struct OSPfs_s {
     u8 activebank;
     u8 cursor;
     int errCode;
-    u32 status;
-    u32 reserved[15];   
+    u32 reserved[10];   
 } OSPfs;
+""",
+
+    "OSContStatus": """\
+/* N64 OSContStatus */
+typedef struct OSContStatus_s {
+    u16 type;
+    u8  status;
+    u8  errno;
+} OSContStatus;
+""",
+
+    "OSContPad": """\
+/* N64 OSContPad */
+typedef struct OSContPad_s {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errno;
+} OSContPad;
 """,
 }
 
@@ -97,7 +119,7 @@ KNOWN_FUNCTION_MACROS = {
 
 KNOWN_GLOBAL_TYPES = {
     "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "LookAt", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
-    "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
+    "OSContPad", "OSContStatus", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
     "OSIntMask", "OSPfs", "Actor", "ActorMarker",
     "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
 }
@@ -186,8 +208,14 @@ def classify_errors(log_data):
         if m_conflict and filepath:
             categories["conflicting_types"].add((filepath, m_conflict.group(1)))
 
-        if m_no_member and m_no_member.group(2) in ("Mtx", "Mtx_s"):
-            categories["need_mtx_body"] = True
+        # FIX: Missing member body injector for ANY known global struct
+        if m_no_member:
+            tag = m_no_member.group(2)
+            base_tag = tag[:-2] if tag.endswith("_s") else tag
+            if base_tag in ("Mtx", "Mtx_s"):
+                categories["need_mtx_body"] = True
+            if base_tag in N64_STRUCT_BODIES:
+                categories["need_struct_body"].add(base_tag)
 
         if m_incomplete and filepath:
             tag = m_incomplete.group(1)
