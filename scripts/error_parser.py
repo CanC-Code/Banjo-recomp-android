@@ -44,12 +44,19 @@ typedef struct LookAt_s {
 """,
 
     "OSPfs": """\
-/* N64 OSPfs stub */
+/* N64 OSPfs */
 typedef struct OSPfs_s {
-    u32  status;
-    u32  fileSize;
-    u32  initFlag;
-    u32  reserved[29];   
+    int errNum;
+    void *inodeTable;
+    u32 dirTable;
+    u32 inodeStartTable;
+    u32 initFlag;
+    u32 fileSize;
+    u8 activebank;
+    u8 cursor;
+    int errCode;
+    u32 status;
+    u32 reserved[15];   
 } OSPfs;
 """,
 }
@@ -200,7 +207,6 @@ def classify_errors(log_data):
         if m_unknown_type and filepath:
             type_name = m_unknown_type.group(1)
             
-            # --- FIX: Unknown Types mapped to Global Bodies ---
             if type_name in N64_STRUCT_BODIES:
                 categories["need_struct_body"].add(type_name)
 
@@ -255,7 +261,6 @@ def classify_errors(log_data):
                 new_local_fwd.append((filepath, type_name))
     categories["local_fwd_only"] = new_local_fwd
 
-    # Ensure known global types caught in missing_types or globals trigger n64_types.h inclusion
     for type_name, filepaths in categories["missing_types"].items():
         if type_name in KNOWN_GLOBAL_TYPES:
             for fp in filepaths: categories["missing_n64_types"].add(fp)
