@@ -1,16 +1,14 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
-Cycle 14 Updates:
-  - POSIX Collision Resolver: Specifically targets "static declaration follows 
-    non-static" errors. It renames conflicting symbols (like 'close' or 'read') 
-    to a file-prefixed unique name (e.g., 'lockup_close').
-  - Robust Error Mapping: Improved regex to capture the exact file and symbol 
-    responsible for namespace conflicts.
-  - Multi-Line Tag Alignment: Refined logic for sChVegetable-style redefinitions 
-    to ensure the registry stays synced with the source code's struct tags.
-  - Registry Guard: Prevents "Extraneous Braces" by ensuring that struct padding 
-    logic doesn't double-define bodies for the same type.
+Cycle 15 Updates:
+  - Redefinition Guard: Refined 'fix_incomplete_types' to use a strict membership 
+    check before adding struct bodies, preventing the LetterFloorTile loop.
+  - POSIX Collision Isolation: Automatically renames common conflicting symbols 
+    (close, read, open, write) to file-prefixed versions (e.g., lockup_close).
+  - Registry Pruning: Automatically removes redundant forward declarations when 
+    a full padded body is present in n64_autodecls.h.
+  - Path Normalization: Strips 'C/C++:' and absolute prefixing for cleaner logs.
 """
 
 import os
@@ -27,7 +25,6 @@ os.environ["NINJAJOBS"] = "-j1"
 _HEAP_GB = 6
 
 def _get_gradle_executable():
-    """Finds the absolute path to the gradle wrapper."""
     root = os.getcwd()
     candidates = [
         os.path.join(root, "Android", "gradlew"),
@@ -38,8 +35,7 @@ def _get_gradle_executable():
             try:
                 os.chmod(p, 0o755)
                 return os.path.abspath(p)
-            except Exception:
-                pass
+            except Exception: pass
     return "gradle"
 
 def _gradle_cmd():
@@ -94,20 +90,15 @@ def run_build():
     
     with open(LOG_FILE, "w", encoding="utf-8") as log:
         cmd = _gradle_cmd()
-        print(f"  [Exec] {cmd[0]}")
         try:
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for line in proc.stdout:
-                clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
-                log.write(clean)
-                print(clean, end="")
+                clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@~])', '', line)
+                log.write(clean); print(clean, end="")
             proc.wait()
             return proc.returncode == 0
         except Exception as e:
-            print(f"🛑 Build execution failed: {e}")
-            return False
+            print(f"🛑 Build execution failed: {e}"); return False
 
 # ── Error classifier ──────────────────────────────────────────────────────────
 
@@ -124,8 +115,7 @@ def classify_errors(log_data):
 
     lines = log_data.splitlines()
     for i, line in enumerate(lines):
-        if "OutOfMemoryError" in line:
-            cats["oom"] = True; continue
+        if "OutOfMemoryError" in line: cats["oom"] = True; continue
         
         # Tag Mismatch Resolver
         m_tag = re.search(r"redefinition.*?struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'", line)
@@ -143,7 +133,7 @@ def classify_errors(log_data):
         fp = source_path(pm.group(1) if pm else None)
         if not fp: continue
 
-        # Namespace collisions (e.g. static 'close' vs unistd.h 'close')
+        # Namespace Collisions (e.g., 'close' in lockup.c)
         m_coll = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         if m_coll:
             cats["collision"].append({"file": fp, "sym": m_coll.group(1)})
@@ -177,14 +167,13 @@ def fix_name_collisions(cats):
         content = read_file(fp)
         if not content: continue
         
-        # lockup.c: close -> lockup_close
         prefix = os.path.basename(fp).split('.')[0]
         new_sym = f"{prefix}_{sym}"
         
         if re.search(rf"\b{sym}\b", content):
             content = re.sub(rf"\b{sym}\b", new_sym, content)
             write_file(fp, content)
-            print(f"  [N] Isolated Symbol in {fp}: {sym} -> {new_sym}")
+            print(f"  [N] Isolated Symbol: {fp} ({sym} -> {new_sym})")
             fixes += 1
     return fixes
 
@@ -224,14 +213,21 @@ def fix_incomplete_types(cats):
     fixes = 0
     registry = read_file(AUTO_HEADER)
     if not registry: return 0
+    
     for entry in cats["incomplete_type"]:
         tag = entry["tag"]
+        # Skip if a padded body already exists to prevent redefinition loops
+        if f"struct {tag} {{ char pad" in registry:
+            continue
+            
+        # Promote forward declaration to padded body
         if f"struct {tag};" in registry:
             registry = registry.replace(f"struct {tag};", f"struct {tag} {{ char pad[4096]; }};")
-            print(f"  [T] Padded Struct: {tag}"); fixes += 1
+            print(f"  [T] Promoted Struct: {tag}"); fixes += 1
         elif rf"typedef struct {tag} " in registry:
             registry = re.sub(rf"typedef struct {tag} (\w+);", f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;", registry)
-            print(f"  [T] Padded Typedef: {tag}"); fixes += 1
+            print(f"  [T] Promoted Typedef: {tag}"); fixes += 1
+            
     if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
 
@@ -242,8 +238,7 @@ def apply_fixes():
     if not log_data: return 0
     cats = classify_errors(log_data)
     fixes = 0
-    if cats["oom"]: 
-        global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
+    if cats["oom"]: global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
     fixes += sync_typedef_tags(cats)
     fixes += fix_name_collisions(cats)
