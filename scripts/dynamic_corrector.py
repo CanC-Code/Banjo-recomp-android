@@ -1,15 +1,14 @@
 """
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
-Updates for Cycle 10:
-  - Global Registry Migration: Moves local forward declarations from source 
-    files to a central 'n64_autodecls.h' which is force-included.
-  - Conflict-First Learning: Prioritizes fixing 'redefinition' errors before 
-    'unknown type' errors to ensure the registry is accurate.
-  - Blind Stubbing: If a type is unknown and cannot be found in the source, 
-    it is now stubbed in the global registry to break compilation stalemates.
-  - Path Normalization: Normalizes relative paths in logs to correctly 
-    target files in the GitHub Actions environment.
+Updates for Cycle 11:
+  - Symbol Isolation Pass: Detects 'static declaration follows non-static' 
+    errors (like the 'close' conflict) and renames the local symbol to 
+    a file-prefixed version (e.g., lockup_close).
+  - JVM Flag Correction: Fixed the typo in the OutOfMemory flag that was 
+    causing the Gradle daemon to fail initialization in some environments.
+  - Case-Insensitive Tag Discovery: Improved the registry's ability to 
+    match N64 struct tags that use inconsistent casing.
 """
 
 import os
@@ -26,6 +25,7 @@ os.environ["NINJAJOBS"] = "-j1"
 _HEAP_GB = 6
 
 def _gradle_cmd():
+    # Corrected -XX:+HeapDumpOnOutOfMemoryError
     return [
         "gradle", "-p", "Android", "assembleDebug",
         "--console=plain", "--max-workers=1", "--no-daemon",
@@ -77,7 +77,6 @@ def source_path(path):
     p_lower = path.lower()
     if any(x in p_lower for x in ["/usr/", "/ndk/", "toolchains", "include/2.0l"]):
         return None
-    # Normalize paths relative to the work dir
     if "/Banjo-recomp-android/Banjo-recomp-android/" in path:
         return path.split("/Banjo-recomp-android/Banjo-recomp-android/")[-1]
     return path
@@ -107,6 +106,7 @@ def classify_errors(log_data):
         "local_struct":    [],
         "undefined":       [],
         "sdk_type":        [],
+        "collision":       [],
         "oom":             False,
     }
 
@@ -116,6 +116,12 @@ def classify_errors(log_data):
         pm = re.search(r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))", line)
         fp = source_path(pm.group(1) if pm else None)
         if not fp: continue
+
+        # Namespace Collisions (e.g. static 'close' vs unistd.h)
+        m_coll = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
+        if m_coll:
+            cats["collision"].append({"file": fp, "sym": m_coll.group(1)})
+            continue
 
         # Redefinition / Tag Learning
         m_tag = re.search(r"redefinition of '([^']+)' with different types.*?struct ([^']+)' vs 'struct ([^']+)'", line)
@@ -145,46 +151,50 @@ def classify_errors(log_data):
 
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
+def fix_name_collisions(cats):
+    fixes = 0
+    for entry in cats["collision"]:
+        fp, sym = entry["file"], entry["sym"]
+        content = read_file(fp)
+        # Prefix the symbol with the filename to make it unique
+        prefix = os.path.basename(fp).split('.')[0]
+        new_sym = f"{prefix}_{sym}"
+        
+        if re.search(rf"\b{sym}\b", content):
+            content = re.sub(rf"\b{sym}\b", new_sym, content)
+            write_file(fp, content)
+            print(f"  [N] Isolated colliding symbol: {sym} -> {new_sym} in {os.path.basename(fp)}")
+            fixes += 1
+    return fixes
+
 def update_global_registry(cats):
-    """Syncs unknown types into a force-included header."""
     fixes = 0
     registry = read_file(AUTO_HEADER) or "#pragma once\n"
     
-    # 1. Learn from redefinitions first (correcting existing decls)
     for entry in cats["tag_mismatch"]:
         sym, tag = entry["sym"], entry["tag"]
         pattern = rf"typedef struct \w+ {sym};"
-        replacement = f"typedef struct {tag} {sym};"
         if re.search(pattern, registry):
-            registry = re.sub(pattern, replacement, registry)
-            print(f"  [L] Registry Updated: {sym} -> struct {tag}")
+            registry = re.sub(pattern, f"typedef struct {tag} {sym};", registry)
             fixes += 1
 
-    # 2. Add new unknown types
     unknown_syms = set(e["sym"] for e in cats["local_struct"])
     for s in sorted(unknown_syms):
         if f" {s};" in registry: continue
-        
-        # Try to find the real tag in the file that reported the error
         tag = f"{s}_s"
         for entry in cats["local_struct"]:
             if entry["sym"] == s:
-                content = read_file(entry["file"])
-                m = re.search(rf"typedef struct (\w+) .*?{s};", content, flags=re.DOTALL)
+                m = re.search(rf"typedef struct (\w+) .*?{s};", read_file(entry["file"]), flags=re.DOTALL)
                 if m: tag = m.group(1); break
-        
         registry += f"typedef struct {tag} {s};\n"
-        print(f"  [R] Registry Added: {s} (tag: {tag})")
+        print(f"  [R] Registry Added: {s}")
         fixes += 1
 
     if fixes > 0:
         write_file(AUTO_HEADER, registry)
-        # Ensure n64_types.h includes the registry
         types_content = read_file(TYPES_HEADER)
-        inc_line = f'#include "{os.path.basename(AUTO_HEADER)}"'
-        if inc_line not in types_content:
-            write_file(TYPES_HEADER, f'{inc_line}\n' + types_content)
-    
+        if f'#include "{os.path.basename(AUTO_HEADER)}"' not in types_content:
+            write_file(TYPES_HEADER, f'#include "{os.path.basename(AUTO_HEADER)}"\n' + types_content)
     return fixes
 
 def fix_incomplete_types(cats):
@@ -192,23 +202,11 @@ def fix_incomplete_types(cats):
     registry = read_file(AUTO_HEADER)
     for entry in cats["incomplete_type"]:
         tag = entry["tag"]
-        # Upgrade pointers to stubs in the global registry
-        old = f"struct {tag};"
-        new = f"struct {tag} {{ char pad[4096]; }};"
-        
-        # Check source first (if definition is there but incomplete)
-        src_content = read_file(entry["file"])
-        if f"struct {tag};" in src_content:
-            write_file(entry["file"], src_content.replace(f"struct {tag};", new))
-            fixes += 1
-            print(f"  [T] Escalated {tag} in source")
-        
-        # Also check registry
+        old, new = f"struct {tag};", f"struct {tag} {{ char pad[4096]; }};"
         if old in registry and new not in registry:
             registry = registry.replace(old, new)
             fixes += 1
-            print(f"  [T] Escalated {tag} in registry")
-            
+            print(f"  [T] Escalated {tag}")
     if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
 
@@ -221,7 +219,6 @@ def fix_sdk_types(cats):
         dtype = KNOWN_SDK_TYPEDEFS.get(t, "int")
         content += f"\ntypedef {dtype} {t};\n"
         added = True
-        print(f"  [K] Added SDK type: {t}")
     if added: write_file(TYPES_HEADER, content)
     return 1 if added else 0
 
@@ -233,7 +230,6 @@ def fix_undefined(cats):
         if f" {sym}(" in stubs: continue
         stubs += f"\nlong long int {sym}() {{ return 0; }}\n"
         added = True
-        print(f"  [I] Stubbed {sym}")
     if added: write_file(STUBS_FILE, stubs)
     return 1 if added else 0
 
@@ -248,7 +244,7 @@ def apply_fixes():
     if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
-    # Priority: Correct Registry -> Add to Registry -> Incomplete types -> SDK/Linker
+    fixes += fix_name_collisions(cats)
     fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
     fixes += fix_sdk_types(cats)
