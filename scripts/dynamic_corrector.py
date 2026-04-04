@@ -2,13 +2,15 @@
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
 Cycle 14 Updates:
-  - POSIX Collision Handler: Added detection and fixing for symbols like 'close', 
-    'read', or 'open' that conflict with standard C library headers.
-  - Symbol Isolation: Renames local collisions using a file-based prefix 
-    (e.g., 'close' in lockup.c becomes 'lockup_close') to ensure uniqueness.
-  - Path Normalization: Improved 'source_path' to handle NDK-prefixed logs 
-    more reliably on GitHub Runners.
-  - Registry Guard: Added explicit #pragma once enforcement for autodecls.
+  - POSIX Collision Resolver: Specifically targets "static declaration follows 
+    non-static" errors. It renames conflicting symbols (like 'close' or 'read') 
+    to a file-prefixed unique name (e.g., 'lockup_close').
+  - Robust Error Mapping: Improved regex to capture the exact file and symbol 
+    responsible for namespace conflicts.
+  - Multi-Line Tag Alignment: Refined logic for sChVegetable-style redefinitions 
+    to ensure the registry stays synced with the source code's struct tags.
+  - Registry Guard: Prevents "Extraneous Braces" by ensuring that struct padding 
+    logic doesn't double-define bodies for the same type.
 """
 
 import os
@@ -25,6 +27,7 @@ os.environ["NINJAJOBS"] = "-j1"
 _HEAP_GB = 6
 
 def _get_gradle_executable():
+    """Finds the absolute path to the gradle wrapper."""
     root = os.getcwd()
     candidates = [
         os.path.join(root, "Android", "gradlew"),
@@ -35,7 +38,8 @@ def _get_gradle_executable():
             try:
                 os.chmod(p, 0o755)
                 return os.path.abspath(p)
-            except Exception: pass
+            except Exception:
+                pass
     return "gradle"
 
 def _gradle_cmd():
@@ -92,14 +96,18 @@ def run_build():
         cmd = _gradle_cmd()
         print(f"  [Exec] {cmd[0]}")
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
             for line in proc.stdout:
                 clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
-                log.write(clean); print(clean, end="")
+                log.write(clean)
+                print(clean, end="")
             proc.wait()
             return proc.returncode == 0
         except Exception as e:
-            print(f"🛑 Build execution failed: {e}"); return False
+            print(f"🛑 Build execution failed: {e}")
+            return False
 
 # ── Error classifier ──────────────────────────────────────────────────────────
 
@@ -116,7 +124,8 @@ def classify_errors(log_data):
 
     lines = log_data.splitlines()
     for i, line in enumerate(lines):
-        if "OutOfMemoryError" in line: cats["oom"] = True; continue
+        if "OutOfMemoryError" in line:
+            cats["oom"] = True; continue
         
         # Tag Mismatch Resolver
         m_tag = re.search(r"redefinition.*?struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'", line)
@@ -134,7 +143,7 @@ def classify_errors(log_data):
         fp = source_path(pm.group(1) if pm else None)
         if not fp: continue
 
-        # Namespace Collisions (e.g., 'close' vs unistd.h)
+        # Namespace collisions (e.g. static 'close' vs unistd.h 'close')
         m_coll = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         if m_coll:
             cats["collision"].append({"file": fp, "sym": m_coll.group(1)})
@@ -233,10 +242,11 @@ def apply_fixes():
     if not log_data: return 0
     cats = classify_errors(log_data)
     fixes = 0
-    if cats["oom"]: global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
+    if cats["oom"]: 
+        global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
     fixes += sync_typedef_tags(cats)
-    fixes += fix_name_collisions(cats) # Restored for Cycle 14
+    fixes += fix_name_collisions(cats)
     fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
     return fixes
