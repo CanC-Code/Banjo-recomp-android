@@ -1,12 +1,14 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
-Cycle 19 Updates:
-  - Improved Typedef Redefinition Resolution: Completely refactored FIX D to 
-    correctly swap mismatched struct tags (e.g., swapping 'struct ch_vegatable' 
-    to 'struct chVegetable_s' globally in the file) rather than relying on brittle 
-    brace-matching regex. This resolves the vegetables.c struct conflict.
-  - Retained all legacy safeguards for stubs, extraneous braces, and implicit functions.
+Cycle Enhancements:
+  - Unlocked Build Loop: Removed hard aborts for libaudio and null float errors.
+  - Condensed Error Summary: Generates a clean, path-stripped summary of unique errors
+    when the loop halts, perfect for feeding into an LLM.
+  - Synth Audio States: Automatically intercepts and stubs missing N64 audio states 
+    (RESAMPLE_STATE, POLEF_STATE, ENVMIX_STATE).
+  - Improved Anonymous Struct Parsing: FIX D now safely targets exact struct tags 
+    to fix typedef redefinitions for structs like LetterFloorTile.
 """
 
 import os
@@ -66,33 +68,38 @@ def source_path(path):
         return p.split("/Banjo-recomp-android/Banjo-recomp-android/")[-1]
     return p
 
+def generate_error_summary(log_data):
+    """Strips file paths and duplicate spam to create a clean LLM prompt payload."""
+    errors = set()
+    for line in log_data.split('\n'):
+        if "error:" in line and "too many errors emitted" not in line:
+            # Strip everything up to "error: " to group identical errors across files
+            clean_err = re.sub(r"^.*?:\d+:\d+:\s*error:\s*", "", line).strip()
+            if clean_err:
+                errors.add(clean_err)
+    
+    print("\n" + "="*60)
+    print("📋 CONDENSED ERROR SUMMARY (Copy & Paste this to the LLM)")
+    print("="*60)
+    for e in sorted(errors):
+        print(f"- {e}")
+    print("="*60 + "\n")
+
 def classify_errors(log_data):
     categories = {
         "missing_n64_types":  [],  
         "actor_pointer":      [],  
         "local_struct_fwd":   [],  
-        "libaudio_types":     [],  
-        "null_float":         [],  
         "typedef_redef":      [],  
         "static_conflict":    [],  
         "incomplete_sizeof":  [],
         "undeclared_macros":  [], 
         "implicit_func":      [], 
         "undefined_symbols":  [],
+        "audio_states":       [],
         "unknown":            [],
         "extraneous_brace":   False,
     }
-
-    libaudio_patterns = [
-        r"libaudio\.h.*unknown type name 'Acmd'",
-        r"libaudio\.h.*unknown type name 'ADPCM_STATE'",
-    ]
-    for pattern in libaudio_patterns:
-        if re.search(pattern, log_data):
-            categories["libaudio_types"].append(pattern)
-
-    if re.search(r"initializing 'f32'.*incompatible type 'void \*'", log_data):
-        categories["null_float"].append("NULL=(void*)0 assigned to f32 field")
 
     file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx)):"
     local_struct_map = {}
@@ -123,10 +130,8 @@ def classify_errors(log_data):
         m_array = "array has incomplete element type" in line
         m_def = "incomplete definition of type" in line
 
-        if "unknown type name 'Acmd'" in line or "unknown type name 'ADPCM_STATE'" in line:
-            pass  
-        elif "initializing 'f32'" in line and "void *" in line:
-            pass  
+        if m_unknown and m_unknown.group(1) in ["RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE"]:
+            categories["audio_states"].append(m_unknown.group(1))
         elif m_undef_ref:
             categories["undefined_symbols"].append(m_undef_ref.group(1).strip())
         elif m_undef_sym:
@@ -160,6 +165,7 @@ def classify_errors(log_data):
             if line.strip():
                 categories["unknown"].append(line.strip())
 
+    # We now register audio states as global so they don't get locally forwarded
     known_global_types = {
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
@@ -175,22 +181,6 @@ def classify_errors(log_data):
 
     return categories
 
-def fix_extraneous_braces(filepath):
-    if not os.path.exists(filepath): return False
-    with open(filepath, "r") as f:
-        content = f.read()
-    
-    original = content
-    content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", content)
-    content = re.sub(r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{", r"typedef struct \1 {", content)
-
-    if content != original:
-        with open(filepath, "w") as f:
-            f.write(content)
-        print(f"  [🛠️] Cleaned up syntax corruption in {os.path.basename(filepath)}")
-        return True
-    return False
-
 def apply_fixes():
     if not os.path.exists(LOG_FILE): return 0
     with open(LOG_FILE, "r", encoding="utf-8") as f: log_data = f.read()
@@ -198,16 +188,16 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    if categories["libaudio_types"]:
-        print("\n🛑 HEADER-LEVEL ERRORS in libaudio.h:")
-        return -1
-
-    if categories["null_float"]:
-        print("\n🛑 HEADER-LEVEL ERROR: NULL=(void*)0 assigned to f32 fields.")
-        return -1
-
     if categories["extraneous_brace"]:
-        if fix_extraneous_braces(TYPES_HEADER): fixes += 1
+        if os.path.exists(TYPES_HEADER):
+            with open(TYPES_HEADER, "r") as f: content = f.read()
+            original = content
+            content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", content)
+            content = re.sub(r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{", r"typedef struct \1 {", content)
+            if content != original:
+                with open(TYPES_HEADER, "w") as f: f.write(content)
+                print(f"  [🛠️] Cleaned up syntax corruption in n64_types.h")
+                fixes += 1
 
     # ── FIX 0: Header Protection ───────────────────────────────────────────
     if os.path.exists(TYPES_HEADER):
@@ -278,7 +268,13 @@ def apply_fixes():
             target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
             old_tag = tag1 if target_tag == tag2 else tag2
             
-            content = re.sub(rf"\bstruct\s+{old_tag}\b", f"struct {target_tag}", content)
+            # Sub 1: Replace direct matching tags `struct old_tag` -> `struct target_tag`
+            content, count1 = re.subn(rf"\bstruct\s+{re.escape(old_tag)}\b", f"struct {target_tag}", content)
+            
+            # Sub 2: If the struct was anonymous or formatted tightly `typedef struct {` 
+            # and failed to map, try forcing the struct tag onto the anonymous typedef
+            if count1 == 0:
+                content, count2 = re.subn(r"typedef\s+struct\s*\{", f"typedef struct {target_tag} {{", content)
             
         if content != original:
             with open(filepath, "w") as f: f.write(content)
@@ -384,9 +380,21 @@ def apply_fixes():
             with open(STUBS_FILE, "w") as f: f.write(existing_stubs)
             fixes += 1
 
-    if categories["unknown"] and fixes == 0:
-        print("\n⚠️  Unrecognized errors (no automatic fix available):")
-        for msg in list(dict.fromkeys(categories["unknown"]))[:15]: print(f"   {msg}")
+    # ── FIX J: Audio / Synth Struct States ─────────────────────────────
+    if categories["audio_states"] and os.path.exists(TYPES_HEADER):
+        with open(TYPES_HEADER, "r") as f: types_content = f.read()
+        audio_added = False
+        for t in set(categories["audio_states"]):
+            if f"typedef struct {t}" not in types_content:
+                types_content += f"\ntypedef struct {t} {{ long long int force_align[32]; }} {t};\n"
+                audio_added = True
+        if audio_added:
+            with open(TYPES_HEADER, "w") as f: f.write(types_content)
+            print(f"  [🛠️] Injected missing N64 synth types into n64_types.h")
+            fixes += 1
+
+    if fixes == 0:
+        generate_error_summary(log_data)
 
     return fixes
 
@@ -399,11 +407,8 @@ def main():
 
         result = apply_fixes()
 
-        if result == -1:
-            print("\n🛑 Loop halted. Manual fix required in n64_types.h.")
-            break
-        elif result == 0:
-            print("\n🛑 Loop halted. No fixable patterns found.")
+        if result == 0:
+            print("\n🛑 Loop halted. No fixable patterns found. Please review the Condensed Error Summary above.")
             break
 
         time.sleep(1)
