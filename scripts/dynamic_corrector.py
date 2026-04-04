@@ -2,13 +2,12 @@
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
 Cycle Enhancements:
-  - Unlocked Build Loop: Removed hard aborts for libaudio and null float errors.
+  - Path Normalization: os.path.normpath ensures included headers found multiple 
+    directories up (like include/synthInternals.h) are correctly identified and injected.
+  - Anonymous Typedef Targeting: FIX D now accurately rewrites the interior body of 
+    'typedef struct { ... } Tag;' to harmonize with the target forward declaration.
   - Condensed Error Summary: Generates a clean, path-stripped summary of unique errors
-    when the loop halts, perfect for feeding into an LLM.
-  - Synth Audio States: Automatically intercepts and stubs missing N64 audio states 
-    (RESAMPLE_STATE, POLEF_STATE, ENVMIX_STATE).
-  - Improved Anonymous Struct Parsing: FIX D now safely targets exact struct tags 
-    to fix typedef redefinitions for structs like LetterFloorTile.
+    when the loop halts.
 """
 
 import os
@@ -73,10 +72,10 @@ def generate_error_summary(log_data):
     errors = set()
     for line in log_data.split('\n'):
         if "error:" in line and "too many errors emitted" not in line:
-            # Strip everything up to "error: " to group identical errors across files
-            clean_err = re.sub(r"^.*?:\d+:\d+:\s*error:\s*", "", line).strip()
-            if clean_err:
-                errors.add(clean_err)
+            # Extract the actual error message ignoring the file path and line number
+            m = re.search(r"error:\s*(.*)", line)
+            if m:
+                errors.add(m.group(1).strip())
     
     print("\n" + "="*60)
     print("📋 CONDENSED ERROR SUMMARY (Copy & Paste this to the LLM)")
@@ -113,9 +112,17 @@ def classify_errors(log_data):
 
         match = re.search(file_regex, line)
         filepath = source_path(match.group(1) if match else None)
+        
+        # Normalize paths so we correctly resolve ../../../../include jumps
+        if filepath:
+            filepath = os.path.normpath(filepath)
 
-        if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
+        if filepath and ("/usr/" in filepath.replace("\\", "/") or "ndk" in filepath.lower()):
             filepath = None
+
+        # Universal fallback: Always flag any file producing a compiler error for header injection
+        if filepath and os.path.exists(filepath):
+            categories["missing_n64_types"].append(filepath)
 
         m_redef = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
         m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
@@ -130,7 +137,7 @@ def classify_errors(log_data):
         m_array = "array has incomplete element type" in line
         m_def = "incomplete definition of type" in line
 
-        if m_unknown and m_unknown.group(1) in ["RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE"]:
+        if m_unknown and m_unknown.group(1) in ["RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "ALVoiceState"]:
             categories["audio_states"].append(m_unknown.group(1))
         elif m_undef_ref:
             categories["undefined_symbols"].append(m_undef_ref.group(1).strip())
@@ -159,13 +166,10 @@ def classify_errors(log_data):
                 local_struct_map.setdefault(filepath, set()).add(type_name)
             else:
                 categories["unknown"].append(line.strip())
-        elif filepath and os.path.exists(filepath):
-            categories["missing_n64_types"].append(filepath)
         else:
             if line.strip():
                 categories["unknown"].append(line.strip())
 
-    # We now register audio states as global so they don't get locally forwarded
     known_global_types = {
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
@@ -210,7 +214,7 @@ def apply_fixes():
     # ── FIX A: Priority inclusion of n64_types.h ─────────────────────────
     for filepath in set(categories["missing_n64_types"]):
         if not os.path.exists(filepath): continue
-        if "/usr/include" in filepath or "ndk" in filepath or filepath.endswith("n64_types.h"): continue
+        if "/usr/include" in filepath.replace("\\", "/") or "ndk" in filepath.lower() or filepath.endswith("n64_types.h"): continue
         with open(filepath, "r") as f: content = f.read()
         if 'include "ultra/n64_types.h"' not in content:
             content = '#include "ultra/n64_types.h"\n' + content
@@ -224,7 +228,7 @@ def apply_fixes():
         with open(filepath, "r") as f: content = f.read()
         original = content
         if "Actor *actor =" not in content and "this" in content:
-            content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
+            content = re.sub(r'\)\s*\{', r') {\n    Actor *actor = (Actor *)this;', content, count=1)
             print(f"  [🛠️] Injected 'actor' pointer into {os.path.basename(filepath)}")
         if content != original:
             with open(filepath, "w") as f: f.write(content)
@@ -268,13 +272,15 @@ def apply_fixes():
             target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
             old_tag = tag1 if target_tag == tag2 else tag2
             
-            # Sub 1: Replace direct matching tags `struct old_tag` -> `struct target_tag`
-            content, count1 = re.subn(rf"\bstruct\s+{re.escape(old_tag)}\b", f"struct {target_tag}", content)
+            # Sub 1: Target anonymous typedefs directly "typedef struct { ... } TagName;"
+            pattern1 = r"typedef\s+struct\s*(?:\w+\s*)?\{([\s\S]*?)\}\s*" + re.escape(old_tag) + r"\s*;"
+            replacement1 = f"typedef struct {target_tag} {{\\1}} {old_tag};"
+            content, count = re.subn(pattern1, replacement1, content)
             
-            # Sub 2: If the struct was anonymous or formatted tightly `typedef struct {` 
-            # and failed to map, try forcing the struct tag onto the anonymous typedef
-            if count1 == 0:
-                content, count2 = re.subn(r"typedef\s+struct\s*\{", f"typedef struct {target_tag} {{", content)
+            # Sub 2: Direct struct tag fallback if it wasn't anonymous
+            if count == 0:
+                pattern2 = r"\bstruct\s+" + re.escape(old_tag) + r"\b"
+                content, count = re.subn(pattern2, f"struct {target_tag}", content)
             
         if content != original:
             with open(filepath, "w") as f: f.write(content)
