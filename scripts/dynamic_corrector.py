@@ -41,7 +41,6 @@ def classify_errors(log_data):
         "missing_n64_types":  [],  
         "actor_pointer":      [],  
         "local_struct_fwd":   [],  
-        "libaudio_types":     [],  
         "null_float":         [],  
         "typedef_redef":      [],  
         "static_conflict":    [],  
@@ -62,6 +61,7 @@ def classify_errors(log_data):
         "OSHWIntr", "OSIntMask", "OSYieldResult"
     }
 
+    # Enhanced file detection for Android NDK log format
     file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
     local_struct_map = {}
 
@@ -133,7 +133,7 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── FIX J: CMake Linker adjustment ──────────────────────────────────
+    # ── FIX J: Ensure Linker Libraries (Math/Log) ─────────────────────────
     if os.path.exists(CMAKE_FILE):
         with open(CMAKE_FILE, "r") as f:
             cmake = f.read()
@@ -141,9 +141,10 @@ def apply_fixes():
             cmake = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake)
             with open(CMAKE_FILE, "w") as f:
                 f.write(cmake)
+            print("  [🛠️] Injected math and log libraries into CMakeLists.txt")
             fixes += 1
 
-    # ── FIX K: SDK Type Injection ──────────────────────────────────────────
+    # ── FIX K: Inject Global SDK Types ─────────────────────────────────────
     if categories["missing_sdk_types"]:
         known_sdk_typedefs = {
             "OSHWIntr": "unsigned int", "OSIntMask": "unsigned int",
@@ -170,7 +171,7 @@ def apply_fixes():
                     f.write(content)
                 fixes += 1
 
-    # ── FIX C: Local struct forward declaration (Crucial for sChVegetable) ──
+    # ── FIX C: Inject Local Struct Forward Decls (Critical for Actors) ─────
     if categories["local_struct_fwd"]:
         file_to_types = {}
         for filepath, type_name in categories["local_struct_fwd"]:
@@ -189,10 +190,10 @@ def apply_fixes():
                 content = "/* AUTO: fwd decls */\n" + "\n".join(fwd_lines) + "\n" + content
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Injected local decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                print(f"  [🛠️] Injected actor decls {sorted(type_names)} into {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX A: Header Inclusion ───────────────────────────────────────────
+    # ── FIX A: Global Header Inclusion ────────────────────────────────────
     for filepath in set(categories["missing_n64_types"]):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         with open(filepath, "r") as f:
@@ -202,18 +203,6 @@ def apply_fixes():
             with open(filepath, "w") as f:
                 f.write(content)
             fixes += 1
-
-    # ── FIX B: Actor pointer injection ───────────────────────────────────
-    if categories["actor_pointer"]:
-        for filepath in set(categories["actor_pointer"]):
-            if not os.path.exists(filepath): continue
-            with open(filepath, "r") as f:
-                content = f.read()
-            if "Actor *actor =" not in content and "this" in content:
-                content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
-                with open(filepath, "w") as f:
-                    f.write(content)
-                fixes += 1
 
     # ── FIX I: Linker Stubs ──────────────────────────────────────────────
     if categories["undefined_symbols"]:
@@ -228,6 +217,7 @@ def apply_fixes():
             if f" {sym}(" in stubs: continue
             stubs += f"long long int {sym}() {{ return 0; }}\n"
             added = True
+            print(f"  [🛠️] Stubbed function: {sym}")
         if added:
             with open(STUBS_FILE, "w") as f:
                 f.write(stubs)
@@ -242,7 +232,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found.")
+            print("\n🛑 No more fixable patterns found in this batch.")
             break
         time.sleep(1)
 
