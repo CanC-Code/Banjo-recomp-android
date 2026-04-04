@@ -82,9 +82,13 @@ def classify_errors(log_data):
         match = re.search(file_regex, line)
         filepath = match.group(1) if match else None
 
+        if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
+            filepath = None
+
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
         m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
+        m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_inc = "incomplete type" in line 
 
         if m_undef_sym:
@@ -92,6 +96,12 @@ def classify_errors(log_data):
             categories["undefined_symbols"].append(sym)
         elif m_implicit:
             categories["implicit_func"].append(m_implicit.group(1))
+        elif m_ident:
+            ident = m_ident.group(1)
+            if ident == "actor" and filepath:
+                categories["actor_pointer"].append(filepath)
+            else:
+                categories["undeclared_macros"].append(ident)
         elif m_unknown:
             type_name = m_unknown.group(1)
             if type_name in known_global_types:
@@ -105,6 +115,7 @@ def classify_errors(log_data):
         elif filepath and os.path.exists(filepath):
             categories["missing_n64_types"].append(filepath)
 
+    # Convert map to flat category for local structs
     for filepath, type_names in local_struct_map.items():
         for t in type_names:
             if t not in known_global_types:
@@ -121,60 +132,88 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── FIX K: Overhauled SDK Type Injection ──────────────────────────────
+    # ── FIX J: CMake Linker Libraries ─────────────────────────────────────
+    if os.path.exists(CMAKE_FILE):
+        with open(CMAKE_FILE, "r") as f:
+            cmake_content = f.read()
+        if "target_link_libraries(" in cmake_content and " m " not in cmake_content:
+            cmake_content = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake_content)
+            with open(CMAKE_FILE, "w") as f:
+                f.write(cmake_content)
+            fixes += 1
+
+    # ── FIX K: SDK Type Injection ──────────────────────────────────────────
     if categories["missing_sdk_types"]:
         known_sdk_typedefs = {
-            "OSHWIntr": "unsigned int",
-            "OSIntMask": "unsigned int",
+            "OSHWIntr": "unsigned int", "OSIntMask": "unsigned int",
             "s8": "signed char", "u8": "unsigned char",
             "s16": "short", "u16": "unsigned short",
             "s32": "int", "u32": "unsigned int",
             "s64": "long long", "u64": "unsigned long long",
             "f32": "float", "f64": "double",
             "OSPri": "int", "OSId": "int", "n64_bool": "int",
-            "OSMesg": "unsigned long long", # FIX: Use long long to handle both ints and pointers
-            "OSYieldResult": "int"
+            "OSMesg": "unsigned long long", "OSYieldResult": "int"
         }
-        
         if os.path.exists(TYPES_HEADER):
             with open(TYPES_HEADER, "r") as f:
                 content = f.read()
-            
             added = False
             for t in set(categories["missing_sdk_types"]):
                 if f" {t};" in content: continue
-                
-                if t in known_sdk_typedefs:
-                    decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
-                else:
-                    decl = f"\ntypedef struct {{ long long int reserved[64]; }} {t};\n"
-                
+                decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n" if t in known_sdk_typedefs else f"\ntypedef struct {{ long long int reserved[64]; }} {t};\n"
                 content += decl
                 added = True
-                print(f"  [🛠️] Defined missing SDK type: {t}")
-            
             if added:
                 with open(TYPES_HEADER, "w") as f:
                     f.write(content)
                 fixes += 1
 
-    # ── FIX I: Auto-Linker Stubs ──────────────────────────────────────────
+    # ── FIX C: Local struct forward declaration ───────────────────────────
+    if categories["local_struct_fwd"]:
+        file_to_types = {}
+        for filepath, type_name in categories["local_struct_fwd"]:
+            file_to_types.setdefault(filepath, set()).add(type_name)
+        for filepath, type_names in file_to_types.items():
+            if not os.path.exists(filepath): continue
+            with open(filepath, "r") as f:
+                content = f.read()
+            fwd_lines = []
+            for t in sorted(type_names):
+                tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] == 's' else t
+                fwd_decl = f"typedef struct {tag}_s {t};"
+                if fwd_decl not in content:
+                    fwd_lines.append(fwd_decl)
+            if fwd_lines:
+                content = "/* AUTO: fwd decls */\n" + "\n".join(fwd_lines) + "\n" + content
+                with open(filepath, "w") as f:
+                    f.write(content)
+                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                fixes += 1
+
+    # ── FIX A: Header Inclusion ───────────────────────────────────────────
+    for filepath in set(categories["missing_n64_types"]):
+        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
+        with open(filepath, "r") as f:
+            content = f.read()
+        if 'include "ultra/n64_types.h"' not in content:
+            content = '#include "ultra/n64_types.h"\n' + content
+            with open(filepath, "w") as f:
+                f.write(content)
+            fixes += 1
+
+    # ── FIX I: Linker Stubs ──────────────────────────────────────────────
     if categories["undefined_symbols"]:
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
             with open(STUBS_FILE, "w") as f:
                 f.write('#include "n64_types.h"\n\n')
-        
         with open(STUBS_FILE, "r") as f:
             stubs = f.read()
-            
         added = False
         for sym in set(categories["undefined_symbols"]):
             if f" {sym}(" in stubs: continue
             stubs += f"long long int {sym}() {{ return 0; }}\n"
             added = True
-            print(f"  [🛠️] Stubbed missing function: {sym}")
-                
         if added:
             with open(STUBS_FILE, "w") as f:
                 f.write(stubs)
@@ -183,13 +222,13 @@ def apply_fixes():
     return fixes
 
 def main():
-    for i in range(1, 50):
-        print(f"\n--- Build Cycle {i} ---")
+    for i in range(1, 100):
+        print(f"\n--- Cycle {i} ---")
         if run_build():
-            print("\n✅ Success! APK built.")
+            print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more automatic fixes possible.")
+            print("\n🛑 No fixable patterns found.")
             break
         time.sleep(1)
 
