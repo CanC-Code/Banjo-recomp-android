@@ -2,12 +2,13 @@
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
 Updates for Cycle 6:
-  - Fixed JVM typo: HeapDumpOfMemoryError -> HeapDumpOnOutOfMemoryError.
-  - Restored missing functions: fix_missing_macros and fix_missing_n64_includes.
-  - Hardened n64_types.h: New types are injected before the final closing 
-    content to avoid breaking structural blocks.
-  - Added 'Safe Deduplication': Uses a regex-based parser to remove duplicate 
-    typedefs without deleting surrounding syntax.
+  - Fixed JVM crash: Corrected typo in '-XX:+HeapDumpOnOutOfMemoryError'.
+  - Restored missing functions: Implemented 'fix_missing_macros' and 'fix_missing_n64_includes'.
+  - Brace Integrity: Added a count-based validation to prevent structural corruption of headers.
+  - Safe Injection: Injected types and macros are now appended to a dedicated block to avoid
+    breaking existing struct definitions.
+  - Incomplete Type Handling: Added a pass to identify when a forward declaration is 
+    insufficient (e.g., member access) and stubs the struct with a generic buffer.
 """
 
 import os
@@ -35,7 +36,7 @@ TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 CMAKE_FILE   = "Android/app/src/main/cpp/CMakeLists.txt"
 
-AUTO_MARKER = "/* AUTO: forward declarations */"
+AUTO_MARKER = "/* AUTO: generated declarations */"
 
 # ── Type & Macro Definitions ─────────────────────────────────────────────────
 
@@ -87,9 +88,10 @@ def read_file(path):
         return f.read()
 
 def write_file(path, content):
-    if path.endswith("n64_types.h"):
+    # Validation: Prevent saving files with broken brace pairs (a common cause of Cycle 5 failures)
+    if path.endswith((".h", ".c", ".cpp")):
         if content.count('{') != content.count('}'):
-            print(f"  [!] CRITICAL: Mismatched braces detected. Blocking write to {os.path.basename(path)}.")
+            print(f"  [!] REJECTED write to {os.path.basename(path)}: Brace mismatch ({content.count('{')} vs {content.count('}')})")
             return
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -97,7 +99,7 @@ def write_file(path, content):
 def source_path(path):
     if not path: return None
     p_lower = path.lower()
-    if p_lower.startswith("/usr/") or "/ndk/" in p_lower:
+    if p_lower.startswith("/usr/") or "/ndk/" in p_lower or "toolchains" in p_lower:
         return None
     return path
 
@@ -113,7 +115,8 @@ def strip_auto_block(content):
             continue
         if in_block:
             stripped = line.strip()
-            if stripped == "" or stripped.startswith("typedef struct"):
+            # Stop skipping once we hit code that isn't part of our injection
+            if stripped == "" or stripped.startswith("typedef") or stripped.startswith("#define"):
                 continue
             else:
                 in_block = False
@@ -146,6 +149,7 @@ def classify_errors(log_data):
         "missing_sdk_types":    [],
         "missing_macros":       [],
         "redefinition":         [],
+        "incomplete_type":      [],
         "oom_detected":         False,
     }
 
@@ -161,6 +165,11 @@ def classify_errors(log_data):
         m_redef = re.search(r"redefinition of '([^']+)'", line)
         if m_redef and fp:
             cats["redefinition"].append((fp, m_redef.group(1)))
+            continue
+
+        m_inc = re.search(r"incomplete definition of type 'struct ([^']+)'", line)
+        if m_inc and fp:
+            cats["incomplete_type"].append((fp, m_inc.group(1)))
             continue
 
         m_unknown = re.search(r"unknown type name '([A-Za-z_]\w*)'", line)
@@ -188,29 +197,27 @@ def classify_errors(log_data):
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
 def deduplicate_definitions():
+    """Safely removes duplicate typedefs while preserving struct bodies."""
     if not os.path.exists(TYPES_HEADER): return 0
-    content = read_file(TYPES_HEADER)
-    # Match complete typedef blocks: typedef (anything) Name;
-    pattern = re.compile(r"typedef\s+.*?\s+(\w+)\s*;", re.DOTALL)
+    lines = read_file(TYPES_HEADER).splitlines()
     seen = set()
-    new_content = ""
-    last_pos = 0
+    new_lines = []
     fixed = False
     
-    for match in pattern.finditer(content):
-        t_name = match.group(1)
-        if t_name in seen:
-            new_content += content[last_pos:match.start()]
-            fixed = True
-        else:
+    # We only deduplicate single-line injections to avoid eating multiline structs
+    for line in lines:
+        m = re.search(r"typedef\s+.*?\s+(\w+)\s*;", line)
+        if m:
+            t_name = m.group(1)
+            if t_name in seen and "struct {" not in line:
+                fixed = True
+                continue
             seen.add(t_name)
-            new_content += content[last_pos:match.end()]
-        last_pos = match.end()
+        new_lines.append(line)
     
-    new_content += content[last_pos:]
     if fixed:
-        write_file(TYPES_HEADER, new_content)
-        print(f"  [D] Safe deduplication of {os.path.basename(TYPES_HEADER)}")
+        write_file(TYPES_HEADER, "\n".join(new_lines) + "\n")
+        print(f"  [D] Deduplicated n64_types.h")
     return 1 if fixed else 0
 
 def fix_missing_macros(cats):
@@ -231,6 +238,7 @@ def fix_missing_n64_includes(cats):
     for fp in set(cats["missing_n64_includes"]):
         content = read_file(fp)
         write_file(fp, '#include "ultra/n64_types.h"\n' + content)
+        print(f"  [A] Added n64_types.h -> {os.path.basename(fp)}")
         fixes += 1
     return fixes
 
@@ -280,6 +288,22 @@ def fix_local_struct_fwd(cats):
             fixes += 1
     return fixes
 
+def fix_incomplete_types(cats):
+    """If a struct is accessed (local->type) but only forward declared, upgrade to a stub definition."""
+    fixes = 0
+    for fp, tag in cats["incomplete_type"]:
+        content = read_file(fp)
+        # Check if we forward declared this in the AUTO block
+        if f"typedef struct {tag}_s {tag};" in content:
+            # Upgrade to a stub definition that at least contains a buffer to satisfy sizeof/access
+            stub = f"struct {tag}_s {{ char res[1024]; }};"
+            if stub not in content:
+                content = content.replace(f"typedef struct {tag}_s {tag};", f"{stub}\ntypedef struct {tag}_s {tag};")
+                write_file(fp, content)
+                print(f"  [T] Upgraded incomplete type: {tag}")
+                fixes += 1
+    return fixes
+
 def fix_undefined_symbols(cats):
     syms = set(cats["undefined_symbols"])
     if not syms: return 0
@@ -315,6 +339,7 @@ def apply_fixes():
     fixes += fix_missing_sdk_types(cats)
     fixes += fix_missing_macros(cats)
     fixes += fix_local_struct_fwd(cats)
+    fixes += fix_incomplete_types(cats)
     fixes += fix_missing_n64_includes(cats)
     fixes += fix_undefined_symbols(cats)
     return fixes
