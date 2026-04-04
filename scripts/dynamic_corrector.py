@@ -1,10 +1,10 @@
 """
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
-Enhanced to handle:
-  - Symbol redefinitions (e.g., 'close' vs unistd.h).
-  - Robust struct tag recovery for forward declarations.
-  - Precise block stripping to prevent code duplication.
+Fixes for Cycle 2 failure:
+  - Added 'static_shadowing' regex to catch 'static declaration follows non-static'.
+  - Loosened source_path to allow project headers (e.g., synthInternals.h).
+  - Enhanced redefinition logic to use macros for system-conflicting names.
 """
 
 import os
@@ -61,6 +61,7 @@ KNOWN_SDK_STRUCT_TYPES = {
     "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Gfx_t", "Mtx", "Mtx_t",
     "OSContPad", "OSTimer", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t",
     "OSEvent", "CPUState", "Actor", "ActorMarker",
+    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", # Audio states
 }
 
 KNOWN_GLOBAL_TYPES = set(KNOWN_SDK_TYPEDEFS) | KNOWN_SDK_STRUCT_TYPES
@@ -91,12 +92,16 @@ def write_file(path, content):
         f.write(content)
 
 def source_path(path):
-    if not path or "/usr/" in path or "ndk" in path.lower() or "include" in path.lower():
+    """Filter to ensure we only touch project source, not NDK/system files."""
+    if not path: return None
+    p_lower = path.lower()
+    # Block absolute system paths and NDK paths
+    if p_lower.startswith("/usr/") or "/ndk/" in p_lower or "toolchains" in p_lower:
         return None
+    # Allow headers that are part of the recompilation project
     return path
 
 def strip_auto_block(content):
-    """Remove existing AUTO blocks to allow a clean re-injection."""
     if AUTO_MARKER not in content:
         return content, False
     lines = content.splitlines(keepends=True)
@@ -107,7 +112,6 @@ def strip_auto_block(content):
             in_block = True
             continue
         if in_block:
-            # Block ends at first non-typedef, non-blank line
             stripped = line.strip()
             if stripped == "" or stripped.startswith("typedef struct"):
                 continue
@@ -117,13 +121,10 @@ def strip_auto_block(content):
     return "".join(new_lines), True
 
 def _real_struct_tag_for_typedef(content, typedef_name):
-    """Extracts the actual struct tag from the file content for a given typedef."""
-    # Matches '} TypedefName;' and looks back for the struct tag
     close_re = re.compile(r"\}\s*" + re.escape(typedef_name) + r"\s*;")
     lines = content.splitlines()
     for i, line in enumerate(lines):
         if close_re.search(line):
-            # Scan backwards for the opening of this struct
             depth = 0
             for j in range(i, -1, -1):
                 depth += lines[j].count('}') - lines[j].count('{')
@@ -163,39 +164,36 @@ def classify_errors(log_data):
         "missing_macros":       [],
         "static_conflict":      [],
         "incomplete_sizeof":    [],
-        "daemon_crash":         False,
-        "oom_detected":         False,
-        "redefinition":         [],
+        "redefinition":         [], # Now handles shadowing too
         "unknown_idents":       [],
     }
 
     local_struct_map = {}
 
     for line in log_data.splitlines():
-        if "Could not receive a message" in line: cats["daemon_crash"] = True; continue
         if "OutOfMemoryError" in line: cats["oom_detected"] = True; continue
         if "error:" not in line and "undefined" not in line: continue
 
         pm = _FILE_RE.search(line)
         fp = source_path(pm.group(1) if pm else None)
 
-        # REDEFINITION (e.g. close, read, etc)
+        # REDEFINITION / STATIC SHADOWING (e.g. 'close' vs unistd.h)
         m_redef = re.search(r"redefinition of '([^']+)'", line)
-        if m_redef and fp:
-            cats["redefinition"].append((fp, m_redef.group(1)))
+        m_shadow = re.search(r"static declaration of '([^']+)' follows non-static", line)
+        if (m_redef or m_shadow) and fp:
+            sym = (m_redef or m_shadow).group(1)
+            cats["redefinition"].append((fp, sym))
             continue
 
-        # TYPEDEF MISMATCH (Bad Injection Recovery)
+        # TYPEDEF MISMATCH
         m_redef_t = re.search(r"typedef redefinition .* \('struct ([^']+)' vs 'struct ([^']+)'\)", line)
         if m_redef_t and fp:
             cats["bad_fwd_injection"].append((fp, m_redef_t.group(1), m_redef_t.group(2)))
             continue
 
-        m_static   = re.search(r"static declaration of '([^']+)' follows non-static", line)
         m_unknown  = re.search(r"unknown type name '([A-Za-z_]\w*)'", line)
         m_ident    = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_undef    = re.search(r"(?:undefined symbol:|undefined reference to `)([^']+)'?", line)
-        m_inc      = "incomplete type" in line
 
         if m_undef:
             cats["undefined_symbols"].append(m_undef.group(1).strip("`' "))
@@ -203,19 +201,15 @@ def classify_errors(log_data):
             ident = m_ident.group(1)
             if ident in KNOWN_GLOBAL_TYPES: cats["missing_sdk_types"].append(ident)
             elif ident in KNOWN_MACROS: cats["missing_macros"].append(ident)
-            elif not ident[0].isupper(): pass # Ignore cascade variables
             else: cats["unknown_idents"].append((fp, ident))
-        elif m_static and fp:
-            cats["static_conflict"].append((fp, m_static.group(1)))
         elif m_unknown:
             t = m_unknown.group(1)
             if t in KNOWN_GLOBAL_TYPES: cats["missing_sdk_types"].append(t)
             elif fp: local_struct_map.setdefault(fp, set()).add(t)
-        elif m_inc and fp:
-            m_inc_t = re.search(r"'struct ([^']+)'", line)
-            if m_inc_t: cats["incomplete_sizeof"].append((fp, m_inc_t.group(1)))
         elif fp and 'include "ultra/n64_types.h"' not in read_file(fp):
-            cats["missing_n64_includes"].append(fp)
+            # Only add missing includes to .c/.cpp files, not headers
+            if fp.endswith(('.c', '.cpp')):
+                cats["missing_n64_includes"].append(fp)
 
     for fp, type_names in local_struct_map.items():
         for t in type_names:
@@ -226,31 +220,30 @@ def classify_errors(log_data):
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
 def fix_redefinitions(cats):
-    """FIX R — Handle redefinitions of system-conflicting names like 'close'."""
+    """FIX R — Handle name collisions with standard libraries."""
     fixes = 0
+    # Common N64 function names that collide with POSIX headers in Android/Linux
+    SYSTEM_CONFLICTS = {"close", "read", "write", "open", "pipe", "index"}
+    
     for fp, sym in cats["redefinition"]:
-        if sym in ["close", "read", "write", "open"]:
-            # If a game file redefines 'close', we rename it locally via macro
+        if sym in SYSTEM_CONFLICTS:
             content = read_file(fp)
             macro = f"#define {sym} game_{sym}"
             if macro not in content:
+                # Inject at the very top to ensure it covers all uses
                 write_file(fp, f"{macro}\n" + content)
-                print(f"  [R] Renamed conflicting symbol '{sym}' in {os.path.basename(fp)}")
+                print(f"  [R] Shadowed conflicting symbol '{sym}' in {os.path.basename(fp)}")
                 fixes += 1
     return fixes
 
 def fix_bad_fwd_injections(cats):
-    """FIX B — Strip bad AUTO block and re-inject with the correct tag."""
     fixes = 0
     for fp, real_tag, wrong_tag in cats["bad_fwd_injection"]:
         content = read_file(fp)
         content, _ = strip_auto_block(content)
-        # Recover the typedef name by stripping our guessed suffix
         typedef_name = wrong_tag[:-2] if wrong_tag.endswith("_s") else wrong_tag
-        
-        # Verify if it's already defined
         if f"struct {real_tag} {{" in content:
-            write_file(fp, content) # Just keep it stripped
+            write_file(fp, content)
         else:
             correct = f"typedef struct {real_tag} {typedef_name};"
             write_file(fp, f"{AUTO_MARKER}\n{correct}\n{content}")
@@ -265,23 +258,13 @@ def fix_missing_sdk_types(cats):
     added = False
     for t in sorted(missing):
         if f" {t};" in content or f" {t} " in content: continue
-        decl = f"\ntypedef {KNOWN_SDK_TYPEDEFS[t]} {t};\n" if t in KNOWN_SDK_TYPEDEFS \
-               else f"\ntypedef struct {t}_s {{ long long int res[16]; }} {t};\n"
+        if t in KNOWN_SDK_TYPEDEFS:
+            decl = f"\ntypedef {KNOWN_SDK_TYPEDEFS[t]} {t};\n"
+        else:
+            decl = f"\ntypedef struct {t}_s {{ long long int res[16]; }} {t};\n"
         content += decl
-        added, print_t = True, print(f"  [K] Added SDK type: {t}")
-    if added: write_file(TYPES_HEADER, content)
-    return 1 if added else 0
-
-def fix_missing_macros(cats):
-    needed = set(cats["missing_macros"])
-    to_inject = {k: v for k, v in KNOWN_MACROS.items() if k in needed}
-    if not to_inject or not os.path.exists(TYPES_HEADER): return 0
-    content = read_file(TYPES_HEADER)
-    added = False
-    for macro, value in sorted(to_inject.items()):
-        if f"#define {macro}" in content: continue
-        content += f"\n#ifndef {macro}\n#define {macro} {value}\n#endif\n"
-        added, print_m = True, print(f"  [M] Injected macro: {macro}")
+        added = True
+        print(f"  [K] Defined global type: {t}")
     if added: write_file(TYPES_HEADER, content)
     return 1 if added else 0
 
@@ -308,7 +291,6 @@ def fix_local_struct_fwd(cats):
 def fix_missing_n64_includes(cats):
     fixes = 0
     for fp in set(cats["missing_n64_includes"]):
-        if fp.endswith("n64_types.h"): continue
         content = read_file(fp)
         write_file(fp, '#include "ultra/n64_types.h"\n' + content)
         print(f"  [A] Added n64_types.h -> {os.path.basename(fp)}")
@@ -323,7 +305,8 @@ def fix_undefined_symbols(cats):
     for sym in sorted(syms):
         if f" {sym}(" in stubs: continue
         stubs += f"\nlong long int {sym}() {{ return 0; }}\n"
-        added, print_s = True, print(f"  [I] Stubbed: {sym}")
+        added = True
+        print(f"  [I] Stubbed symbol: {sym}")
     if added: write_file(STUBS_FILE, stubs)
     return 1 if added else 0
 
@@ -335,9 +318,10 @@ def apply_fixes():
     cats = classify_errors(log_data)
     
     fixes = 0
-    if cats["oom_detected"]: 
+    if cats.get("oom_detected"): 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
+    # Priority: Standard redefinitions first to unblock standard headers
     fixes += fix_redefinitions(cats)
     fixes += fix_bad_fwd_injections(cats)
     fixes += fix_missing_sdk_types(cats)
@@ -351,9 +335,14 @@ def main():
     for i in range(1, 101):
         print(f"\n--- Cycle {i} ---")
         if run_build():
-            print("\n✅ Build Success!"); sys.exit(0)
-        if apply_fixes() == 0:
-            print("\n🛑 No fixes possible."); sys.exit(1)
+            print("\n✅ Build Successful!"); sys.exit(0)
+        
+        applied = apply_fixes()
+        if applied == 0:
+            print("\n🛑 No further fixable patterns detected.")
+            sys.exit(1)
+        
+        print(f"  Applied {applied} fixes. Retrying build...")
         time.sleep(1)
 
 if __name__ == "__main__":
