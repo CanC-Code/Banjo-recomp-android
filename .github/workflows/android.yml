@@ -19,7 +19,6 @@ jobs:
           distribution: 'temurin'
 
       - name: 🐘 Setup Gradle
-        # FIX: Bumped to v4 to clear the Node.js 20 deprecation warning
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.2 
@@ -32,13 +31,11 @@ jobs:
           fi
           python3 scripts/generate_icons.py icon_master.png
 
-      - name: 🧹 Pre-Patching
-        run: |
-          # FIX: Replaced the old split scripts with our newly combined and patched super-script
-          python3 scripts/sanitize_codebase.py .
+      - name: 🧹 Pre-Patching (Sanitizer)
+        run: python3 scripts/sanitize_codebase.py .
 
-      - name: 🤖 Automated Correction & Build Loop
-        run: python3 scripts/dynamic_corrector.py
+      - name: 🤖 Automated Correction & Build Loop (Driver)
+        run: python3 scripts/build_driver.py
 
       - name: 📦 Upload Logs
         if: always()
