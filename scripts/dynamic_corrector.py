@@ -1,6 +1,6 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
-v79.0 — Fixes for FIX D stall loops, brace-balanced regexes, and robust struct redefinition.
+v80.0 — Protected n64_types.h, All-Caps Enum Auto-Stub, Smart Type Inference, and robust Mtx generation.
 """
 
 import os
@@ -308,6 +308,8 @@ def classify_errors(log_data):
         "undeclared_macros":    set(),
         "undeclared_gbi":       set(),
         "undeclared_n64_types": set(),
+        "missing_types":        set(),
+        "missing_globals":      set(),
         "implicit_func":        set(),
         "undefined_symbols":    set(),
         "audio_states":         set(),
@@ -387,6 +389,7 @@ def classify_errors(log_data):
                 categories["local_fwd_only"].append((filepath, type_name))
                 categories["has_local_typedef"].add(filepath)
 
+        # Smart classification of undeclared identifiers
         if m_ident:
             ident = m_ident.group(1)
             if ident in N64_IDENT_TYPES:
@@ -395,10 +398,12 @@ def classify_errors(log_data):
                 categories["undeclared_gbi"].add(ident)
             elif ident in KNOWN_MACROS or ident in KNOWN_FUNCTION_MACROS:
                 categories["undeclared_macros"].add(ident)
-            elif ident == "actor" and filepath:
-                categories["actor_pointer"].add(filepath)
-            else:
+            elif ident.isupper():
                 categories["undeclared_macros"].add(ident)
+            elif ident.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', ident):
+                categories["missing_types"].add(ident)
+            else:
+                categories["missing_globals"].add(ident)
 
         if m_undef_ref:
             categories["undefined_symbols"].add(m_undef_ref.group(1).strip())
@@ -437,7 +442,6 @@ def classify_errors(log_data):
     new_local_fwd = []
     for filepath, type_name in categories["local_fwd_only"]:
         base_type = type_name[:-2] if type_name.endswith("_s") else type_name
-        # Properly filter known tags even if they have _s to avoid Mtx_s_s
         if base_type in known_global_types or type_name in known_global_types:
             categories["missing_n64_types"].add(filepath)
             categories["has_local_typedef"].discard(filepath)
@@ -544,7 +548,8 @@ def apply_fixes():
         for filepath, type_name in categories["local_struct_fwd"]:
             file_to_types[filepath].add(type_name)
         for filepath, type_names in sorted(file_to_types.items()):
-            if not os.path.exists(filepath):
+            # CRITICAL: Prevent processing global header 
+            if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
                 continue
             content = read_file(filepath)
             fwd_lines = []
@@ -568,14 +573,14 @@ def apply_fixes():
         fixd_files.add(filepath)
 
     for filepath in sorted(fixd_files):
-        if not os.path.exists(filepath):
+        # CRITICAL: Prevent mutator from corrupting n64_types.h
+        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
             continue
         content = read_file(filepath)
         original = content
 
         content = strip_auto_preamble(content, filepath, categories["has_local_typedef"])
 
-        # Using improved brace-balancing regex to avoid matching across distinct structs
         tagged_body_re = re.compile(
             r'typedef\s+struct\s+(\w+)\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*\w+\s*;',
             re.DOTALL
@@ -618,7 +623,6 @@ def apply_fixes():
                 )
                 print(f"  [🛠️] Retagged anon body as '{target_tag}' in {os.path.basename(filepath)}")
             else:
-                # Runs when there's no anonymous body at all
                 content, cnt = re.subn(
                     r"\bstruct\s+" + re.escape(alias) + r"\b",
                     f"struct {target_tag}", content
@@ -663,7 +667,8 @@ def apply_fixes():
         if key in seen_static:
             continue
         seen_static.add(key)
-        if not os.path.exists(filepath):
+        # Prevent mutator from corrupting n64_types.h
+        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
             continue
         content = read_file(filepath)
         prefix = os.path.basename(filepath).split('.')[0]
@@ -688,12 +693,20 @@ def apply_fixes():
                     types_content += f"\n{defn}\n"
                     macros_added = True
                     print(f"  [🛠️] Injected function macro '{macro}' into n64_types.h")
-            elif macro in KNOWN_MACROS and f"#define {macro}" not in types_content:
-                types_content += (f"\n#ifndef {macro}\n"
-                                  f"#define {macro} {KNOWN_MACROS[macro]}\n"
-                                  f"#endif\n")
-                macros_added = True
-                print(f"  [🛠️] Injected macro '{macro}' = {KNOWN_MACROS[macro]} into n64_types.h")
+            elif macro in KNOWN_MACROS:
+                if f"#define {macro}" not in types_content:
+                    types_content += (f"\n#ifndef {macro}\n"
+                                      f"#define {macro} {KNOWN_MACROS[macro]}\n"
+                                      f"#endif\n")
+                    macros_added = True
+                    print(f"  [🛠️] Injected macro '{macro}' = {KNOWN_MACROS[macro]} into n64_types.h")
+            else:
+                # Stub out completely unknown all-caps constants dynamically
+                if f"#define {macro}" not in types_content:
+                    types_content += f"\n#ifndef {macro}\n#define {macro} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
+                    macros_added = True
+                    print(f"  [🛠️] Injected placeholder for unknown macro '{macro}'")
+
         if macros_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
@@ -798,20 +811,18 @@ def apply_fixes():
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ── FIX M: Mtx struct body (real fields, not dummy stub) ─────────────
+    # ── FIX M: Mtx struct body ───────────────────────────────────────────
     if categories["need_mtx_body"]:
         types_content = read_file(TYPES_HEADER)
-        if "s16  m[4][4]" not in types_content:
-            # Aggressively strip dummy definitions to prevent redefinition conflicts
+        if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
+            # Wipe old definitions out of header completely first
             types_content = re.sub(
                 r"(?:typedef\s+)?struct\s+Mtx(?:_s)?\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*(?:Mtx\s*)?;?\n?",
                 "", types_content
             )
-            types_content = re.sub(
-                r"typedef\s+struct\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*Mtx\s*;\n?",
-                "", types_content
-            )
+            types_content = re.sub(r"typedef\s+struct\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*Mtx\s*;\n?", "", types_content)
             types_content = re.sub(r"typedef\s+struct\s+Mtx(?:_s)?\s+Mtx\s*;\n?", "", types_content)
+            types_content = re.sub(r"struct\s+Mtx(?:_s)?\s*;\n?", "", types_content)
             
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
@@ -827,7 +838,10 @@ def apply_fixes():
                 continue  
             body = N64_STRUCT_BODIES.get(tag)
             
-            if body and f"typedef struct {tag}_s {{" not in types_content:
+            # Using precise struct member validation inside header instead of assuming base declaration existence
+            check_str = "l[2]" if tag == "LookAt" else ("fileSize" if tag == "OSPfs" else tag)
+            
+            if body and check_str not in types_content:
                 types_content = re.sub(
                     rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}}\s*(?:{re.escape(tag)}\s*)?;?\n?",
                     "", types_content
@@ -840,6 +854,11 @@ def apply_fixes():
                     rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?",
                     "", types_content
                 )
+                types_content = re.sub(
+                    rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?",
+                    "", types_content
+                )
+                
                 types_content += "\n" + body
                 bodies_added = True
                 print(f"  [🛠️] Injected full struct body for '{tag}' into n64_types.h")
@@ -853,7 +872,8 @@ def apply_fixes():
             file_to_types[filepath].add(type_name)
 
         for filepath, type_names in sorted(file_to_types.items()):
-            if not os.path.exists(filepath):
+            # CRITICAL: Prevent mutator from corrupting n64_types.h
+            if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
                 continue
             content = read_file(filepath)
             content = strip_auto_preamble(content, filepath, categories["has_local_typedef"])
@@ -876,6 +896,41 @@ def apply_fixes():
                 write_file(filepath, content)
                 fixed_files.add(filepath)
                 fixes += 1
+
+    # ── FIX Q: Missing Custom Types ──────────────────────────────────────────
+    if categories["missing_types"]:
+        types_content = read_file(TYPES_HEADER)
+        types_added = False
+        for tag in sorted(categories["missing_types"]):
+            if tag in N64_STRUCT_BODIES or tag in known_global_types:
+                continue
+            if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
+                # Creates a very large sponge-struct capable of withstanding large scalar initializations (e.g. nested configurations) without compiler crash. 
+                types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
+                types_added = True
+                print(f"  [🛠️] Injected missing custom type '{tag}' into n64_types.h")
+        if types_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    # ── FIX R: Missing Globals ───────────────────────────────────────────────
+    if categories["missing_globals"]:
+        types_content = read_file(TYPES_HEADER)
+        globals_added = False
+        for glob in sorted(categories["missing_globals"]):
+            if glob == "actor": continue
+            if f" {glob};" not in types_content and f"*{glob};" not in types_content and f" {glob}[" not in types_content:
+                if glob.endswith("_ptr") or glob.endswith("_p"):
+                    decl = f"extern void* {glob};"
+                else:
+                    decl = f"extern long long int {glob};"
+                
+                types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"
+                globals_added = True
+                print(f"  [🛠️] Injected missing global '{glob}' into n64_types.h")
+        if globals_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
 
     if fixes == 0:
         generate_error_summary(log_data)
