@@ -3,7 +3,7 @@ import re
 import subprocess
 import time
 
-# Force single-threaded build to prevent system memory exhaustion (OOM) on GitHub Actions
+# Single-threaded build to prevent memory exhaustion on GitHub Actions runners
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -52,7 +52,7 @@ def classify_errors(log_data):
     }
 
     known_global_types = {
-        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
+        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Gfx_t", "Mtx", "Mtx_t",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
         "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
         "Actor", "ActorMarker", "s8", "u8", "s16", "u16", "s32", "u32", 
@@ -60,7 +60,7 @@ def classify_errors(log_data):
         "OSHWIntr", "OSIntMask", "OSYieldResult"
     }
 
-    # Robust regex for Android NDK paths: handles absolute paths and C/C++ prefixes
+    # Regex tuned for verbose Android NDK logs
     file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))"
     local_struct_map = {}
 
@@ -136,7 +136,7 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── FIX J: Ensure Linker Libraries (Math/Log) ─────────────────────────
+    # ── FIX J: CMake NDK Libraries ────────────────────────────────────────
     if os.path.exists(CMAKE_FILE):
         with open(CMAKE_FILE, "r") as f:
             cmake = f.read()
@@ -144,10 +144,10 @@ def apply_fixes():
             cmake = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake)
             with open(CMAKE_FILE, "w") as f:
                 f.write(cmake)
-            print("  [🛠️] Injected math and log libraries into CMake")
+            print("  [🛠️] Injected math/log libraries into CMakeLists.txt")
             fixes += 1
 
-    # ── FIX K: Global SDK Type Injection ──────────────────────────────────
+    # ── FIX K: Global SDK Primitives and Dummies ─────────────────────────
     if categories["missing_sdk_types"]:
         known_sdk_typedefs = {
             "OSHWIntr": "unsigned int", "OSIntMask": "unsigned int",
@@ -164,23 +164,17 @@ def apply_fixes():
                 content = f.read()
             added = False
             for t in set(categories["missing_sdk_types"]):
-                if f" {t};" in content: continue
-                
-                if t in known_sdk_typedefs:
-                    decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
-                else:
-                    decl = f"\ntypedef struct {t}_s {{ long long int reserved[64]; }} {t};\n"
-                
+                if f"typedef struct {t}_s {t};" in content or f"typedef unsigned int {t};" in content: continue
+                decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n" if t in known_sdk_typedefs else f"\ntypedef struct {t}_s {{ long long int reserved[64]; }} {t};\n"
                 content += decl
                 added = True
                 print(f"  [🛠️] Defined Global SDK type: {t}")
-            
             if added:
                 with open(TYPES_HEADER, "w") as f:
                     f.write(content)
                 fixes += 1
 
-    # ── FIX C: Inject Local Struct Forward Decls (Game Logic Actors) ─────
+    # ── FIX C: Local Struct Forward Decls (Game Logic Actors) ────────────
     if categories["local_struct_fwd"]:
         file_to_types = {}
         for filepath, type_name in categories["local_struct_fwd"]:
@@ -196,13 +190,13 @@ def apply_fixes():
                 if fwd_decl not in content:
                     fwd_lines.append(fwd_decl)
             if fwd_lines:
-                content = "/* AUTO: fwd decls */\n" + "\n".join(fwd_lines) + "\n" + content
+                content = "/* AUTO: forward declarations */\n" + "\n".join(fwd_lines) + "\n" + content
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Injected local decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                print(f"  [🛠️] Injected actor decls {sorted(type_names)} into {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX A: Header Inclusion ───────────────────────────────────────────
+    # ── FIX A: Header Inclusion and Path Protection ──────────────────────
     for filepath in set(categories["missing_n64_types"]):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         with open(filepath, "r") as f:
@@ -213,23 +207,7 @@ def apply_fixes():
                 f.write(content)
             fixes += 1
 
-    # ── FIX H: Missing Stdlib Headers (Implicit Math) ────────────────────
-    if categories["implicit_func"]:
-        math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow"}
-        if os.path.exists(TYPES_HEADER):
-            with open(TYPES_HEADER, "r") as f:
-                content = f.read()
-            added = False
-            for func in set(categories["implicit_func"]):
-                if func in math_funcs and "<math.h>" not in content:
-                    content = content.replace("#pragma once", "#pragma once\n#include <math.h>")
-                    added = True
-            if added:
-                with open(TYPES_HEADER, "w") as f:
-                    f.write(content)
-                fixes += 1
-
-    # ── FIX I: Linker Stubs (Missing N64 Functions) ───────────────────────
+    # ── FIX I: Auto-Linker Stub Generation ──────────────────────────────
     if categories["undefined_symbols"]:
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
@@ -254,10 +232,10 @@ def main():
     for i in range(1, 100):
         print(f"\n--- Build Cycle {i} ---")
         if run_build():
-            print("\n✅ Build Successful! APK generated.")
+            print("\n✅ Build Successful! You have an APK!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found in this batch.")
+            print("\n🛑 Build halted: No more automatic patterns detected.")
             break
         time.sleep(1)
 
