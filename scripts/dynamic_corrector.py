@@ -133,7 +133,7 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── FIX J: Linker Libraries ───────────────────────────────────────────
+    # ── FIX J: CMake Linker adjustment ──────────────────────────────────
     if os.path.exists(CMAKE_FILE):
         with open(CMAKE_FILE, "r") as f:
             cmake = f.read()
@@ -141,7 +141,6 @@ def apply_fixes():
             cmake = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake)
             with open(CMAKE_FILE, "w") as f:
                 f.write(cmake)
-            print("  [🛠️] Injected math and log libraries into CMake")
             fixes += 1
 
     # ── FIX K: SDK Type Injection ──────────────────────────────────────────
@@ -171,7 +170,7 @@ def apply_fixes():
                     f.write(content)
                 fixes += 1
 
-    # ── FIX C: Local struct forward declaration ───────────────────────────
+    # ── FIX C: Local struct forward declaration (Crucial for sChVegetable) ──
     if categories["local_struct_fwd"]:
         file_to_types = {}
         for filepath, type_name in categories["local_struct_fwd"]:
@@ -182,8 +181,7 @@ def apply_fixes():
                 content = f.read()
             fwd_lines = []
             for t in sorted(type_names):
-                # Turn 'sChVegetable' into 'struct chVegetable_s'
-                tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] == 's' else t
+                tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
                 fwd_decl = f"typedef struct {tag}_s {t};"
                 if fwd_decl not in content:
                     fwd_lines.append(fwd_decl)
@@ -191,10 +189,10 @@ def apply_fixes():
                 content = "/* AUTO: fwd decls */\n" + "\n".join(fwd_lines) + "\n" + content
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Injected local struct decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                print(f"  [🛠️] Injected local decls {sorted(type_names)} into {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX A: Global Header Inclusion ────────────────────────────────────
+    # ── FIX A: Header Inclusion ───────────────────────────────────────────
     for filepath in set(categories["missing_n64_types"]):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         with open(filepath, "r") as f:
@@ -205,19 +203,15 @@ def apply_fixes():
                 f.write(content)
             fixes += 1
 
-    # ── FIX H: Missing Stdlib Headers ─────────────────────────────────────
-    if categories["implicit_func"]:
-        math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow"}
-        if os.path.exists(TYPES_HEADER):
-            with open(TYPES_HEADER, "r") as f:
+    # ── FIX B: Actor pointer injection ───────────────────────────────────
+    if categories["actor_pointer"]:
+        for filepath in set(categories["actor_pointer"]):
+            if not os.path.exists(filepath): continue
+            with open(filepath, "r") as f:
                 content = f.read()
-            added = False
-            for func in set(categories["implicit_func"]):
-                if func in math_funcs and "<math.h>" not in content:
-                    content = content.replace("#pragma once", "#pragma once\n#include <math.h>")
-                    added = True
-            if added:
-                with open(TYPES_HEADER, "w") as f:
+            if "Actor *actor =" not in content and "this" in content:
+                content = re.sub(r'(\{)', r'\1\n    Actor *actor = (Actor *)this;', content, count=1)
+                with open(filepath, "w") as f:
                     f.write(content)
                 fixes += 1
 
@@ -234,7 +228,6 @@ def apply_fixes():
             if f" {sym}(" in stubs: continue
             stubs += f"long long int {sym}() {{ return 0; }}\n"
             added = True
-            print(f"  [🛠️] Stubbed function: {sym}")
         if added:
             with open(STUBS_FILE, "w") as f:
                 f.write(stubs)
@@ -249,7 +242,7 @@ def main():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No more automatic fixes found.")
+            print("\n🛑 No more fixable patterns found.")
             break
         time.sleep(1)
 
