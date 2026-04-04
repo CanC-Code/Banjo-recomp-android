@@ -81,6 +81,23 @@ typedef struct OSContPad_s {
     u8  errno;
 } OSContPad;
 """,
+
+    "OSPiHandle": """\
+/* N64 OSPiHandle */
+typedef struct OSPiHandle_s {
+    struct OSPiHandle_s *next;
+    u8 type;
+    u8 latency;
+    u8 pageSize;
+    u8 relDuration;
+    u8 pulse;
+    u8 domain;
+    u32 baseAddress;
+    u32 speed;
+    u32 dirTable;
+    u32 initFlag;
+} OSPiHandle;
+""",
 }
 
 KNOWN_MACROS = {
@@ -120,7 +137,7 @@ KNOWN_FUNCTION_MACROS = {
 KNOWN_GLOBAL_TYPES = {
     "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "LookAt", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
     "OSContPad", "OSContStatus", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
-    "OSIntMask", "OSPfs", "Actor", "ActorMarker",
+    "OSIntMask", "OSPfs", "OSPiHandle", "Actor", "ActorMarker",
     "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
 }
 
@@ -208,7 +225,6 @@ def classify_errors(log_data):
         if m_conflict and filepath:
             categories["conflicting_types"].add((filepath, m_conflict.group(1)))
 
-        # FIX: Missing member body injector for ANY known global struct
         if m_no_member:
             tag = m_no_member.group(2)
             base_tag = tag[:-2] if tag.endswith("_s") else tag
