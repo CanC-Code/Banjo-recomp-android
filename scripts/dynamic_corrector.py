@@ -57,9 +57,8 @@ def classify_errors(log_data):
         "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx",
         "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent",
         "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
-        "Actor", "ActorMarker",
-        "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64",
-        "f32", "f64", "n64_bool", "OSPri", "OSId",
+        "Actor", "ActorMarker", "s8", "u8", "s16", "u16", "s32", "u32", 
+        "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
         "OSHWIntr", "OSIntMask", "OSYieldResult"
     }
 
@@ -82,13 +81,12 @@ def classify_errors(log_data):
         match = re.search(file_regex, line)
         filepath = match.group(1) if match else None
 
-        if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
-            filepath = None
-
+        m_redef = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
+        m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
+        m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
-        m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
         m_inc = "incomplete type" in line 
 
         if m_undef_sym:
@@ -102,6 +100,10 @@ def classify_errors(log_data):
                 categories["actor_pointer"].append(filepath)
             else:
                 categories["undeclared_macros"].append(ident)
+        elif m_redef and filepath:
+            categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
+        elif m_static and filepath:
+            categories["static_conflict"].append((filepath, m_static.group(1)))
         elif m_unknown:
             type_name = m_unknown.group(1)
             if type_name in known_global_types:
@@ -115,7 +117,6 @@ def classify_errors(log_data):
         elif filepath and os.path.exists(filepath):
             categories["missing_n64_types"].append(filepath)
 
-    # Convert map to flat category for local structs
     for filepath, type_names in local_struct_map.items():
         for t in type_names:
             if t not in known_global_types:
@@ -132,14 +133,15 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── FIX J: CMake Linker Libraries ─────────────────────────────────────
+    # ── FIX J: Linker Libraries ───────────────────────────────────────────
     if os.path.exists(CMAKE_FILE):
         with open(CMAKE_FILE, "r") as f:
-            cmake_content = f.read()
-        if "target_link_libraries(" in cmake_content and " m " not in cmake_content:
-            cmake_content = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake_content)
+            cmake = f.read()
+        if "target_link_libraries(" in cmake and " m " not in cmake:
+            cmake = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake)
             with open(CMAKE_FILE, "w") as f:
-                f.write(cmake_content)
+                f.write(cmake)
+            print("  [🛠️] Injected math and log libraries into CMake")
             fixes += 1
 
     # ── FIX K: SDK Type Injection ──────────────────────────────────────────
@@ -163,6 +165,7 @@ def apply_fixes():
                 decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n" if t in known_sdk_typedefs else f"\ntypedef struct {{ long long int reserved[64]; }} {t};\n"
                 content += decl
                 added = True
+                print(f"  [🛠️] Defined SDK type: {t}")
             if added:
                 with open(TYPES_HEADER, "w") as f:
                     f.write(content)
@@ -179,6 +182,7 @@ def apply_fixes():
                 content = f.read()
             fwd_lines = []
             for t in sorted(type_names):
+                # Turn 'sChVegetable' into 'struct chVegetable_s'
                 tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] == 's' else t
                 fwd_decl = f"typedef struct {tag}_s {t};"
                 if fwd_decl not in content:
@@ -187,10 +191,10 @@ def apply_fixes():
                 content = "/* AUTO: fwd decls */\n" + "\n".join(fwd_lines) + "\n" + content
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Injected forward decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                print(f"  [🛠️] Injected local struct decls {sorted(type_names)} into {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX A: Header Inclusion ───────────────────────────────────────────
+    # ── FIX A: Global Header Inclusion ────────────────────────────────────
     for filepath in set(categories["missing_n64_types"]):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         with open(filepath, "r") as f:
@@ -200,6 +204,22 @@ def apply_fixes():
             with open(filepath, "w") as f:
                 f.write(content)
             fixes += 1
+
+    # ── FIX H: Missing Stdlib Headers ─────────────────────────────────────
+    if categories["implicit_func"]:
+        math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow"}
+        if os.path.exists(TYPES_HEADER):
+            with open(TYPES_HEADER, "r") as f:
+                content = f.read()
+            added = False
+            for func in set(categories["implicit_func"]):
+                if func in math_funcs and "<math.h>" not in content:
+                    content = content.replace("#pragma once", "#pragma once\n#include <math.h>")
+                    added = True
+            if added:
+                with open(TYPES_HEADER, "w") as f:
+                    f.write(content)
+                fixes += 1
 
     # ── FIX I: Linker Stubs ──────────────────────────────────────────────
     if categories["undefined_symbols"]:
@@ -214,6 +234,7 @@ def apply_fixes():
             if f" {sym}(" in stubs: continue
             stubs += f"long long int {sym}() {{ return 0; }}\n"
             added = True
+            print(f"  [🛠️] Stubbed function: {sym}")
         if added:
             with open(STUBS_FILE, "w") as f:
                 f.write(stubs)
@@ -223,12 +244,12 @@ def apply_fixes():
 
 def main():
     for i in range(1, 100):
-        print(f"\n--- Cycle {i} ---")
+        print(f"\n--- Build Cycle {i} ---")
         if run_build():
             print("\n✅ Build Successful!")
             return
         if apply_fixes() == 0:
-            print("\n🛑 No fixable patterns found.")
+            print("\n🛑 No more automatic fixes found.")
             break
         time.sleep(1)
 
