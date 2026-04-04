@@ -3,7 +3,7 @@ import re
 import subprocess
 import time
 
-# Force Ninja and CMake to run single-threaded to prevent system OOM
+# Force single-threaded build to prevent system memory exhaustion
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -41,14 +41,8 @@ def classify_errors(log_data):
         "missing_n64_types":  [],  
         "actor_pointer":      [],  
         "local_struct_fwd":   [],  
-        "null_float":         [],  
-        "typedef_redef":      [],  
-        "static_conflict":    [],  
-        "incomplete_sizeof":  [],
-        "undeclared_macros":  [], 
-        "implicit_func":      [], 
-        "undefined_symbols":  [], 
         "missing_sdk_types":  [], 
+        "undefined_symbols":  [], 
         "unknown":            [],
     }
 
@@ -61,66 +55,40 @@ def classify_errors(log_data):
         "OSHWIntr", "OSIntMask", "OSYieldResult"
     }
 
-    # Enhanced file detection for Android NDK log format
-    file_regex = r"(/[^:\s]+\.(?:c|cpp|h|cc|cxx)):"
+    # Robust regex for NDK logs: catches /path/to/file.c:line:col
+    file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))"
     local_struct_map = {}
 
-    def extract_incomplete_type(line):
-        m = re.search(r"\(aka 'struct ([^']+)'\)", line)
-        if m: return m.group(1)
-        m = re.search(r"'struct ([^']+)'", line)
-        if m: return m.group(1)
-        m = re.search(r"'([^']+)'", line)
-        if m: return m.group(1)
-        return None
-
     for line in log_data.split('\n'):
-        if "error:" not in line and "undefined reference" not in line and "undefined symbol" not in line:
+        if "error:" not in line and "undefined" not in line:
             continue
 
-        match = re.search(file_regex, line)
-        filepath = match.group(1) if match else None
+        path_match = re.search(file_regex, line)
+        filepath = path_match.group(1) if path_match else None
+        
+        # Skip system and NDK internal headers
+        if filepath and ("/usr/" in filepath or "ndk" in filepath.lower()):
+            filepath = None
 
-        m_redef = re.search(r"typedef redefinition with different types \('([^']+)'(?:.*?)vs '([^']+)'(?:.*?)\)", line)
-        m_static = re.search(r"static declaration of '([^']+)' follows non-static declaration", line)
         m_unknown = re.search(r"unknown type name '([A-Za-z_][A-Za-z0-9_]*)'", line)
-        m_ident = re.search(r"use of undeclared identifier '([^']+)'", line)
-        m_implicit = re.search(r"implicit declaration of function '([^']+)'", line)
         m_undef_sym = re.search(r"undefined symbol: (.*)", line)
-        m_inc = "incomplete type" in line 
+        m_undef_ref = re.search(r"undefined reference to `([^']+)'", line)
 
-        if m_undef_sym:
-            sym = m_undef_sym.group(1).replace("'", "").strip()
+        if m_undef_sym or m_undef_ref:
+            sym = (m_undef_sym or m_undef_ref).group(1).replace("'", "").replace("`", "").strip()
             categories["undefined_symbols"].append(sym)
-        elif m_implicit:
-            categories["implicit_func"].append(m_implicit.group(1))
-        elif m_ident:
-            ident = m_ident.group(1)
-            if ident == "actor" and filepath:
-                categories["actor_pointer"].append(filepath)
-            else:
-                categories["undeclared_macros"].append(ident)
-        elif m_redef and filepath:
-            categories["typedef_redef"].append((filepath, m_redef.group(1), m_redef.group(2)))
-        elif m_static and filepath:
-            categories["static_conflict"].append((filepath, m_static.group(1)))
         elif m_unknown:
             type_name = m_unknown.group(1)
             if type_name in known_global_types:
                 categories["missing_sdk_types"].append(type_name)
             elif filepath:
                 local_struct_map.setdefault(filepath, set()).add(type_name)
-        elif m_inc and filepath:
-            inc_type = extract_incomplete_type(line)
-            if inc_type:
-                categories["incomplete_sizeof"].append((filepath, inc_type))
         elif filepath and os.path.exists(filepath):
             categories["missing_n64_types"].append(filepath)
 
     for filepath, type_names in local_struct_map.items():
         for t in type_names:
-            if t not in known_global_types:
-                categories["local_struct_fwd"].append((filepath, t))
+            categories["local_struct_fwd"].append((filepath, t))
 
     return categories
 
@@ -133,18 +101,7 @@ def apply_fixes():
     categories = classify_errors(log_data)
     fixes = 0
 
-    # ── FIX J: Ensure Linker Libraries (Math/Log) ─────────────────────────
-    if os.path.exists(CMAKE_FILE):
-        with open(CMAKE_FILE, "r") as f:
-            cmake = f.read()
-        if "target_link_libraries(" in cmake and " m " not in cmake:
-            cmake = re.sub(r'(target_link_libraries\([^)]+)', r'\1 m log ', cmake)
-            with open(CMAKE_FILE, "w") as f:
-                f.write(cmake)
-            print("  [🛠️] Injected math and log libraries into CMakeLists.txt")
-            fixes += 1
-
-    # ── FIX K: Inject Global SDK Types ─────────────────────────────────────
+    # ── FIX K: Global SDK Type Injection ──────────────────────────────────
     if categories["missing_sdk_types"]:
         known_sdk_typedefs = {
             "OSHWIntr": "unsigned int", "OSIntMask": "unsigned int",
@@ -161,63 +118,65 @@ def apply_fixes():
                 content = f.read()
             added = False
             for t in set(categories["missing_sdk_types"]):
-                if f" {t};" in content: continue
-                decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n" if t in known_sdk_typedefs else f"\ntypedef struct {{ long long int reserved[64]; }} {t};\n"
+                if f"typedef struct {t}_s {t};" in content or f"typedef unsigned int {t};" in content: continue
+                
+                if t in known_sdk_typedefs:
+                    decl = f"\ntypedef {known_sdk_typedefs[t]} {t};\n"
+                else:
+                    # Use a standard named struct tag for safe pointer math
+                    decl = f"\ntypedef struct {t}_s {{ long long int reserved[64]; }} {t};\n"
+                
                 content += decl
                 added = True
-                print(f"  [🛠️] Defined SDK type: {t}")
+                print(f"  [🛠️] Defined Global SDK type: {t}")
+            
             if added:
                 with open(TYPES_HEADER, "w") as f:
                     f.write(content)
                 fixes += 1
 
-    # ── FIX C: Inject Local Struct Forward Decls (Critical for Actors) ─────
+    # ── FIX C: Local Struct Forward Decls (Game Logic) ───────────────────
     if categories["local_struct_fwd"]:
         file_to_types = {}
         for filepath, type_name in categories["local_struct_fwd"]:
             file_to_types.setdefault(filepath, set()).add(type_name)
+        
         for filepath, type_names in file_to_types.items():
             if not os.path.exists(filepath): continue
             with open(filepath, "r") as f:
                 content = f.read()
+            
             fwd_lines = []
             for t in sorted(type_names):
-                tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
-                fwd_decl = f"typedef struct {tag}_s {t};"
+                # Standardize to 'typedef struct Name_s Name;'
+                fwd_decl = f"typedef struct {t}_s {t};"
                 if fwd_decl not in content:
                     fwd_lines.append(fwd_decl)
+            
             if fwd_lines:
-                content = "/* AUTO: fwd decls */\n" + "\n".join(fwd_lines) + "\n" + content
+                content = "/* AUTO: actor decls */\n" + "\n".join(fwd_lines) + "\n" + content
                 with open(filepath, "w") as f:
                     f.write(content)
-                print(f"  [🛠️] Injected actor decls {sorted(type_names)} into {os.path.basename(filepath)}")
+                print(f"  [🛠️] Injected actor types {sorted(type_names)} into {os.path.basename(filepath)}")
                 fixes += 1
 
-    # ── FIX A: Global Header Inclusion ────────────────────────────────────
-    for filepath in set(categories["missing_n64_types"]):
-        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
-        with open(filepath, "r") as f:
-            content = f.read()
-        if 'include "ultra/n64_types.h"' not in content:
-            content = '#include "ultra/n64_types.h"\n' + content
-            with open(filepath, "w") as f:
-                f.write(content)
-            fixes += 1
-
-    # ── FIX I: Linker Stubs ──────────────────────────────────────────────
+    # ── FIX I: Linker Stubs (Missing N64 Functions) ───────────────────────
     if categories["undefined_symbols"]:
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
             with open(STUBS_FILE, "w") as f:
                 f.write('#include "n64_types.h"\n\n')
+        
         with open(STUBS_FILE, "r") as f:
             stubs = f.read()
+            
         added = False
         for sym in set(categories["undefined_symbols"]):
             if f" {sym}(" in stubs: continue
-            stubs += f"long long int {sym}() {{ return 0; }}\n"
+            stubs += f"\nlong long int {sym}() {{ return 0; }}\n"
             added = True
-            print(f"  [🛠️] Stubbed function: {sym}")
+            print(f"  [🛠️] Generated linker stub for: {sym}")
+                
         if added:
             with open(STUBS_FILE, "w") as f:
                 f.write(stubs)
@@ -229,10 +188,12 @@ def main():
     for i in range(1, 100):
         print(f"\n--- Build Cycle {i} ---")
         if run_build():
-            print("\n✅ Build Successful!")
+            print("\n✅ Build Successful! APK generated.")
             return
+        
+        # Apply fixes and stop if no new patterns are detected
         if apply_fixes() == 0:
-            print("\n🛑 No more fixable patterns found in this batch.")
+            print("\n🛑 Build stalled: No more fixable patterns detected in logs.")
             break
         time.sleep(1)
 
