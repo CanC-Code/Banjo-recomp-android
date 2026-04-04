@@ -1,6 +1,6 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
-v80.0 — Protected n64_types.h, All-Caps Enum Auto-Stub, Smart Type Inference, and robust Mtx generation.
+v81.0 — 4-Level brace matching, intelligent local definition checking, and duplicate body removal.
 """
 
 import os
@@ -26,6 +26,13 @@ TYPES_HEADER    = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE      = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
 MAX_STALL = 5
+
+# ─── Regex Helpers ────────────────────────────────────────────────────────────
+
+# Matches up to 4 levels of nested braces securely
+BRACE_MATCH = r"[^{}]*"
+for _ in range(4):
+    BRACE_MATCH = r"(?:[^{}]|\{" + BRACE_MATCH + r"\})*"
 
 # ── N64 identifier types that appear as 'use of undeclared identifier' ────────
 N64_IDENT_TYPES = {
@@ -173,7 +180,6 @@ def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
-
 def run_build():
     print("\n🚀 Starting Build Cycle...")
     os.makedirs("Android", exist_ok=True)
@@ -192,14 +198,12 @@ def run_build():
             print(f"🛑 Build execution failed: {e}")
             return False
 
-
 def extract_incomplete_type(line):
     m = re.search(r"incomplete (?:element )?type '(?:struct\s+)?([^']+)'", line)
     if m:
         return m.group(1)
     m = re.search(r"\(aka '(?:struct\s+)?([^']+)'\)", line)
     return m.group(1) if m else None
-
 
 def source_path(path):
     if not path:
@@ -209,22 +213,29 @@ def source_path(path):
         p = p.split("/Banjo-recomp-android/Banjo-recomp-android/")[-1]
     return os.path.normpath(p)
 
-
 def is_sdk_or_ndk_path(fp):
     if not fp:
         return True
     normalized = fp.replace("\\", "/")
     return "/usr/" in normalized or "ndk" in normalized.lower()
 
-
 def read_file(path):
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
-
 def write_file(path, content):
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+
+def is_defined_locally(filepath, tag):
+    """Checks if the struct is genuinely defined lower down in the local file."""
+    if not filepath or not os.path.exists(filepath): return False
+    c = read_file(filepath)
+    # Matches `typedef struct ... { ... } tag;`
+    pattern1 = rf"typedef\s+struct[^{{]*\{{({BRACE_MATCH})\}}\s*{re.escape(tag)}\s*;"
+    # Matches `struct tag { ... };` or `typedef struct tag { ... } ...;`
+    pattern2 = rf"struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}"
+    return bool(re.search(pattern1, c) or re.search(pattern2, c))
 
 
 # ─── Failed-file log ──────────────────────────────────────────────────────────
@@ -275,7 +286,6 @@ def generate_failed_log(log_data):
     print("=" * 60 + "\n")
     return set(file_errors.keys())
 
-
 def generate_error_summary(log_data):
     errors = set()
     for line in log_data.split('\n'):
@@ -308,8 +318,8 @@ def classify_errors(log_data):
         "undeclared_macros":    set(),
         "undeclared_gbi":       set(),
         "undeclared_n64_types": set(),
-        "missing_types":        set(),
-        "missing_globals":      set(),
+        "missing_types":        defaultdict(set),
+        "missing_globals":      defaultdict(set),
         "implicit_func":        set(),
         "undefined_symbols":    set(),
         "audio_states":         set(),
@@ -386,10 +396,16 @@ def classify_errors(log_data):
             if type_name in {"RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "ALVoiceState"}:
                 categories["audio_states"].add(type_name)
             else:
-                categories["local_fwd_only"].append((filepath, type_name))
-                categories["has_local_typedef"].add(filepath)
+                # Bypass missing_types injection if it's already defined lower down locally 
+                if is_defined_locally(filepath, type_name):
+                    categories["local_fwd_only"].append((filepath, type_name))
+                    categories["has_local_typedef"].add(filepath)
+                elif type_name.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', type_name):
+                    categories["missing_types"][type_name].add(filepath)
+                else:
+                    categories["local_fwd_only"].append((filepath, type_name))
+                    categories["has_local_typedef"].add(filepath)
 
-        # Smart classification of undeclared identifiers
         if m_ident:
             ident = m_ident.group(1)
             if ident in N64_IDENT_TYPES:
@@ -401,9 +417,14 @@ def classify_errors(log_data):
             elif ident.isupper():
                 categories["undeclared_macros"].add(ident)
             elif ident.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', ident):
-                categories["missing_types"].add(ident)
+                # Check for dual-injection conflicts
+                if filepath and is_defined_locally(filepath, ident):
+                    categories["local_fwd_only"].append((filepath, ident))
+                    categories["has_local_typedef"].add(filepath)
+                else:
+                    if filepath: categories["missing_types"][ident].add(filepath)
             else:
-                categories["missing_globals"].add(ident)
+                if filepath: categories["missing_globals"][ident].add(filepath)
 
         if m_undef_ref:
             categories["undefined_symbols"].add(m_undef_ref.group(1).strip())
@@ -581,8 +602,9 @@ def apply_fixes():
 
         content = strip_auto_preamble(content, filepath, categories["has_local_typedef"])
 
+        # Deep 4-level brace matcher cleanly wipes identical tags that were left behind 
         tagged_body_re = re.compile(
-            r'typedef\s+struct\s+(\w+)\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*\w+\s*;',
+            rf'(?:typedef\s+)?struct\s+(\w+)\s*\{{({BRACE_MATCH})\}}\s*(?:\w+\s*)?;',
             re.DOTALL
         )
         tag_matches = defaultdict(list)
@@ -608,20 +630,21 @@ def apply_fixes():
             alias = tag1 if target_tag == tag2 else tag2
             
             fwd_pattern = rf"typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\s*\n?"
-            anon_body_pattern = rf"typedef\s+struct\s*\{{([\s\S]*?)\}}\s*{re.escape(alias)}\s*;"
+            anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{re.escape(alias)}\s*;"
             
             has_fwd  = re.search(fwd_pattern, content)
             has_body = re.search(anon_body_pattern, content)
             
             if has_body:
                 if has_fwd:
-                    content = re.sub(fwd_pattern, "", content, count=1)
-                content = re.sub(
+                    content = re.sub(fwd_pattern, "", content)
+                content, cnt = re.subn(
                     anon_body_pattern,
                     lambda m: f"typedef struct {target_tag} {{{m.group(1)}}} {alias};",
-                    content, count=1
+                    content
                 )
-                print(f"  [🛠️] Retagged anon body as '{target_tag}' in {os.path.basename(filepath)}")
+                if cnt:
+                    print(f"  [🛠️] Retagged {cnt} anon body(s) as '{target_tag}' in {os.path.basename(filepath)}")
             else:
                 content, cnt = re.subn(
                     r"\bstruct\s+" + re.escape(alias) + r"\b",
@@ -701,7 +724,6 @@ def apply_fixes():
                     macros_added = True
                     print(f"  [🛠️] Injected macro '{macro}' = {KNOWN_MACROS[macro]} into n64_types.h")
             else:
-                # Stub out completely unknown all-caps constants dynamically
                 if f"#define {macro}" not in types_content:
                     types_content += f"\n#ifndef {macro}\n#define {macro} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
                     macros_added = True
@@ -815,12 +837,11 @@ def apply_fixes():
     if categories["need_mtx_body"]:
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            # Wipe old definitions out of header completely first
             types_content = re.sub(
-                r"(?:typedef\s+)?struct\s+Mtx(?:_s)?\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*(?:Mtx\s*)?;?\n?",
+                rf"(?:typedef\s+)?struct\s+Mtx(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:Mtx\s*)?;?\n?",
                 "", types_content
             )
-            types_content = re.sub(r"typedef\s+struct\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*Mtx\s*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*Mtx\s*;\n?", "", types_content)
             types_content = re.sub(r"typedef\s+struct\s+Mtx(?:_s)?\s+Mtx\s*;\n?", "", types_content)
             types_content = re.sub(r"struct\s+Mtx(?:_s)?\s*;\n?", "", types_content)
             
@@ -838,16 +859,15 @@ def apply_fixes():
                 continue  
             body = N64_STRUCT_BODIES.get(tag)
             
-            # Using precise struct member validation inside header instead of assuming base declaration existence
             check_str = "l[2]" if tag == "LookAt" else ("fileSize" if tag == "OSPfs" else tag)
             
             if body and check_str not in types_content:
                 types_content = re.sub(
-                    rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}}\s*(?:{re.escape(tag)}\s*)?;?\n?",
+                    rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?",
                     "", types_content
                 )
                 types_content = re.sub(
-                    rf"typedef\s+struct\s*\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}}\s*{re.escape(tag)}\s*;\n?",
+                    rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{re.escape(tag)}\s*;\n?",
                     "", types_content
                 )
                 types_content = re.sub(
@@ -872,15 +892,14 @@ def apply_fixes():
             file_to_types[filepath].add(type_name)
 
         for filepath, type_names in sorted(file_to_types.items()):
-            # CRITICAL: Prevent mutator from corrupting n64_types.h
             if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
                 continue
             content = read_file(filepath)
             content = strip_auto_preamble(content, filepath, categories["has_local_typedef"])
             changed = False
             for t in sorted(type_names):
-                body_pattern = rf"typedef\s+struct[^{{]*\{{[\s\S]*?\}}\s*{re.escape(t)}\s*;"
-                if re.search(body_pattern, content, re.DOTALL):
+                body_pattern = rf"typedef\s+struct[^{{]*\{{({BRACE_MATCH})\}}\s*{re.escape(t)}\s*;"
+                if re.search(body_pattern, content):
                     fwd = f"/* AUTO: forward decl for type defined below */\ntypedef struct {t}_s {t};\n"
                     if f"typedef struct {t}_s {t};" not in content:
                         content = fwd + content
@@ -905,7 +924,6 @@ def apply_fixes():
             if tag in N64_STRUCT_BODIES or tag in known_global_types:
                 continue
             if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
-                # Creates a very large sponge-struct capable of withstanding large scalar initializations (e.g. nested configurations) without compiler crash. 
                 types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
                 types_added = True
                 print(f"  [🛠️] Injected missing custom type '{tag}' into n64_types.h")
