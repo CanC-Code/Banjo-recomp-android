@@ -1,12 +1,12 @@
 """
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
-Fixes for Cycle 5:
-  - Block-Aware Deduplicator: Prevents 'extraneous closing brace' errors by removing 
-    full struct blocks instead of just the first line.
-  - Single-Line Injections: SDK types are now injected as single lines to ensure safety.
-  - Restored missing_n64_includes: Re-added the pass to ensure source files see the header.
-  - Added 'LetterFloorTile' to known types.
+Updates for Cycle 5:
+  - Added 'check_brace_sanity': Prevents script from saving corrupted headers.
+  - Improved 'deduplicate_definitions': Uses regex to track unique type names.
+  - Restored 'fix_missing_macros': Re-injects SDK constants (TRUE, FALSE, etc.).
+  - Restored 'fix_missing_n64_includes': Ensures .c files can see the new types.
+  - Enhanced 'KNOWN_SDK_STRUCT_TYPES' for audio and threading stability.
 """
 
 import os
@@ -26,7 +26,7 @@ def _gradle_cmd():
     return [
         "gradle", "-p", "Android", "assembleDebug",
         "--console=plain", "--max-workers=1", "--no-daemon",
-        f"-Dorg.gradle.jvmargs=-Xmx{_HEAP_GB}g -XX:+HeapDumpOnOutOfMemoryError",
+        f"-Dorg.gradle.jvmargs=-Xmx{_HEAP_GB}g -XX:+HeapDumpOfMemoryError",
     ]
 
 LOG_FILE     = "Android/full_build_log.txt"
@@ -63,7 +63,8 @@ KNOWN_SDK_STRUCT_TYPES = {
     "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Gfx_t", "Mtx", "Mtx_t",
     "OSContPad", "OSTimer", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t",
     "OSEvent", "CPUState", "Actor", "ActorMarker",
-    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "LetterFloorTile",
+    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
+    "LetterFloorTile", "GfxContext", "Vp", "Lightsn", "Light_t"
 }
 
 KNOWN_GLOBAL_TYPES = set(KNOWN_SDK_TYPEDEFS) | KNOWN_SDK_STRUCT_TYPES
@@ -79,24 +80,24 @@ KNOWN_MACROS = {
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 
-_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
-def strip_ansi(text):
-    return _ANSI.sub('', text)
-
 def read_file(path):
     if not os.path.exists(path): return ""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 def write_file(path, content):
+    # Sanity Check: Never write n64_types.h if we broke the brace balance
+    if path.endswith("n64_types.h"):
+        if content.count('{') != content.count('}'):
+            print(f"  [!] REJECTED: Brace mismatch in {os.path.basename(path)} ({content.count('{')} vs {content.count('}')})")
+            return
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
 def source_path(path):
     if not path: return None
     p_lower = path.lower()
-    if p_lower.startswith("/usr/") or "/ndk/" in p_lower:
+    if p_lower.startswith("/usr/") or "/ndk/" in p_lower or "toolchains" in p_lower:
         return None
     return path
 
@@ -120,6 +121,7 @@ def strip_auto_block(content):
     return "".join(new_lines), True
 
 def _real_struct_tag_for_typedef(content, typedef_name):
+    """Checks if the file already defines the struct so we don't duplicate tags."""
     close_re = re.compile(r"\}\s*" + re.escape(typedef_name) + r"\s*;")
     lines = content.splitlines()
     for i, line in enumerate(lines):
@@ -142,7 +144,7 @@ def run_build():
             _gradle_cmd(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         for line in proc.stdout:
-            clean = strip_ansi(line)
+            clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
             log.write(clean)
             print(clean, end="")
         proc.wait()
@@ -153,13 +155,11 @@ def run_build():
 def classify_errors(log_data):
     cats = {
         "missing_n64_includes": [],
-        "bad_fwd_injection":    [],
         "local_struct_fwd":     [],
         "undefined_symbols":    [],
         "missing_sdk_types":    [],
         "missing_macros":       [],
         "redefinition":         [],
-        "unguarded_header":     [],
         "oom_detected":         False,
     }
 
@@ -171,10 +171,6 @@ def classify_errors(log_data):
 
         pm = re.search(r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx))", line)
         fp = source_path(pm.group(1) if pm else None)
-
-        if "unguarded header" in line and fp:
-            cats["unguarded_header"].append(fp)
-            continue
 
         m_redef = re.search(r"redefinition of '([^']+)'", line)
         if m_redef and fp:
@@ -195,8 +191,7 @@ def classify_errors(log_data):
             t = m_unknown.group(1)
             if t in KNOWN_GLOBAL_TYPES: cats["missing_sdk_types"].append(t)
             elif fp: local_struct_map.setdefault(fp, set()).add(t)
-
-        if fp and "error:" in line and 'include "ultra/n64_types.h"' not in read_file(fp):
+        elif fp and 'include "ultra/n64_types.h"' not in read_file(fp):
             if fp.endswith(('.c', '.cpp')): cats["missing_n64_includes"].append(fp)
 
     for fp, type_names in local_struct_map.items():
@@ -206,38 +201,53 @@ def classify_errors(log_data):
 
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
-def fix_header_guards():
-    if not os.path.exists(TYPES_HEADER): return 0
-    content = read_file(TYPES_HEADER)
-    if "#pragma once" not in content and "#ifndef" not in content:
-        write_file(TYPES_HEADER, "#pragma once\n" + content)
-        print(f"  [G] Added #pragma once to {os.path.basename(TYPES_HEADER)}")
-        return 1
-    return 0
-
 def deduplicate_definitions():
-    """Removes duplicate typedefs and handles multi-line struct corruption."""
+    """Aggressively removes overlapping typedefs in n64_types.h."""
     if not os.path.exists(TYPES_HEADER): return 0
     content = read_file(TYPES_HEADER)
     
-    # Identify type names from 'typedef struct ... Name;' or 'typedef ... Name;'
-    # This regex catches both single-line and multi-line declarations
-    type_regex = re.compile(r"typedef\s+(?:struct\s+\w+\s*\{[^\}]+\}|[^;]+)\s+(\w+)\s*;")
-    
+    # Track unique type names (e.g., Gfx, Mtx)
+    type_name_re = re.compile(r"typedef\s+.*?\s+(\w+)\s*;")
     seen_types = set()
-    def _sub_dedup(match):
-        t_name = match.group(1)
-        if t_name in seen_types:
-            return "" # Remove duplicate
-        seen_types.add(t_name)
-        return match.group(0)
+    new_lines = []
+    lines = content.splitlines()
+    fixed = False
+    
+    for line in lines:
+        m = type_name_re.search(line)
+        if m:
+            t_name = m.group(1)
+            if t_name in seen_types:
+                fixed = True
+                continue
+            seen_types.add(t_name)
+        new_lines.append(line)
+        
+    if fixed:
+        write_file(TYPES_HEADER, "\n".join(new_lines) + "\n")
+        print(f"  [D] Cleaned duplicate types from n64_types.h")
+    return 1 if fixed else 0
 
-    new_content = type_regex.sub(_sub_dedup, content)
-    if new_content != content:
-        write_file(TYPES_HEADER, new_content)
-        print(f"  [D] Deduplicated and cleaned {os.path.basename(TYPES_HEADER)}")
-        return 1
-    return 0
+def fix_missing_macros(cats):
+    needed = set(cats["missing_macros"])
+    if not needed: return 0
+    content = read_file(TYPES_HEADER)
+    added = False
+    for macro in sorted(needed):
+        if f"#define {macro}" in content: continue
+        content += f"\n#ifndef {macro}\n#define {macro} {KNOWN_MACROS[macro]}\n#endif\n"
+        added = True
+        print(f"  [M] Injected macro: {macro}")
+    if added: write_file(TYPES_HEADER, content)
+    return 1 if added else 0
+
+def fix_missing_n64_includes(cats):
+    fixes = 0
+    for fp in set(cats["missing_n64_includes"]):
+        content = read_file(fp)
+        write_file(fp, '#include "ultra/n64_types.h"\n' + content)
+        fixes += 1
+    return fixes
 
 def fix_redefinitions(cats):
     fixes = 0
@@ -258,14 +268,9 @@ def fix_missing_sdk_types(cats):
     content = read_file(TYPES_HEADER)
     added = False
     for t in sorted(missing):
-        # Improved check: look for word boundary
-        if re.search(r"\b" + re.escape(t) + r"\b", content): continue
-        
-        # Use single-line injections for cleaner deduplication
-        if t in KNOWN_SDK_TYPEDEFS:
-            decl = f"\ntypedef {KNOWN_SDK_TYPEDEFS[t]} {t};"
-        else:
-            decl = f"\ntypedef struct {t}_s {{ long long int res[16]; }} {t};"
+        if f" {t};" in content or f" {t} " in content: continue
+        decl = f"\ntypedef {KNOWN_SDK_TYPEDEFS[t]} {t};\n" if t in KNOWN_SDK_TYPEDEFS else \
+               f"\ntypedef struct {t}_s {{ long long int res[32]; }} {t};\n"
         content += decl
         added = True
         print(f"  [K] Added SDK type: {t}")
@@ -280,6 +285,8 @@ def fix_local_struct_fwd(cats):
         content = read_file(fp)
         new_decls = []
         for t in sorted(types):
+            # Don't forward declare if it's already defined here
+            if f"struct {t} {{" in content or f"typedef struct {{ " in content: continue
             real_tag = _real_struct_tag_for_typedef(content, t)
             tag = real_tag if real_tag else (t[1:] if t.startswith('s') and t[1].isupper() else t)
             fwd = f"typedef struct {tag} {t};"
@@ -289,15 +296,6 @@ def fix_local_struct_fwd(cats):
             write_file(fp, f"{AUTO_MARKER}\n" + "\n".join(new_decls) + "\n" + stripped_content)
             print(f"  [C] Fwd decls {list(types)} -> {os.path.basename(fp)}")
             fixes += 1
-    return fixes
-
-def fix_missing_n64_includes(cats):
-    fixes = 0
-    for fp in set(cats["missing_n64_includes"]):
-        content = read_file(fp)
-        write_file(fp, '#include "ultra/n64_types.h"\n' + content)
-        print(f"  [A] Injected n64_types.h into {os.path.basename(fp)}")
-        fixes += 1
     return fixes
 
 def fix_undefined_symbols(cats):
@@ -321,16 +319,22 @@ def apply_fixes():
     cats = classify_errors(log_data)
     
     fixes = 0
-    fixes += fix_header_guards()
-    fixes += deduplicate_definitions()
+    if os.path.exists(TYPES_HEADER):
+        # Pass 0: Integrity
+        content = read_file(TYPES_HEADER)
+        if "#pragma once" not in content:
+            write_file(TYPES_HEADER, "#pragma once\n" + content)
+            fixes += 1
+        fixes += deduplicate_definitions()
     
     if cats["oom_detected"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
     fixes += fix_redefinitions(cats)
     fixes += fix_missing_sdk_types(cats)
-    fixes += fix_missing_n64_includes(cats)
+    fixes += fix_missing_macros(cats)
     fixes += fix_local_struct_fwd(cats)
+    fixes += fix_missing_n64_includes(cats)
     fixes += fix_undefined_symbols(cats)
     return fixes
 
