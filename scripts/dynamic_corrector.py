@@ -5,8 +5,8 @@ Updates for Cycle 12:
   - Typedef Synchronizer: Robustly detects "typedef redefinition" errors and 
     automatically syncs the Global Registry (n64_autodecls.h) with the 
     actual struct tags found in the decompiled source.
-  - Robust NDK Regex: Updated the error parser to handle the specific quoting 
-    and parentheses used by Clang 17+ in the Android NDK.
+  - Redundancy Check: Prevents the "redefinition of struct" error by verifying
+    if a padded body or tag already exists before applying a fix.
   - Forward-to-Body Promotion: If a type is used as an array element 
     (incomplete type error), it is automatically promoted from a forward 
     declaration to a padded struct to allow the build to proceed.
@@ -27,7 +27,7 @@ _HEAP_GB = 6
 
 def _gradle_cmd():
     return [
-        "gradle", "-p", "Android", "assembleDebug",
+        "./gradlew", "-p", "Android", "assembleDebug",
         "--console=plain", "--max-workers=1", "--no-daemon",
         f"-Dorg.gradle.jvmargs=-Xmx{_HEAP_GB}g -XX:+HeapDumpOnOutOfMemoryError",
     ]
@@ -87,8 +87,12 @@ def run_build():
     print(f"\n🚀 Starting Build (heap={_HEAP_GB}g) ...")
     os.makedirs("Android", exist_ok=True)
     with open(LOG_FILE, "w", encoding="utf-8") as log:
+        # Use gradlew if available, fallback to gradle
+        cmd = _gradle_cmd()
+        if not os.path.exists(cmd[0]): cmd[0] = "gradle"
+        
         proc = subprocess.Popen(
-            _gradle_cmd(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         for line in proc.stdout:
             clean = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
@@ -124,10 +128,9 @@ def classify_errors(log_data):
             continue
 
         # Redefinition / Tag Syncing (Crucial for Cycle 12)
-        # Matches: error: typedef redefinition with different types ('struct A' vs 'struct B')
-        m_tag = re.search(r"(?:typedef\s+)?redefinition\s+of\s+'([^']+)'\s+with\s+different\s+types\s*\(?'struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'\)?", line)
+        # Handles: error: typedef redefinition with different types ('struct A' vs 'struct B')
+        m_tag = re.search(r"redefinition\s+of\s+'([^']+)'\s+with\s+different\s+types\s*\(?'struct\s+([^']+)'\s+vs\s+'struct\s+([^']+)'\)?", line)
         if m_tag:
-            # Type B is usually what's in our Registry, Type A is what the compiler found in the file
             cats["tag_mismatch"].append({"sym": m_tag.group(1), "correct_tag": m_tag.group(2)})
             continue
 
@@ -158,15 +161,20 @@ def sync_typedef_tags(cats):
     registry = read_file(AUTO_HEADER)
     if not registry: return 0
     
+    processed_syms = set()
     for entry in cats["tag_mismatch"]:
         sym, correct_tag = entry["sym"], entry["correct_tag"]
+        if sym in processed_syms: continue
+        
         # Look for the old incorrect typedef in the registry
+        # Pattern matches 'typedef struct any_tag sym;'
         pattern = rf"typedef struct \w+ {sym};"
         if re.search(pattern, registry):
             new_line = f"typedef struct {correct_tag} {sym};"
             registry = re.sub(pattern, new_line, registry)
             print(f"  [S] Synced {sym} tag to {correct_tag}")
             fixes += 1
+            processed_syms.add(sym)
             
     if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
@@ -177,8 +185,8 @@ def update_global_registry(cats):
     
     unknown_syms = set(e["sym"] for e in cats["local_struct"])
     for s in sorted(unknown_syms):
+        # Prevent adding a typedef if the symbol is already aliased in registry
         if f" {s};" in registry: continue
-        # Default to a safe tag, will be synced by sync_typedef_tags if wrong
         tag = f"{s}_s"
         registry += f"typedef struct {tag} {s};\n"
         print(f"  [R] Registry Added: {s}")
@@ -196,23 +204,30 @@ def fix_incomplete_types(cats):
     registry = read_file(AUTO_HEADER)
     if not registry: return 0
     
+    processed_tags = set()
     for entry in cats["incomplete_type"]:
         tag = entry["tag"]
-        # If we only have 'struct tag;', we must provide a body so arrays can be sized
-        old = f"struct {tag};"
-        # We also check for the typedef variant
-        pattern = rf"typedef struct {tag} (\w+);"
+        if tag in processed_tags: continue
         
-        if old in registry:
-            new = f"struct {tag} {{ char pad[4096]; }};"
-            registry = registry.replace(old, new)
+        # Check if this tag already has a padded body to avoid redefinition loop
+        if f"struct {tag} {{ char pad" in registry: continue
+
+        old_forward = f"struct {tag};"
+        pattern_typedef = rf"typedef struct {tag} (\w+);"
+        
+        if old_forward in registry:
+            new_body = f"struct {tag} {{ char pad[4096]; }};"
+            registry = registry.replace(old_forward, new_body)
             print(f"  [T] Padded incomplete struct: {tag}")
             fixes += 1
-        elif re.search(pattern, registry):
+        elif re.search(pattern_typedef, registry):
+            # Promote the struct inside the typedef line
             replacement = f"struct {tag} {{ char pad[4096]; }};\ntypedef struct {tag} \\1;"
-            registry = re.sub(pattern, replacement, registry)
+            registry = re.sub(pattern_typedef, replacement, registry)
             print(f"  [T] Padded incomplete typedef: {tag}")
             fixes += 1
+        
+        processed_tags.add(tag)
             
     if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
@@ -265,7 +280,7 @@ def apply_fixes():
     if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
-    # Order matters: Sync tags before doing anything else
+    # Priority Order: Sync tags first to ensure the registry matches the source
     fixes += sync_typedef_tags(cats)
     fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
@@ -280,9 +295,11 @@ def main():
         print(f"\n{'='*60}\n  Build Cycle {i}\n{'='*60}")
         if run_build():
             print("\n✅ Build Successful!"); sys.exit(0)
+        
         applied = apply_fixes()
         if applied == 0:
             print("\n🛑 No further fixable patterns detected."); sys.exit(1)
+            
         print(f"\n  Applied {applied} fixes. Retrying build...")
         time.sleep(1)
 
