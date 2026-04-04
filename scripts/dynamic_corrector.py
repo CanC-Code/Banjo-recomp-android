@@ -1,15 +1,12 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
 
-Cycle 18 Updates:
-  - Unified Heuristic Engine: Merged the robust file-modifying logic from the 
-    legacy script with the safety guards and path normalizations of the modern cycles.
-  - Safe Typedef Tag Harmonization: Improved the regex in FIX D to prevent 
-    corrupting existing struct tags (which previously caused "extraneous closing brace" errors).
-  - Robust Linker Stubs: Automatically generates N64 SDK stubs for undefined symbols 
-    and wires them into CMakeLists.txt.
-  - Implicit Declaration Fixes: Maps common standard C functions (math, string, stdlib) 
-    to their respective headers and injects them.
+Cycle 19 Updates:
+  - Improved Typedef Redefinition Resolution: Completely refactored FIX D to 
+    correctly swap mismatched struct tags (e.g., swapping 'struct ch_vegatable' 
+    to 'struct chVegetable_s' globally in the file) rather than relying on brittle 
+    brace-matching regex. This resolves the vegetables.c struct conflict.
+  - Retained all legacy safeguards for stubs, extraneous braces, and implicit functions.
 """
 
 import os
@@ -18,7 +15,6 @@ import subprocess
 import time
 import sys
 
-# Force Ninja and CMake to run single-threaded to prevent Clang from eating all system RAM
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -184,11 +180,8 @@ def fix_extraneous_braces(filepath):
     with open(filepath, "r") as f:
         content = f.read()
     
-    # Remove bad padding struct lines that might be causing brace mismatches
     original = content
     content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", content)
-    
-    # Fix typedef struct Gfx Gfx_s { -> typedef struct Gfx {
     content = re.sub(r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{", r"typedef struct \1 {", content)
 
     if content != original:
@@ -281,22 +274,15 @@ def apply_fixes():
         tag1 = t1_match.group(1) if t1_match else None
         tag2 = t2_match.group(1) if t2_match else None
 
-        if tag1 or tag2:
-            tag = tag1 or tag2
-            lines = content.split('\n')
-            for i, l in enumerate(lines):
-                if re.search(r"\}\s*" + tag + r"\s*;", l):
-                    for j in range(i, max(-1, i-20), -1):
-                        if "typedef struct" in lines[j]:
-                            # Safely replace `typedef struct` or `typedef struct oldTag` with `typedef struct newTag`
-                            lines[j] = re.sub(r"typedef\s+struct\s+(?:[A-Za-z_]\w*\s+)?\{", f"typedef struct {tag} {{", lines[j])
-                            lines[j] = re.sub(r"typedef\s+struct\s*\{", f"typedef struct {tag} {{", lines[j])
-                            break
-            content = '\n'.join(lines)
+        if tag1 and tag2 and tag1 != tag2:
+            target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
+            old_tag = tag1 if target_tag == tag2 else tag2
+            
+            content = re.sub(rf"\bstruct\s+{old_tag}\b", f"struct {target_tag}", content)
             
         if content != original:
             with open(filepath, "w") as f: f.write(content)
-            print(f"  [🛠️] Harmonized typedef tags for {tag} in {os.path.basename(filepath)}")
+            print(f"  [🛠️] Harmonized typedef tags: '{old_tag}' -> '{target_tag}' in {os.path.basename(filepath)}")
             fixes += 1
 
     # ── FIX E: Incomplete SDK Types (sizeof traps) ────────────────────────
