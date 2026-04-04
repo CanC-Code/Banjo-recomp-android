@@ -327,7 +327,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # FIX: Uses dynamic check string to accurately verify if the body exists
+    # FIX: Using highly specific checks to avoid false positive matches on common words like "errno"
     if categories["need_struct_body"]:
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
@@ -335,11 +335,11 @@ def apply_fixes(categories):
             if tag == "Mtx": continue  
             body = N64_STRUCT_BODIES.get(tag)
             
-            check_str = tag
-            if tag == "LookAt": check_str = "l[2]"
-            elif tag == "OSPfs": check_str = "activebank"
-            elif tag == "OSContStatus": check_str = "errno"
-            elif tag == "OSContPad": check_str = "stick_x"
+            check_str = f"typedef struct {tag}_s {{"
+            if tag == "LookAt": check_str = "__LookAtDir l[2];"
+            elif tag == "OSPfs": check_str = "u8 activebank;"
+            elif tag == "OSContStatus": check_str = "u16 type;"
+            elif tag == "OSContPad": check_str = "s8  stick_x;"
             
             if body and check_str not in types_content:
                 types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
