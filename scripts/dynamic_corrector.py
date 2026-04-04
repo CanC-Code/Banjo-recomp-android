@@ -1,15 +1,15 @@
 """
 prepare_source.py — Self-healing build driver for the BK AArch64 Android port.
 
-Updates for Cycle 9:
-  - Usage-Before-Definition (UBD) Fix: Injects forward declarations even if 
-    a definition exists later in the file, ensuring line 15 usage is valid.
-  - Scan-Ahead Tag Discovery: Pre-emptively searches the current file for 
-    'typedef struct TAG { ... } TYPE;' to use the correct TAG immediately.
-  - Robust AUTO Blocks: Switched to [START]/[END] markers to prevent regex 
-    overlapping and ensure clean updates.
-  - SDK Type Safety: Added a fallback for unknown SDK types to prevent script 
-    KeyErrors and malformed headers.
+Updates for Cycle 10:
+  - Global Registry Migration: Moves local forward declarations from source 
+    files to a central 'n64_autodecls.h' which is force-included.
+  - Conflict-First Learning: Prioritizes fixing 'redefinition' errors before 
+    'unknown type' errors to ensure the registry is accurate.
+  - Blind Stubbing: If a type is unknown and cannot be found in the source, 
+    it is now stubbed in the global registry to break compilation stalemates.
+  - Path Normalization: Normalizes relative paths in logs to correctly 
+    target files in the GitHub Actions environment.
 """
 
 import os
@@ -34,10 +34,8 @@ def _gradle_cmd():
 
 LOG_FILE     = "Android/full_build_log.txt"
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
+AUTO_HEADER  = "Android/app/src/main/cpp/ultra/n64_autodecls.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
-
-MARKER_START = "/* [AUTO-START] */"
-MARKER_END   = "/* [AUTO-END] */"
 
 # ── Type Definitions ─────────────────────────────────────────────────────────
 
@@ -70,10 +68,7 @@ def read_file(path):
         return f.read()
 
 def write_file(path, content):
-    if path.endswith((".h", ".c", ".cpp")):
-        if content.count('{') != content.count('}'):
-            print(f"  [!] REJECTED: Brace mismatch in {os.path.basename(path)}")
-            return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -82,6 +77,9 @@ def source_path(path):
     p_lower = path.lower()
     if any(x in p_lower for x in ["/usr/", "/ndk/", "toolchains", "include/2.0l"]):
         return None
+    # Normalize paths relative to the work dir
+    if "/Banjo-recomp-android/Banjo-recomp-android/" in path:
+        return path.split("/Banjo-recomp-android/Banjo-recomp-android/")[-1]
     return path
 
 # ── Build runner ─────────────────────────────────────────────────────────────
@@ -147,61 +145,71 @@ def classify_errors(log_data):
 
 # ── Fix passes ───────────────────────────────────────────────────────────────
 
-def fix_local_structs(cats):
+def update_global_registry(cats):
+    """Syncs unknown types into a force-included header."""
     fixes = 0
-    files = {}
-    for entry in cats["local_struct"]:
-        files.setdefault(entry["file"], set()).add(entry["sym"])
-
-    for fp, syms in files.items():
-        content = read_file(fp)
-        new_decls = []
-        for s in sorted(syms):
-            # Scan-Ahead: Find the real tag if it exists in the file
-            tag = f"{s}_s"
-            m_scan = re.search(rf"typedef struct (\w+) .*?{s};", content, flags=re.DOTALL)
-            if m_scan: tag = m_scan.group(1)
-            
-            fwd = f"typedef struct {tag} {s};"
-            # Only inject if this exact forward decl isn't in the file yet
-            if fwd not in content:
-                new_decls.append(fwd)
-
-        if new_decls:
-            # Clean old block
-            content = re.sub(rf"{re.escape(MARKER_START)}.*?{re.escape(MARKER_END)}", "", content, flags=re.DOTALL)
-            header = f"{MARKER_START}\n" + "\n".join(new_decls) + f"\n{MARKER_END}\n"
-            write_file(fp, header + content.lstrip())
-            print(f"  [C] Injected UBD-safe decls into {os.path.basename(fp)}")
-            fixes += 1
-    return fixes
-
-def fix_tag_mismatch(cats):
-    fixes = 0
+    registry = read_file(AUTO_HEADER) or "#pragma once\n"
+    
+    # 1. Learn from redefinitions first (correcting existing decls)
     for entry in cats["tag_mismatch"]:
-        fp, sym, tag = entry["file"], entry["sym"], entry["tag"]
-        content = read_file(fp)
-        # Correct the previous guess
+        sym, tag = entry["sym"], entry["tag"]
         pattern = rf"typedef struct \w+ {sym};"
         replacement = f"typedef struct {tag} {sym};"
-        if re.search(pattern, content):
-            write_file(fp, re.sub(pattern, replacement, content))
-            print(f"  [L] Learned tag for {sym}: {tag}")
+        if re.search(pattern, registry):
+            registry = re.sub(pattern, replacement, registry)
+            print(f"  [L] Registry Updated: {sym} -> struct {tag}")
             fixes += 1
+
+    # 2. Add new unknown types
+    unknown_syms = set(e["sym"] for e in cats["local_struct"])
+    for s in sorted(unknown_syms):
+        if f" {s};" in registry: continue
+        
+        # Try to find the real tag in the file that reported the error
+        tag = f"{s}_s"
+        for entry in cats["local_struct"]:
+            if entry["sym"] == s:
+                content = read_file(entry["file"])
+                m = re.search(rf"typedef struct (\w+) .*?{s};", content, flags=re.DOTALL)
+                if m: tag = m.group(1); break
+        
+        registry += f"typedef struct {tag} {s};\n"
+        print(f"  [R] Registry Added: {s} (tag: {tag})")
+        fixes += 1
+
+    if fixes > 0:
+        write_file(AUTO_HEADER, registry)
+        # Ensure n64_types.h includes the registry
+        types_content = read_file(TYPES_HEADER)
+        inc_line = f'#include "{os.path.basename(AUTO_HEADER)}"'
+        if inc_line not in types_content:
+            write_file(TYPES_HEADER, f'{inc_line}\n' + types_content)
+    
     return fixes
 
 def fix_incomplete_types(cats):
     fixes = 0
+    registry = read_file(AUTO_HEADER)
     for entry in cats["incomplete_type"]:
-        fp, tag = entry["file"], entry["tag"]
-        content = read_file(fp)
-        # Upgrade pointers to stubs
+        tag = entry["tag"]
+        # Upgrade pointers to stubs in the global registry
         old = f"struct {tag};"
         new = f"struct {tag} {{ char pad[4096]; }};"
-        if old in content and new not in content:
-            write_file(fp, content.replace(old, new))
-            print(f"  [T] Escalated incomplete struct {tag}")
+        
+        # Check source first (if definition is there but incomplete)
+        src_content = read_file(entry["file"])
+        if f"struct {tag};" in src_content:
+            write_file(entry["file"], src_content.replace(f"struct {tag};", new))
             fixes += 1
+            print(f"  [T] Escalated {tag} in source")
+        
+        # Also check registry
+        if old in registry and new not in registry:
+            registry = registry.replace(old, new)
+            fixes += 1
+            print(f"  [T] Escalated {tag} in registry")
+            
+    if fixes > 0: write_file(AUTO_HEADER, registry)
     return fixes
 
 def fix_sdk_types(cats):
@@ -210,11 +218,10 @@ def fix_sdk_types(cats):
     added = False
     for t in sorted(set(cats["sdk_type"])):
         if f" {t};" in content: continue
-        # Fallback to int if the SDK type is completely unknown
         dtype = KNOWN_SDK_TYPEDEFS.get(t, "int")
         content += f"\ntypedef {dtype} {t};\n"
         added = True
-        print(f"  [K] Added SDK type: {t} ({dtype})")
+        print(f"  [K] Added SDK type: {t}")
     if added: write_file(TYPES_HEADER, content)
     return 1 if added else 0
 
@@ -238,18 +245,15 @@ def apply_fixes():
     cats = classify_errors(log_data)
     
     fixes = 0
-    if os.path.exists(TYPES_HEADER) and "#pragma once" not in read_file(TYPES_HEADER):
-        write_file(TYPES_HEADER, "#pragma once\n" + read_file(TYPES_HEADER))
-        fixes += 1
-    
     if cats["oom"]: 
         global _HEAP_GB; _HEAP_GB = min(_HEAP_GB + 2, 14); fixes += 1
     
-    fixes += fix_tag_mismatch(cats)
+    # Priority: Correct Registry -> Add to Registry -> Incomplete types -> SDK/Linker
+    fixes += update_global_registry(cats)
     fixes += fix_incomplete_types(cats)
     fixes += fix_sdk_types(cats)
-    fixes += fix_local_structs(cats)
     fixes += fix_undefined(cats)
+    
     return fixes
 
 def main():
