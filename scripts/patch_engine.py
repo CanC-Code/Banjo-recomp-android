@@ -47,14 +47,14 @@ def ensure_types_header_base():
         pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int32_t|uint64_t|int64_t|u32|u64|s32)\s+{p}\s*;\n?"
         content = re.sub(pattern, "", content)
 
-    # CRITICAL FIX: Actively scrub incorrect structural stubs for primitive N64 SDK aliases
+    # 3. Actively scrub incorrect structural stubs for primitive N64 SDK aliases
     for p in ["OSIntMask", "OSTime", "OSId", "OSPri"]:
         content = re.sub(rf"(?:typedef\s+)?struct\s+{p}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{p}\s*)?;?\n?", "", content)
         content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{p}\s*;\n?", "", content)
         content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s+{p}\s*;\n?", "", content)
         content = re.sub(rf"struct\s+{p}(?:_s)?\s*;\n?", "", content)
 
-    # 3. Deterministically reconstruct the core primitives
+    # 4. Deterministically reconstruct the core primitives
     core_primitives = """
 #include <stdint.h>
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -133,14 +133,23 @@ def apply_fixes(categories):
             types_content = new_types
             fixes += 1
 
-    # --- DYNAMIC MISSING MEMBERS GENERATION ---
+    # --- DYNAMIC MISSING MEMBERS GENERATION (WITH ARRAY HEURISTICS) ---
     for struct_name, member_name in sorted(categories.get("missing_members", [])):
         types_content = read_file(TYPES_HEADER)
         pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}})"
+        
+        # SMART HEURISTIC: Inject arrays or pointers based on member names to avoid subscript errors
+        array_names = {"id", "label", "name", "buffer", "data", "str", "string", "temp"}
+        
         def inject_member(match):
             body = match.group(2)
             if member_name not in body:
-                return f"{match.group(1)}{body}    long long int {member_name};\n{match.group(3)}"
+                if member_name in array_names:
+                    return f"{match.group(1)}{body}    unsigned char {member_name}[128]; /* AUTO-ARRAY */\n{match.group(3)}"
+                elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower():
+                    return f"{match.group(1)}{body}    void* {member_name}; /* AUTO-POINTER */\n{match.group(3)}"
+                else:
+                    return f"{match.group(1)}{body}    long long int {member_name};\n{match.group(3)}"
             return match.group(0)
             
         if re.search(pattern, types_content):
@@ -150,7 +159,14 @@ def apply_fixes(categories):
                 types_content = new_types
                 fixes += 1
         else:
-            types_content += f"\nstruct {struct_name} {{\n    long long int {member_name};\n    long long int force_align[64];\n}};\n"
+            if member_name in array_names:
+                injected_field = f"unsigned char {member_name}[128];"
+            elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower():
+                injected_field = f"void* {member_name};"
+            else:
+                injected_field = f"long long int {member_name};"
+                
+            types_content += f"\nstruct {struct_name} {{\n    {injected_field}\n    long long int force_align[64];\n}};\n"
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
