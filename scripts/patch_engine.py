@@ -1,8 +1,9 @@
+
 import os
 import re
 from collections import defaultdict
 from error_parser import (
-    BRACE_MATCH, N64_STRUCT_BODIES, KNOWN_MACROS, 
+    BRACE_MATCH, N64_STRUCT_BODIES, KNOWN_MACROS,
     KNOWN_FUNCTION_MACROS, KNOWN_GLOBAL_TYPES, read_file, write_file
 )
 
@@ -33,7 +34,7 @@ def ensure_types_header_base():
             content = "#pragma once\n" + content
             write_file(TYPES_HEADER, content)
         return content
-        
+
     content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
     os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
     write_file(TYPES_HEADER, content)
@@ -46,7 +47,7 @@ def apply_fixes(categories):
 
     types_content = ensure_types_header_base()
 
-    if categories["extraneous_brace"]:
+    if categories.get("extraneous_brace"):
         original = types_content
         types_content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", types_content)
         types_content = re.sub(r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{", r"typedef struct \1 {", types_content)
@@ -54,10 +55,9 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    for filepath, func in sorted(categories["conflicting_types"]):
+    for filepath, func in sorted(categories.get("conflicting_types", [])):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
-        # Robust multi-line matcher: captures return type and arguments correctly
         pattern = rf"(?:^|\n)([A-Za-z_][^;{{]*?\b{re.escape(func)}\b\s*\([^;{{]*\))\s*\{{"
         match = re.search(pattern, content)
         if match:
@@ -65,7 +65,7 @@ def apply_fixes(categories):
             prototype = re.sub(r'//.*', '', prototype)
             prototype = re.sub(r'/\*.*?\*/', '', prototype, flags=re.DOTALL)
             prototype = re.sub(r'\s+', ' ', prototype).strip()
-            
+
             normalized_content = re.sub(r'\s+', ' ', content)
             if prototype not in normalized_content:
                 includes = list(re.finditer(r"#include\s+.*?\n", content))
@@ -79,7 +79,7 @@ def apply_fixes(categories):
                 fixed_files.add(filepath)
                 fixes += 1
 
-    for filepath in sorted(categories["missing_n64_types"]):
+    for filepath in sorted(categories.get("missing_n64_types", [])):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         content = read_file(filepath)
         if 'include "ultra/n64_types.h"' not in content:
@@ -87,7 +87,7 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    for filepath in sorted(categories["actor_pointer"]):
+    for filepath in sorted(categories.get("actor_pointer", [])):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
         original = content
@@ -98,11 +98,11 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    if categories["local_struct_fwd"]:
+    if categories.get("local_struct_fwd"):
         file_to_types = defaultdict(set)
-        for filepath, type_name in categories["local_struct_fwd"]: 
+        for filepath, type_name in categories["local_struct_fwd"]:
             file_to_types[filepath].add(type_name)
-            
+
         for filepath, type_names in sorted(file_to_types.items()):
             if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
             content = read_file(filepath)
@@ -110,7 +110,7 @@ def apply_fixes(categories):
             for t in sorted(type_names):
                 tag = t[1].lower() + t[2:] if len(t) > 1 and t[0] in ('s', 'S') else t
                 fwd_decl = f"typedef struct {tag}_s {t};"
-                if fwd_decl not in content: 
+                if fwd_decl not in content:
                     fwd_lines.append(fwd_decl)
             if fwd_lines:
                 injection = "/* AUTO: forward declarations */\n" + "\n".join(fwd_lines) + "\n"
@@ -118,10 +118,9 @@ def apply_fixes(categories):
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ── FIX D: Typedef / Struct Redefinition ────────────────────────────
     fixd_files = set()
-    for filepath, _, _ in categories["typedef_redef"]: fixd_files.add(filepath)
-    for filepath, _ in categories["struct_redef"]: fixd_files.add(filepath)
+    for filepath, _, _ in categories.get("typedef_redef", []): fixd_files.add(filepath)
+    for filepath, _ in categories.get("struct_redef", []): fixd_files.add(filepath)
 
     for filepath in sorted(fixd_files):
         if not os.path.exists(filepath): continue
@@ -135,36 +134,24 @@ def apply_fixes(categories):
             re.DOTALL
         )
         tag_matches = defaultdict(list)
-        for m in tagged_body_re.finditer(content): 
+        for m in tagged_body_re.finditer(content):
             tag_matches[m.group(1)].append(m)
-            
+
         for tag, matches in tag_matches.items():
             if len(matches) > 1:
-                for m in reversed(matches[:-1]): 
+                for m in reversed(matches[:-1]):
                     content = content[:m.start()] + content[m.end():]
 
-        for fp2, type1, type2 in categories["typedef_redef"]:
+        for fp2, type1, type2 in categories.get("typedef_redef", []):
             if fp2 != filepath: continue
-            
+
             t1 = type1.replace("struct ", "").strip()
             t2 = type2.replace("struct ", "").strip()
             if t1.startswith("("): t1 = ""
             if t2.startswith("("): t2 = ""
-            
-            tag1 = t1 if t1 else None
-            tag2 = t2 if t2 else None
-            
-            if tag1 and not tag2:
-                target_tag = tag1
-                alias = tag1[:-2] if tag1.endswith("_s") else tag1
-            elif tag2 and not tag1:
-                target_tag = tag2
-                alias = tag2[:-2] if tag2.endswith("_s") else tag2
-            elif tag1 and tag2:
-                target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
-                alias = tag1 if target_tag == tag2 else tag2
-            else:
-                continue
+
+            target_tag = t2 if t2.endswith("_s") else (t1 if t1.endswith("_s") else t2)
+            alias = t1 if target_tag == t2 else t2
 
             if alias in KNOWN_GLOBAL_TYPES or target_tag in KNOWN_GLOBAL_TYPES:
                 content, cnt = re.subn(
@@ -173,7 +160,7 @@ def apply_fixes(categories):
                 )
                 content = re.sub(rf'typedef\s+struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})\s+[^;]*\b{re.escape(alias)}\b[^;]*;\n?', '', content)
                 continue
-            
+
             anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
                 content, cnt = re.subn(
@@ -187,7 +174,7 @@ def apply_fixes(categories):
                     f"struct {target_tag}", content
                 )
 
-        for fp2, tag in categories["struct_redef"]:
+        for fp2, tag in categories.get("struct_redef", []):
             if fp2 != filepath: continue
             if tag in KNOWN_GLOBAL_TYPES:
                 content, cnt = re.subn(
@@ -200,7 +187,7 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    if categories["incomplete_sizeof"]:
+    if categories.get("incomplete_sizeof"):
         types_content = read_file(TYPES_HEADER)
         types_added = False
         seen = set()
@@ -214,10 +201,10 @@ def apply_fixes(categories):
 
             if tag in seen: continue
             seen.add(tag)
-            
+
             base_tag = tag[:-2] if tag.endswith("_s") else tag
             if base_tag in N64_STRUCT_BODIES: continue
-                
+
             is_sdk = (tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_")) or (tag.endswith("_s") and tag[:-2].isupper()))
             if is_sdk and f"struct {tag} {{" not in types_content:
                 types_content += f"\nstruct {tag} {{ long long int force_align[32]; }};\n"
@@ -227,7 +214,7 @@ def apply_fixes(categories):
             fixes += 1
 
     seen_static = set()
-    for filepath, func_name in categories["static_conflict"]:
+    for filepath, func_name in categories.get("static_conflict", []):
         key = (filepath, func_name)
         if key in seen_static: continue
         seen_static.add(key)
@@ -242,7 +229,7 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    if categories["undeclared_macros"]:
+    if categories.get("undeclared_macros"):
         types_content = read_file(TYPES_HEADER)
         macros_added = False
         for macro in sorted(categories["undeclared_macros"]):
@@ -263,7 +250,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["implicit_func"]:
+    if categories.get("implicit_func"):
         math_funcs   = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
         string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
         stdlib_funcs = {"malloc", "free", "exit", "atoi", "rand", "srand"}
@@ -281,7 +268,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["undefined_symbols"]:
+    if categories.get("undefined_symbols"):
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
             write_file(STUBS_FILE, '#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
@@ -302,7 +289,7 @@ def apply_fixes(categories):
             write_file(STUBS_FILE, existing_stubs)
             fixes += 1
 
-    if categories["audio_states"]:
+    if categories.get("audio_states"):
         types_content = read_file(TYPES_HEADER)
         audio_added = False
         for t in sorted(categories["audio_states"]):
@@ -313,7 +300,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["undeclared_n64_types"]:
+    if categories.get("undeclared_n64_types"):
         types_content = read_file(TYPES_HEADER)
         k_added = False
         if "OSIntMask" in categories["undeclared_n64_types"]:
@@ -334,7 +321,7 @@ def apply_fixes(categories):
                 write_file(STUBS_FILE, existing_stubs)
                 fixes += 1
 
-    if categories["undeclared_gbi"]:
+    if categories.get("undeclared_gbi"):
         types_content = read_file(TYPES_HEADER)
         gbi_added = False
         for ident in sorted(categories["undeclared_gbi"]):
@@ -349,25 +336,22 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ── Forward N64 SDK structs and ensure header includes ──
-    if categories["missing_types"]:
+    if categories.get("missing_types"):
         types_content = read_file(TYPES_HEADER)
         types_added = False
-        
-        # Ensure safely iterable logic handles both strings and tuples
+
         mt = categories["missing_types"]
         if not isinstance(mt, (list, set, tuple)): mt = []
-        
+
         for item in sorted(mt, key=str):
             filepath = None
             if isinstance(item, tuple) and len(item) >= 2:
                 filepath, tag = item[0], item[1]
             else:
                 tag = item
-                
+
             base_tag = tag[:-2] if tag.endswith("_s") else tag
-            
-            # Forward directly to the SDK struct bodies resolver and inject #includes
+
             if base_tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES:
                 if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
                     c = read_file(filepath)
@@ -375,11 +359,11 @@ def apply_fixes(categories):
                         write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                         fixed_files.add(filepath)
                         fixes += 1
-                        
+
                 if base_tag in N64_STRUCT_BODIES:
-                    if isinstance(categories["need_struct_body"], set):
+                    if isinstance(categories.get("need_struct_body"), set):
                         categories["need_struct_body"].add(base_tag)
-                    elif isinstance(categories["need_struct_body"], list):
+                    elif isinstance(categories.get("need_struct_body"), list):
                         categories["need_struct_body"].append(base_tag)
                     else:
                         categories["need_struct_body"] = {base_tag}
@@ -388,81 +372,76 @@ def apply_fixes(categories):
             if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
                 types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
                 types_added = True
-                
+
         if types_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["need_struct_body"]:
+    if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
-        
+
         nsb = categories["need_struct_body"]
         if not isinstance(nsb, (list, set, tuple)): nsb = []
-        
+
         for raw_tag in sorted(nsb):
             tag = raw_tag[:-2] if raw_tag.endswith("_s") else raw_tag
-            if tag == "Mtx": 
+            if tag == "Mtx":
                 categories["need_mtx_body"] = True
-                continue  
+                continue
             body = N64_STRUCT_BODIES.get(tag)
-            
+
             check_str = f"typedef struct {tag}_s {{"
             if tag == "LookAt": check_str = "__LookAtDir l[2];"
             elif tag == "OSPfs": check_str = "u8 activebank;"
             elif tag == "OSContStatus": check_str = "u16 type;"
             elif tag == "OSContPad": check_str = "s8  stick_x;"
             elif tag == "OSPiHandle": check_str = "u8 pageSize;"
-            
+
             needs_injection = False
             if body:
                 if check_str not in types_content:
                     needs_injection = True
                 elif not body.startswith("typedef union") and f"struct {tag}_s {{" not in types_content:
                     needs_injection = True
-                    
+
             if needs_injection:
-                # Completely wipe any variations of the struct to prevent redefinitions
                 types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
                 types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
-                
+
                 if tag == "LookAt":
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__LookAtDir\s*;\n?", "", types_content)
 
-                # Fix: Make sure inner SDK structs explicitly define the `_s` naming pattern requested by decompiled C code
                 if not body.startswith("typedef union") and f"struct {tag}_s" not in body:
                     body = re.sub(rf"typedef\s+struct\s*(?:{re.escape(tag)})?\s*\{{", f"typedef struct {tag}_s {{", body, count=1)
 
                 types_content += "\n" + body
                 bodies_added = True
-                
+
         if bodies_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["need_mtx_body"]:
+    if categories.get("need_mtx_body"):
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            # Comprehensively wipe all legacy dummy Mtx typedefs
             types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
             types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
             types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
-            types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
+            types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
             types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
-            
-            # Wipe any "typedef union Mtx { ... } Mtx;" dummies if they exist
             types_content = re.sub(rf"typedef\s+union\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
 
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["local_fwd_only"]:
+    if categories.get("local_fwd_only"):
         file_to_types = defaultdict(set)
-        for filepath, type_name in categories["local_fwd_only"]: 
+        for filepath, type_name in categories.get("local_fwd_only", []):
             file_to_types[filepath].add(type_name)
 
         for filepath, type_names in sorted(file_to_types.items()):
@@ -487,7 +466,7 @@ def apply_fixes(categories):
                 fixed_files.add(filepath)
                 fixes += 1
 
-    if categories["missing_globals"]:
+    if categories.get("missing_globals"):
         types_content = read_file(TYPES_HEADER)
         globals_added = False
         for glob in sorted(categories["missing_globals"]):
