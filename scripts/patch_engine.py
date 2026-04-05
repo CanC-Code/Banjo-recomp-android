@@ -502,7 +502,7 @@ def apply_fixes(categories):
             content = strip_auto_preamble(content)
             changed = False
             for t in sorted(type_names):
-                body_pattern = rf"typedef\s+struct[^{{]*\{{[^{}]*}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
+                body_pattern = rf"typedef\s+struct[^{{]*\{{[^{{}}]*}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
                 if re.search(body_pattern, content):
                     fwd = f"/* AUTO: forward decl for type defined below */\ntypedef struct {t}_s {t};\n"
                     if f"typedef struct {t}_s {t};" not in content:
