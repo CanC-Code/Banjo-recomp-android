@@ -39,15 +39,21 @@ def ensure_types_header_base():
 
     changed = False
 
-    # FIX: Actively wipe out legacy C-style primitive typedefs (e.g. `unsigned long long u64;`) 
-    # so they don't clash with our new standard `<stdint.h>` block below.
-    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64"]
+    # FIX: Safely and strictly wipe out legacy C-style primitive typedefs 
+    # This strict regex ensures we DO NOT accidentally match `<stdint.h>` types like `int64_t`.
+    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"]
     for p in primitive_types:
-        pattern = rf"(?m)^[ \t]*typedef[ \t]+(?:unsigned|signed|long|short|int|char|float|double)[A-Za-z0-9_\s]*?\b{p}[ \t]*;[ \t]*\n?"
+        pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double)\s+{p}\s*;"
         new_content, n = re.subn(pattern, "", content)
         if n > 0:
             content = new_content
             changed = True
+
+    # REPAIR: If the previous buggy script corrupted the CORE block, wipe it so it generates fresh.
+    if "CORE_PRIMITIVES_DEFINED" in content and "typedef uint8_t u8;" not in content:
+        content = re.sub(r"#ifndef CORE_PRIMITIVES_DEFINED.*?#endif", "", content, flags=re.DOTALL)
+        content = content.replace("#define CORE_PRIMITIVES_DEFINED", "")
+        changed = True
 
     core_primitives = """
 #include <stdint.h>
@@ -63,6 +69,7 @@ typedef uint64_t u64;
 typedef int64_t s64;
 typedef float f32;
 typedef double f64;
+typedef int n64_bool;
 #endif
 """
     if "CORE_PRIMITIVES_DEFINED" not in content:
