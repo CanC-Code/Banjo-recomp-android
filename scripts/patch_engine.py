@@ -42,10 +42,17 @@ def ensure_types_header_base():
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
 
     # 2. Aggressively wipe out ANY loose primitive typedefs
-    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"]
+    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri"]
     for p in primitive_types:
-        pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int32_t|uint64_t|int64_t)\s+{p}\s*;\n?"
+        pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int32_t|uint64_t|int64_t|u32|u64|s32)\s+{p}\s*;\n?"
         content = re.sub(pattern, "", content)
+
+    # CRITICAL FIX: Actively scrub incorrect structural stubs for primitive N64 SDK aliases
+    for p in ["OSIntMask", "OSTime", "OSId", "OSPri"]:
+        content = re.sub(rf"(?:typedef\s+)?struct\s+{p}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{p}\s*)?;?\n?", "", content)
+        content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{p}\s*;\n?", "", content)
+        content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s+{p}\s*;\n?", "", content)
+        content = re.sub(rf"struct\s+{p}(?:_s)?\s*;\n?", "", content)
 
     # 3. Deterministically reconstruct the core primitives
     core_primitives = """
@@ -63,6 +70,12 @@ typedef int64_t s64;
 typedef float f32;
 typedef double f64;
 typedef int n64_bool;
+
+/* N64 SDK Primitive Aliases */
+typedef u32 OSIntMask;
+typedef u64 OSTime;
+typedef u32 OSId;
+typedef s32 OSPri;
 #endif
 """
     content = content.replace("#pragma once", f"#pragma once\n{core_primitives}")
@@ -89,7 +102,6 @@ def apply_fixes(categories):
     types_content = ensure_types_header_base()
 
     # --- DYNAMIC MACRO SCRUBBER ---
-    # If an identifier was previously stubbed as `#define XXX 0` but is actually a struct/type, scrub it!
     known_types = set()
     for _, tag in categories.get("missing_types", []): known_types.add(tag)
     for tag in categories.get("need_struct_body", []): known_types.add(tag)
@@ -158,6 +170,9 @@ def apply_fixes(categories):
         if tag in N64_STRUCT_BODIES:
             categories.setdefault("need_struct_body", set()).add(tag)
         else:
+            # Prevent primitive aliases from being stubbed as structs
+            if tag in ["OSIntMask", "OSTime", "OSId", "OSPri"]: continue
+            
             struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
             decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
             
@@ -413,7 +428,6 @@ def apply_fixes(categories):
         for tag in sorted(categories["need_struct_body"]):
             body = N64_STRUCT_BODIES.get(tag)
             if body:
-                # CRITICAL FIX: Ensure the ENTIRE struct exists, not just leftover partial pieces
                 if not re.search(rf"\}}\s*{re.escape(tag)}\s*;", types_content) and not re.search(rf"typedef\s+struct\s+{re.escape(tag)}\b", types_content):
                     if tag == "LookAt":
                         types_content = re.sub(rf"(?m)^typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
