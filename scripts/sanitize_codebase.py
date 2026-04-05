@@ -4,6 +4,7 @@ import sys
 
 TARGET_DIRS = ["src", "include"]
 
+# Pre-compile the token replacements for performance
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "TRUE",
@@ -22,8 +23,35 @@ TOKEN_REPLACEMENTS = {
     r"\bsin\b": "n64_sin",
     r"\bcos\b": "n64_cos",
 }
+COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
+
+def safe_token_replacement(content):
+    """
+    Safely replaces tokens in C/C++ code while ignoring comments and strings.
+    """
+    # This regex matches strings, chars, block comments, line comments, or standard code
+    pattern = re.compile(
+        r'(?P<string>"(?:\\.|[^"\\])*")|'
+        r"(?P<char>'(?:\\.|[^'\\])*')|"
+        r'(?P<block_comment>/\*.*?\*/)|'
+        r'(?P<line_comment>//[^\n]*)|'
+        r'(?P<code>[^"\'/]+|/)', 
+        re.DOTALL
+    )
+
+    def replacer(match):
+        if match.group('code'):
+            code_chunk = match.group('code')
+            # Only apply token replacements to actual code chunks
+            for pat, repl in COMPILED_TOKENS:
+                code_chunk = pat.sub(repl, code_chunk)
+            return code_chunk
+        # Return strings and comments completely untouched
+        return match.group(0)
+
+    return pattern.sub(replacer, content)
 
 def wrap_shadow_headers(content, filename):
     # System headers that are often shadowed by N64 decompilations
@@ -35,6 +63,7 @@ def wrap_shadow_headers(content, filename):
     return content
 
 def fix_decompiler_artifacts(content, filename):
+    # 1. Fix shadowed variable names (e.g., u8 u8[10]; -> u8 buffer_u8[10];)
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
@@ -44,23 +73,27 @@ def fix_decompiler_artifacts(content, filename):
         content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buffer_{var_name}[', content)
         content = re.sub(rf'\b(memcpy|memset|memmove|n64_memcpy|n64_memset|n64_memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
+    # 2. Fix array assignments directly mapped from the decompiler
     assign_pattern = re.compile(
-        rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*;',
+        rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([^;]+)\s*;',
         re.MULTILINE
     )
 
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
+        src = src.strip()
         final_name = f"buffer_{name}" if dtype == name else name
         return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
 
+    # 3. Emergency tmp buffer injection (Thread-safe)
     is_tmp_used = '[tmp]' in content or 'tmp[' in content
     is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
-    
+
     if is_tmp_used and not is_tmp_declared:
-        tmp_decl = "\n/* Emergency Decompiler Fix */\nstatic u8 tmp[1024] = {0};\n"
+        # __thread ensures this variable is unique per thread to prevent cross-contamination
+        tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\nstatic __thread u8 tmp[1024] = {0};\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
             pos = includes[-1].end()
@@ -68,6 +101,7 @@ def fix_decompiler_artifacts(content, filename):
         else:
             content = tmp_decl + content
 
+    # 4. Standard Math definition patches
     if 'M_PI' in content and 'math.h' in content and '#define M_PI' not in content:
         pi_fix = "\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n"
         content = re.sub(r'^(#include <math\.h>)$', r'\1' + pi_fix, content, flags=re.MULTILINE)
@@ -116,25 +150,21 @@ def sanitize_codebase(root_path):
                 filepath = os.path.join(root, filename)
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-                        lines = f.readlines()
-                except Exception: continue
+                        original_content = f.read()
+                except Exception: 
+                    continue
 
-                original_content = "".join(lines)
-                new_lines = []
-                for line in lines:
-                    if line.strip().startswith("#include"):
-                        new_lines.append(line)
-                        continue
-                    for pattern, replacement in TOKEN_REPLACEMENTS.items():
-                        line = re.sub(pattern, replacement, line)
-                    new_lines.append(line)
-
-                content = "".join(new_lines)
+                # 1. Safely replace tokens (ignores strings and comments)
+                content = safe_token_replacement(original_content)
+                
+                # 2. Fix array assignments and uninitialized tmp variables
                 content = fix_decompiler_artifacts(content, filename)
+                
+                # 3. Fix static/non-static conflicts
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
 
-                # Wrap shadowed system headers
+                # 4. Wrap shadowed system headers
                 content = wrap_shadow_headers(content, filename)
 
                 if content != original_content:
@@ -142,6 +172,7 @@ def sanitize_codebase(root_path):
                         f.write(content)
                     patch_count += 1
                     print(f"  [Sanitized] {filepath}")
+                    
     print(f"✅ Sanitization Complete! {patch_count} files modified.")
 
 if __name__ == "__main__":
