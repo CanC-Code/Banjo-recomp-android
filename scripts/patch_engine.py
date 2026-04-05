@@ -48,11 +48,13 @@ def ensure_types_header_base():
             content = content.replace("#pragma once", f"#pragma once\n{injection}\n")
             changed = True
             
-    # BUG FIX: Purge any bad auto-macros that were accidentally injected for Audio States
-    for t in N64_AUDIO_STATE_TYPES:
-        bad_macro = f"\n#ifndef {t}\n#define {t} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
-        if bad_macro in content:
-            content = content.replace(bad_macro, "")
+    # BULLETPROOF BUG FIX: Purge any bad auto-macros that were accidentally injected
+    bad_macro_types = set(N64_AUDIO_STATE_TYPES) | set(KNOWN_GLOBAL_TYPES) | {"Mtx", "LookAt", "OSPfs"}
+    for t in bad_macro_types:
+        pattern = rf"(?m)^[ \t]*#ifndef\s+{t}[ \t]*\n[ \t]*#define\s+{t}\s+0\s*/\*\s*AUTO-INJECTED UNKNOWN MACRO\s*\*/[ \t]*\n[ \t]*#endif[ \t]*\n?"
+        new_content, count = re.subn(pattern, "", content)
+        if count > 0:
+            content = new_content
             changed = True
             
     for t in N64_AUDIO_STATE_TYPES:
