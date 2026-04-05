@@ -423,17 +423,40 @@ def apply_fixes(categories):
                     needs_injection = True
 
             if needs_injection:
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
-                types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*\{{[^{}]*}}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
-                types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
+                types_content = re.sub(
+                    r"(?:typedef\s+)?struct\s*(?:{}|{}_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:{}|{}_s)\b[^;]*;\n?".format(
+                        re.escape(tag), re.escape(tag), re.escape(tag), re.escape(tag)
+                    ),
+                    "", types_content
+                )
+                types_content = re.sub(
+                    r"struct\s+(?:{}|{}_s)\s*\{{[^{}]*}}\s*;\n?".format(re.escape(tag), re.escape(tag)),
+                    "", types_content
+                )
+                types_content = re.sub(
+                    r"typedef\s+(?:struct\s+)?(?:{}|{}_s)\s+[^;]*\b(?:{}|{}_s)\b[^;]*;\n?".format(
+                        re.escape(tag), re.escape(tag), re.escape(tag), re.escape(tag)
+                    ),
+                    "", types_content
+                )
+                types_content = re.sub(
+                    r"struct\s+(?:{}|{}_s)\s*;\n?".format(re.escape(tag), re.escape(tag)),
+                    "", types_content
+                )
 
                 if tag == "LookAt":
-                    types_content = re.sub(rf"typedef\s+struct\s*\{{[^{}]*}}\s*__Light_t\s*;\n?", "", types_content)
-                    types_content = re.sub(rf"typedef\s+struct\s*\{{[^{}]*}}\s*__LookAtDir\s*;\n?", "", types_content)
+                    types_content = re.sub(
+                        r"typedef\s+struct\s*\{{[^{}]*}}\s*__Light_t\s*;\n?", "", types_content
+                    )
+                    types_content = re.sub(
+                        r"typedef\s+struct\s*\{{[^{}]*}}\s*__LookAtDir\s*;\n?", "", types_content
+                    )
 
                 if not body.startswith("typedef union") and f"struct {tag}_s" not in body:
-                    body = re.sub(rf"typedef\s+struct\s*(?:{re.escape(tag)})?\s*\{{", f"typedef struct {tag}_s {{", body, count=1)
+                    body = re.sub(
+                        r"typedef\s+struct\s*(?:{})?\s*\{{".format(re.escape(tag)),
+                        f"typedef struct {tag}_s {{", body, count=1
+                    )
 
                 types_content += "\n" + body
                 bodies_added = True
@@ -445,12 +468,24 @@ def apply_fixes(categories):
     if categories.get("need_mtx_body"):
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
-            types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*\{{[^{}]*}}\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
-            types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+union\s*\{{[^{}]*}}\s*__Mtx_data\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+union\s*(?:Mtx|Mtx_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(
+                r"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content
+            )
+            types_content = re.sub(
+                r"struct\s+(?:Mtx|Mtx_s)\s*\{{[^{}]*}}\s*;\n?", "", types_content
+            )
+            types_content = re.sub(
+                r"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content
+            )
+            types_content = re.sub(
+                r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content
+            )
+            types_content = re.sub(
+                r"typedef\s+union\s*\{{[^{}]*}}\s*__Mtx_data\s*;\n?", "", types_content
+            )
+            types_content = re.sub(
+                r"typedef\s+union\s*(?:Mtx|Mtx_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content
+            )
 
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
