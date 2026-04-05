@@ -29,6 +29,8 @@ def ensure_types_header_base():
     """Ensure n64_types.h exists, cleans up bad macros, and injects primitives dynamically."""
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
+        # CRITICAL FIX: Clean up accidental self-inclusions at the top of the file
+        content = content.replace('#include "ultra/n64_types.h"\n', '')
         if "#pragma once" not in content:
             content = "#pragma once\n" + content
     else:
@@ -156,7 +158,8 @@ def apply_fixes(categories):
                 fixed_files.add(TYPES_HEADER)
                 fixes += 1
             
-        if filepath and os.path.exists(filepath):
+        # CRITICAL FIX: Ensure we never prepend n64_types.h to itself!
+        if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
             c = read_file(filepath)
             if 'include "ultra/n64_types.h"' not in c:
                 write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
@@ -164,7 +167,7 @@ def apply_fixes(categories):
                 fixes += 1
 
     # STANDARD FIXES
-    if categories["extraneous_brace"]:
+    if categories.get("extraneous_brace", False):
         original = types_content
         types_content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", types_content)
         types_content = re.sub(r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{", r"typedef struct \1 {", types_content)
@@ -172,7 +175,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    for filepath, func in sorted(categories["conflicting_types"]):
+    for filepath, func in sorted(categories.get("conflicting_types", [])):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
         pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
@@ -192,7 +195,7 @@ def apply_fixes(categories):
                 fixed_files.add(filepath)
                 fixes += 1
 
-    for filepath in sorted(categories["missing_n64_types"]):
+    for filepath in sorted(categories.get("missing_n64_types", [])):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         content = read_file(filepath)
         if 'include "ultra/n64_types.h"' not in content:
@@ -200,7 +203,7 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    for filepath in sorted(categories["actor_pointer"]):
+    for filepath in sorted(categories.get("actor_pointer", [])):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
         original = content
@@ -211,7 +214,7 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    if categories["local_struct_fwd"]:
+    if categories.get("local_struct_fwd", []):
         file_to_types = defaultdict(set)
         for filepath, type_name in categories["local_struct_fwd"]: file_to_types[filepath].add(type_name)
         for filepath, type_names in sorted(file_to_types.items()):
@@ -229,8 +232,8 @@ def apply_fixes(categories):
                 fixes += 1
 
     fixd_files = set()
-    for filepath, _, _ in categories["typedef_redef"]: fixd_files.add(filepath)
-    for filepath, _ in categories["struct_redef"]: fixd_files.add(filepath)
+    for filepath, _, _ in categories.get("typedef_redef", []): fixd_files.add(filepath)
+    for filepath, _ in categories.get("struct_redef", []): fixd_files.add(filepath)
 
     for filepath in sorted(fixd_files):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
@@ -249,7 +252,7 @@ def apply_fixes(categories):
             if len(matches) > 1:
                 for m in reversed(matches[:-1]): content = content[:m.start()] + content[m.end():]
 
-        for fp2, type1, type2 in categories["typedef_redef"]:
+        for fp2, type1, type2 in categories.get("typedef_redef", []):
             if fp2 != filepath: continue
             t1_m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type1)
             t2_m = re.search(r"struct ([A-Za-z_][A-Za-z0-9_]*)", type2)
@@ -279,7 +282,7 @@ def apply_fixes(categories):
                     f"struct {target_tag}", content
                 )
 
-        for fp2, tag in categories["struct_redef"]:
+        for fp2, tag in categories.get("struct_redef", []):
             if fp2 != filepath: continue
             content, cnt = re.subn(
                 rf'struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}\s*;\n?',
@@ -291,7 +294,7 @@ def apply_fixes(categories):
             fixed_files.add(filepath)
             fixes += 1
 
-    if categories["incomplete_sizeof"]:
+    if categories.get("incomplete_sizeof", []):
         types_content = read_file(TYPES_HEADER)
         types_added = False
         seen = set()
@@ -335,7 +338,7 @@ def apply_fixes(categories):
                 fixed_files.add(filepath)
                 fixes += 1
 
-    if categories["undeclared_macros"]:
+    if categories.get("undeclared_macros", []):
         types_content = read_file(TYPES_HEADER)
         macros_added = False
         for macro in sorted(categories["undeclared_macros"]):
@@ -356,7 +359,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["implicit_func"]:
+    if categories.get("implicit_func", []):
         math_funcs   = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
         string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
         stdlib_funcs = {"stdlib.h": ["malloc", "free", "exit", "atoi", "rand", "srand"]}
@@ -374,7 +377,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["undefined_symbols"]:
+    if categories.get("undefined_symbols", []):
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
             write_file(STUBS_FILE, '#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
@@ -395,7 +398,7 @@ def apply_fixes(categories):
             write_file(STUBS_FILE, existing_stubs)
             fixes += 1
 
-    if categories["undeclared_gbi"]:
+    if categories.get("undeclared_gbi", []):
         types_content = read_file(TYPES_HEADER)
         gbi_added = False
         for ident in sorted(categories["undeclared_gbi"]):
@@ -410,7 +413,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["need_struct_body"]:
+    if categories.get("need_struct_body", []):
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
         for tag in sorted(categories["need_struct_body"]):
@@ -431,7 +434,7 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["local_fwd_only"]:
+    if categories.get("local_fwd_only", []):
         file_to_types = defaultdict(set)
         for filepath, type_name in categories["local_fwd_only"]: file_to_types[filepath].add(type_name)
 
@@ -457,7 +460,7 @@ def apply_fixes(categories):
                 fixed_files.add(filepath)
                 fixes += 1
 
-    if categories["missing_globals"]:
+    if categories.get("missing_globals", []):
         types_content = read_file(TYPES_HEADER)
         globals_added = False
         for filepath, glob in sorted(categories["missing_globals"]):
