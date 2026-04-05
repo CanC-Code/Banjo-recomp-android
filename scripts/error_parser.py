@@ -99,6 +99,9 @@ POSIX_RESERVED_NAMES = {
 def read_file(path):
     with open(path, "r", encoding="utf-8", errors="replace") as f: return f.read()
 
+def write_file(path, content):
+    with open(path, "w", encoding="utf-8") as f: f.write(content)
+
 def extract_incomplete_type(line):
     m = re.search(r"incomplete (?:element )?type '(?:struct\s+)?([^']+)'", line)
     if m: return m.group(1)
