@@ -50,8 +50,8 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # FIX: Robustly inject missing matrix prototypes directly into n64_types.h
-    gu_prototypes = [
+    # Inject missing matrix and core SDK prototypes directly into n64_types.h
+    sdk_prototypes = [
         "void guMtxIdentF(float mf[4][4]);",
         "void guMtxIdent(Mtx *m);",
         "void guMtxF2L(float mf[4][4], Mtx *m);",
@@ -59,9 +59,12 @@ def apply_fixes(categories):
         "void guTranslateF(float mf[4][4], float x, float y, float z);",
         "void guScaleF(float mf[4][4], float x, float y, float z);",
         "void guRotateF(float mf[4][4], float a, float x, float y, float z);",
-        "void guLookAtReflectF(float mf[4][4], LookAt *l, float xEye, float yEye, float zEye, float xAt, float yAt, float zAt, float xUp, float yUp, float zUp);"
+        "void guLookAtReflectF(float mf[4][4], LookAt *l, float xEye, float yEye, float zEye, float xAt, float yAt, float zAt, float xUp, float yUp, float zUp);",
+        "void osCreateMesgQueue(OSMesgQueue *mq, OSMesg *msgBuf, int count);",
+        "void osSetEventMesg(OSEvent e, OSMesgQueue *mq, OSMesg msg);",
+        "void osCreateThread(OSThread *t, OSId id, void (*entry)(void *), void *arg, void *sp, OSPri pri);"
     ]
-    for proto in gu_prototypes:
+    for proto in sdk_prototypes:
         if proto not in types_content:
             types_content += f"\n{proto}\n"
             fixes += 1
@@ -69,7 +72,6 @@ def apply_fixes(categories):
     for filepath, func in sorted(categories["conflicting_types"]):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
-        # FIX: Safer matching to handle arrays like float mf[4][4] in function signatures
         pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*\[\]]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
         match = re.search(pattern, content)
         if match:
