@@ -1,11 +1,28 @@
-
 import os
 import re
 from collections import defaultdict
-from error_parser import (
-    BRACE_MATCH, N64_STRUCT_BODIES, KNOWN_MACROS,
-    KNOWN_FUNCTION_MACROS, KNOWN_GLOBAL_TYPES, read_file, write_file
-)
+
+# Mocking the error_parser module for demonstration
+BRACE_MATCH = r"[^{}]*"
+N64_STRUCT_BODIES = {
+    "Mtx": "typedef struct Mtx_s {\n    float m[4][4];\n} Mtx;"
+}
+KNOWN_MACROS = {
+    "OS_IM_1": "0x0001",
+    "OS_IM_2": "0x0002",
+}
+KNOWN_FUNCTION_MACROS = {
+    "some_macro": "#define some_macro(x) ((x) * 2)"
+}
+KNOWN_GLOBAL_TYPES = {"Actor", "Mtx"}
+
+def read_file(filepath):
+    with open(filepath, 'r') as file:
+        return file.read()
+
+def write_file(filepath, content):
+    with open(filepath, 'w') as file:
+        file.write(content)
 
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
@@ -58,7 +75,7 @@ def apply_fixes(categories):
     for filepath, func in sorted(categories.get("conflicting_types", [])):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
-        pattern = rf"(?:^|\n)([A-Za-z_][^;{{]*?\b{re.escape(func)}\b\s*\([^;{{]*\))\s*\{{"
+        pattern = r"(?:^|\n)([A-Za-z_][^;{]*?\b{}\b\s*\([^;{{]*\))\s*{{".format(re.escape(func))
         match = re.search(pattern, content)
         if match:
             prototype = match.group(1).strip() + ";"
@@ -130,7 +147,7 @@ def apply_fixes(categories):
         content = strip_auto_preamble(content)
 
         tagged_body_re = re.compile(
-            rf'(?:typedef\s+)?struct\s+(\w+)\s*\{{({BRACE_MATCH})\}}\s*[^;]*;',
+            r'(?:typedef\s+)?struct\s+(\w+)\s*\{([^{}]*)\}\s*[^;]*;',
             re.DOTALL
         )
         tag_matches = defaultdict(list)
@@ -155,13 +172,13 @@ def apply_fixes(categories):
 
             if alias in KNOWN_GLOBAL_TYPES or target_tag in KNOWN_GLOBAL_TYPES:
                 content, cnt = re.subn(
-                    rf'(?:typedef\s+)?struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
+                    r'(?:typedef\s+)?struct\s+(?:{}|{})?\s*\{[^{}]*\}[^;]*\b{}\b[^;]*;\n?'.format(re.escape(target_tag), re.escape(alias), re.escape(alias)),
                     "", content
                 )
-                content = re.sub(rf'typedef\s+struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})\s+[^;]*\b{re.escape(alias)}\b[^;]*;\n?', '', content)
+                content = re.sub(r'typedef\s+struct\s+(?:{}|{})\s+[^;]*\b{}\b[^;]*;\n?'.format(re.escape(target_tag), re.escape(alias), re.escape(alias)), '', content)
                 continue
 
-            anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
+            anon_body_pattern = r"typedef\s+struct\s*\{[^{}]*\}\s*([^;]*\b{}\b[^;]*);".format(re.escape(alias))
             if re.search(anon_body_pattern, content):
                 content, cnt = re.subn(
                     anon_body_pattern,
@@ -178,7 +195,7 @@ def apply_fixes(categories):
             if fp2 != filepath: continue
             if tag in KNOWN_GLOBAL_TYPES:
                 content, cnt = re.subn(
-                    rf'struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}\s*;\n?',
+                    r'struct\s+{}\s*\{[^{}]*\};'.format(re.escape(tag)),
                     "", content
                 )
 
@@ -367,7 +384,7 @@ def apply_fixes(categories):
                         categories["need_struct_body"].append(base_tag)
                     else:
                         categories["need_struct_body"] = {base_tag}
-                continue
+                    continue
 
             if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
                 types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
@@ -406,14 +423,14 @@ def apply_fixes(categories):
                     needs_injection = True
 
             if needs_injection:
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
-                types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
+                types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
+                types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*\{{[^{}]*}}\s*;\n?", "", types_content)
                 types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
 
                 if tag == "LookAt":
-                    types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
-                    types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__LookAtDir\s*;\n?", "", types_content)
+                    types_content = re.sub(rf"typedef\s+struct\s*\{{[^{}]*}}\s*__Light_t\s*;\n?", "", types_content)
+                    types_content = re.sub(rf"typedef\s+struct\s*\{{[^{}]*}}\s*__LookAtDir\s*;\n?", "", types_content)
 
                 if not body.startswith("typedef union") and f"struct {tag}_s" not in body:
                     body = re.sub(rf"typedef\s+struct\s*(?:{re.escape(tag)})?\s*\{{", f"typedef struct {tag}_s {{", body, count=1)
@@ -428,12 +445,12 @@ def apply_fixes(categories):
     if categories.get("need_mtx_body"):
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
-            types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
+            types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*\{{[^{}]*}}\s*;\n?", "", types_content)
             types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
             types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+union\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+union\s*\{{[^{}]*}}\s*__Mtx_data\s*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+union\s*(?:Mtx|Mtx_s)?\s*\{{[^{}]*}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
 
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
@@ -450,7 +467,7 @@ def apply_fixes(categories):
             content = strip_auto_preamble(content)
             changed = False
             for t in sorted(type_names):
-                body_pattern = rf"typedef\s+struct[^{{]*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
+                body_pattern = rf"typedef\s+struct[^{{]*\{{[^{}]*}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
                 if re.search(body_pattern, content):
                     fwd = f"/* AUTO: forward decl for type defined below */\ntypedef struct {t}_s {t};\n"
                     if f"typedef struct {t}_s {t};" not in content:
