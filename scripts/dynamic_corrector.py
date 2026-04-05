@@ -1,6 +1,6 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
-v85.0 — Global SDK Type enforcement, complex alias preservation, POSIX conflict resolution, and tuple-based source tracking.
+v86.0 — SDK primitive bootstrapping, POSIX handling, and robust struct injections.
 """
 
 import os
@@ -166,21 +166,6 @@ def run_build():
             print(f"🛑 Build execution failed: {e}")
             return False
 
-def _safe_str(v):
-    return v if isinstance(v, str) else ""
-
-def _unpack_typedef_redef_item(item):
-    if isinstance(item, (list, tuple)) and len(item) >= 3:
-        return str(item[0]), _safe_str(item[1]), _safe_str(item[2])
-    if isinstance(item, (list, tuple)) and len(item) == 2:
-        return str(item[0]), _safe_str(item[1]), ""
-    return str(item), "", ""
-
-def _unpack_pair(item):
-    if isinstance(item, (list, tuple)) and len(item) >= 2:
-        return str(item[0]), _safe_str(item[1])
-    return str(item), ""
-
 def extract_incomplete_type(line):
     m = re.search(r"incomplete (?:element )?type '(?:struct\s+)?([^']+)'", line)
     if m: return m.group(1)
@@ -212,7 +197,6 @@ def is_defined_locally(filepath, tag):
     pattern2 = rf"struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}"
     return bool(re.search(pattern1, c) or re.search(pattern2, c))
 
-
 def strip_auto_preamble(content):
     lines = content.split('\n')
     result = []
@@ -229,6 +213,7 @@ def strip_auto_preamble(content):
     return '\n'.join(result)
 
 def ensure_types_header_base():
+    """Ensure n64_types.h exists, injects stdint & primitives, and bootstraps audio states."""
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
         if "#pragma once" not in content:
@@ -236,9 +221,20 @@ def ensure_types_header_base():
     else:
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
-        
-    # Proactively inject audio states to prevent the build from failing at all
+
+    # Proactively inject basic N64 primitives and stdint.h so struct additions parse successfully!
+    required_types = [
+        ("#include <stdint.h>", "#include <stdint.h>"),
+        ("typedef uint32_t u32;", "typedef uint8_t u8;\ntypedef int8_t s8;\ntypedef uint16_t u16;\ntypedef int16_t s16;\ntypedef uint32_t u32;\ntypedef int32_t s32;\ntypedef uint64_t u64;\ntypedef int64_t s64;\ntypedef float f32;\ntypedef double f64;")
+    ]
+    
     changed = False
+    for check, injection in required_types:
+        if check not in content:
+            content = content.replace("#pragma once", f"#pragma once\n{injection}\n")
+            changed = True
+            
+    # Proactively inject audio states
     for t in N64_AUDIO_STATE_TYPES:
         if f"typedef struct {t}" not in content and f"}} {t};" not in content:
             content += f"\ntypedef struct {t} {{ long long int force_align[64]; }} {t};\n"
@@ -454,7 +450,7 @@ def classify_errors(log_data):
                 categories["posix_reserved_conflict"].append((filepath, func_name))
             else:
                 categories["static_conflict"].append((filepath, func_name))
-            
+
         if ("invalid application of 'sizeof'" in line or "arithmetic on a pointer to an incomplete type" in line or "array has incomplete element type" in line) and filepath:
             inc_type = extract_incomplete_type(line)
             if inc_type:
@@ -617,7 +613,7 @@ def apply_fixes():
                 content = re.sub(rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?', '', content)
                 continue
             
-            # Complex Alias Preserving Regex (FIX 1 implemented correctly)
+            # Complex Alias Preserving Regex
             anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
                 def _anon_sub(m, tt=target_tag):
@@ -749,14 +745,13 @@ def apply_fixes():
             write_file(STUBS_FILE, existing_stubs)
             fixes += 1
 
-    # ── Missing Type / Audio Type Handlers (File Injection Fixed) ───────
+    # ── Missing Type / Audio Type Handlers ───────
     for cat in ["audio_states", "missing_types"]:
         if categories.get(cat):
             types_content = read_file(TYPES_HEADER)
             types_added   = False
             
             for filepath, tag in sorted(categories[cat]):
-                # ALWAYS ensure the file throwing the type error has the definitions imported!
                 if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
                     c = read_file(filepath)
                     if 'include "ultra/n64_types.h"' not in c:
@@ -837,16 +832,22 @@ def apply_fixes():
             if tag == "Mtx": continue  
             body = N64_STRUCT_BODIES.get(tag)
             
-            # Using your dynamic check_str logic for the new types!
-            check_str = "l[2]" if tag == "LookAt" else ("fileSize" if tag == "OSPfs" else tag)
-            
-            if body and check_str not in types_content:
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{re.escape(tag)}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", types_content)
-                types_content += "\n" + body
-                bodies_added = True
+            if body:
+                # Dynamically set a unique check string for safe injection
+                if tag == "LookAt": check_str = "__Light_t"
+                elif tag == "OSPfs": check_str = "fileSize;"
+                elif tag == "OSContStatus": check_str = "errno;"
+                elif tag == "OSContPad": check_str = "stick_x;"
+                elif tag == "OSPiHandle": check_str = "pageSize;"
+                else: check_str = body.split('\n')[2].strip() 
+                
+                if check_str not in types_content:
+                    types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
+                    types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{re.escape(tag)}\s*;\n?", "", types_content)
+                    types_content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?", "", types_content)
+                    types_content = re.sub(rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", types_content)
+                    types_content += "\n" + body
+                    bodies_added = True
         if bodies_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
