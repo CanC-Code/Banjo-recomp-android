@@ -28,33 +28,28 @@ def strip_auto_preamble(content):
 def ensure_types_header_base():
     """Ensure n64_types.h exists, cleans up bad macros, and injects primitives dynamically."""
     if os.path.exists(TYPES_HEADER):
-        content = read_file(TYPES_HEADER)
+        original_content = read_file(TYPES_HEADER)
+        content = original_content
         # CRITICAL FIX: Clean up accidental self-inclusions at the top of the file
         content = content.replace('#include "ultra/n64_types.h"\n', '')
         if "#pragma once" not in content:
             content = "#pragma once\n" + content
     else:
+        original_content = ""
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
-    changed = False
+    # 1. Safely rip out the entire CORE_PRIMITIVES block (even if it's corrupted)
+    content = re.sub(r"#include <stdint\.h>\n#ifndef CORE_PRIMITIVES_DEFINED", "#ifndef CORE_PRIMITIVES_DEFINED", content)
+    content = re.sub(r"#ifndef CORE_PRIMITIVES_DEFINED.*?#endif\n?", "", content, flags=re.DOTALL)
 
-    # FIX: Safely and strictly wipe out legacy C-style primitive typedefs 
-    # This strict regex ensures we DO NOT accidentally match `<stdint.h>` types like `int64_t`.
+    # 2. Aggressively wipe out ANY loose primitive typedefs (both legacy C types and modern <stdint.h> types)
     primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"]
     for p in primitive_types:
-        pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double)\s+{p}\s*;"
-        new_content, n = re.subn(pattern, "", content)
-        if n > 0:
-            content = new_content
-            changed = True
+        pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int32_t|uint64_t|int64_t)\s+{p}\s*;\n?"
+        content = re.sub(pattern, "", content)
 
-    # REPAIR: If the previous buggy script corrupted the CORE block, wipe it so it generates fresh.
-    if "CORE_PRIMITIVES_DEFINED" in content and "typedef uint8_t u8;" not in content:
-        content = re.sub(r"#ifndef CORE_PRIMITIVES_DEFINED.*?#endif", "", content, flags=re.DOTALL)
-        content = content.replace("#define CORE_PRIMITIVES_DEFINED", "")
-        changed = True
-
+    # 3. Deterministically reconstruct the perfect core primitives block
     core_primitives = """
 #include <stdint.h>
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -72,11 +67,11 @@ typedef double f64;
 typedef int n64_bool;
 #endif
 """
-    if "CORE_PRIMITIVES_DEFINED" not in content:
-        content = content.replace("#pragma once", f"#pragma once\n{core_primitives}\n")
-        changed = True
+    # 4. Inject exactly once at the top of the file
+    content = content.replace("#pragma once", f"#pragma once\n{core_primitives}")
             
-    if changed or not os.path.exists(TYPES_HEADER):
+    # 5. ONLY write to disk if the final string has actually changed
+    if content != original_content:
         write_file(TYPES_HEADER, content)
         
     return content
