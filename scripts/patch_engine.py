@@ -35,6 +35,18 @@ def ensure_types_header_base():
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
+    changed = False
+
+    # FIX: Actively wipe out legacy C-style primitive typedefs (e.g. `unsigned long long u64;`) 
+    # so they don't clash with our new standard `<stdint.h>` block below.
+    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64"]
+    for p in primitive_types:
+        pattern = rf"(?m)^[ \t]*typedef[ \t]+(?:unsigned|signed|long|short|int|char|float|double)[A-Za-z0-9_\s]*?\b{p}[ \t]*;[ \t]*\n?"
+        new_content, n = re.subn(pattern, "", content)
+        if n > 0:
+            content = new_content
+            changed = True
+
     core_primitives = """
 #include <stdint.h>
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -51,7 +63,6 @@ typedef float f32;
 typedef double f64;
 #endif
 """
-    changed = False
     if "CORE_PRIMITIVES_DEFINED" not in content:
         content = content.replace("#pragma once", f"#pragma once\n{core_primitives}\n")
         changed = True
