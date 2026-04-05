@@ -324,7 +324,7 @@ def apply_fixes(categories):
                 content, _ = remove_conflicting_fwd_decl(content, alias)
                 continue
 
-            # Fully fixed explicit capture regex from Bug 1
+            # Fully fixed explicit capture regex
             anon_pat = (
                 r"typedef\s+struct\s*\{([^{}]*)\}\s*([^;]*\b"
                 + re.escape(alias) + r"\b[^;]*);"
@@ -375,9 +375,8 @@ def apply_fixes(categories):
         if types_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # 8. Unified Static-name conflicts — Generic handler + POSIX reserved names (Bug 3 Fix)
+    # 8. Unified Static-name conflicts
     seen_static = set()
-    # Check all plausible categories from the build driver
     for cat in ["static_conflict", "posix_conflict", "posix_reserved_conflict", "static_decl_conflict"]:
         for item in categories.get(cat, []):
             filepath, func_name = _unpack_pair(item)
@@ -388,7 +387,6 @@ def apply_fixes(categories):
             
             content = read_file(filepath)
             
-            # POSIX conflict -> cleanly rename inside the file scope
             if func_name in POSIX_RESERVED_NAMES:
                 new_content, changed = _rename_posix_static(content, func_name, filepath)
                 if changed:
@@ -396,7 +394,6 @@ def apply_fixes(categories):
                     fixed_files.add(filepath); fixes += 1
                 continue
 
-            # Standard static name conflict -> prefix it
             prefix    = os.path.basename(filepath).split('.')[0]
             macro_fix = f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{prefix}_{func_name}\n"
             if macro_fix not in content:
@@ -482,7 +479,14 @@ def apply_fixes(categories):
                     tag = item
                 if not isinstance(tag, str): continue
                 
-                # Audio States handled dynamically if not caught via pre-bootstrap
+                # BUG 2 FIX: ALWAYS ensure the file throwing the type error has the definitions imported!
+                if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+                    c = read_file(filepath)
+                    if 'include "ultra/n64_types.h"' not in c:
+                        write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                        fixed_files.add(filepath); fixes += 1
+
+                # If it's an audio state, we inject it dynamically and then move to the next item
                 if tag in N64_AUDIO_STATE_TYPES:
                     if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
                         types_content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
@@ -492,17 +496,12 @@ def apply_fixes(categories):
                 # Standard missing type fallback stubs
                 base_tag = tag[:-2] if tag.endswith("_s") else tag
                 if base_tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES:
-                    if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
-                        c = read_file(filepath)
-                        if 'include "ultra/n64_types.h"' not in c:
-                            write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
-                            fixed_files.add(filepath); fixes += 1
                     if base_tag in N64_STRUCT_BODIES:
                         nsb = categories.get("need_struct_body")
                         if isinstance(nsb, set): nsb.add(base_tag)
                         elif isinstance(nsb, list): nsb.append(base_tag)
                         else: categories["need_struct_body"] = {base_tag}
-                        continue
+                    continue
                         
                 if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
                     types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
