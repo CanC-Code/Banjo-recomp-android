@@ -59,7 +59,9 @@ typedef struct OSPfs_s {
     u8 activebank;
     u8 cursor;
     int errCode;
-    u32 reserved[10];   
+    u32 inode_table;
+    u32 minode_table;
+    u32 reserved[8];   
 } OSPfs;
 """,
 
