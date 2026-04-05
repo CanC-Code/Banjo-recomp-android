@@ -31,7 +31,6 @@ def safe_token_replacement(content):
     """
     Safely replaces tokens in C/C++ code while ignoring comments and strings.
     """
-    # This regex matches strings, chars, block comments, line comments, or standard code
     pattern = re.compile(
         r'(?P<string>"(?:\\.|[^"\\])*")|'
         r"(?P<char>'(?:\\.|[^'\\])*')|"
@@ -44,26 +43,22 @@ def safe_token_replacement(content):
     def replacer(match):
         if match.group('code'):
             code_chunk = match.group('code')
-            # Only apply token replacements to actual code chunks
             for pat, repl in COMPILED_TOKENS:
                 code_chunk = pat.sub(repl, code_chunk)
             return code_chunk
-        # Return strings and comments completely untouched
         return match.group(0)
 
     return pattern.sub(replacer, content)
 
 def wrap_shadow_headers(content, filename):
-    # System headers that are often shadowed by N64 decompilations
     shadow_headers = ['string.h', 'math.h', 'stdlib.h', 'stdio.h', 'stdarg.h', 'stddef.h', 'time.h', 'assert.h', 'stdint.h']
     if filename in shadow_headers:
         if '#include_next' not in content:
-            # For C++, bypass the N64 file completely and use the NDK system header
             return f"#ifdef __cplusplus\n#include_next <{filename}>\n#else\n{content}\n#endif\n"
     return content
 
 def fix_decompiler_artifacts(content, filename):
-    # 1. Fix shadowed variable names (e.g., u8 u8[10]; -> u8 buffer_u8[10];)
+    # 1. Fix shadowed variable names
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
@@ -83,6 +78,11 @@ def fix_decompiler_artifacts(content, filename):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
         final_name = f"buffer_{name}" if dtype == name else name
+        
+        # CRITICAL FIX: Cast raw initializer lists as C99 compound literals
+        if src.startswith('{') and src.endswith('}'):
+            src = f"({dtype}[]){src}"
+            
         return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
@@ -92,7 +92,6 @@ def fix_decompiler_artifacts(content, filename):
     is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
 
     if is_tmp_used and not is_tmp_declared:
-        # __thread ensures this variable is unique per thread to prevent cross-contamination
         tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\nstatic __thread u8 tmp[1024] = {0};\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
