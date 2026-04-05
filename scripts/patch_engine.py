@@ -112,7 +112,6 @@ def apply_fixes(categories):
     for filepath, _ in categories["struct_redef"]: fixd_files.add(filepath)
 
     for filepath in sorted(fixd_files):
-        # FIX: Allow n64_types.h to be cleaned by typedef_redef to unblock stalls!
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
         original = content
@@ -132,7 +131,6 @@ def apply_fixes(categories):
         for fp2, type1, type2 in categories["typedef_redef"]:
             if fp2 != filepath: continue
             
-            # FIX: Safely parse anonymous and malformed struct tags
             t1 = type1.replace("struct ", "").strip()
             t2 = type2.replace("struct ", "").strip()
             if t1.startswith("("): t1 = ""
@@ -154,7 +152,6 @@ def apply_fixes(categories):
                 continue
 
             if alias in KNOWN_GLOBAL_TYPES or target_tag in KNOWN_GLOBAL_TYPES:
-                # Wipes corrupted duplicates allowing the script to rebuild them cleanly
                 content, cnt = re.subn(
                     rf'(?:typedef\s+)?struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
                     "", content
@@ -162,7 +159,6 @@ def apply_fixes(categories):
                 content = re.sub(rf'typedef\s+struct\s+(?:{re.escape(target_tag)}|{re.escape(alias)})\s+[^;]*\b{re.escape(alias)}\b[^;]*;\n?', '', content)
                 continue
             
-            # Safely retags anonymous structs while preserving pointers
             anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
                 content, cnt = re.subn(
@@ -337,6 +333,8 @@ def apply_fixes(categories):
             types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\bMtx\b[^;]*;\n?", "", types_content)
             types_content = re.sub(rf"typedef\s+struct\s+(?:Mtx|Mtx_s)\s+[^;]*\bMtx\b[^;]*;\n?", "", types_content)
             types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
+            # FIX: Safely wipe anonymous union dependencies of Mtx
+            types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
             
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
@@ -360,6 +358,12 @@ def apply_fixes(categories):
                 types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"typedef\s+struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
+                
+                # FIX: Safely wipe anonymous struct dependencies of LookAt
+                if tag == "LookAt":
+                    types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
+                    types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__LookAtDir\s*;\n?", "", types_content)
+
                 types_content += "\n" + body
                 bodies_added = True
         if bodies_added:
