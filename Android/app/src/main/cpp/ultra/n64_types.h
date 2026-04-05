@@ -1,10 +1,11 @@
+#pragma once
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 /**
  * 1. MANDATORY FEATURE MACROS
- *    Must appear before ANY system header inclusion.
- *    _GNU_SOURCE unlocks M_PI and other GNU extensions in NDK headers.
+ * Must appear before ANY system header inclusion.
+ * _GNU_SOURCE unlocks M_PI and other GNU extensions in NDK headers.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -23,30 +24,11 @@
 #define _GU_H_
 
 /**
- * 3. CORE N64 SCALARS
- */
-typedef signed char s8;
-typedef unsigned char u8;
-typedef short s16;
-typedef unsigned short u16;
-typedef int s32;
-typedef unsigned int u32;
-typedef long long s64;
-typedef unsigned long long u64;
-typedef float f32;
-typedef double f64;
-typedef int n64_bool;
-typedef s32 OSPri;
-typedef s32 OSId;
-
-/**
- * 4. NULL REDEFINITION
- *    NDK Clang defines NULL as ((void*)0) which is not implicitly
- *    convertible to f32/s16/u32 in C mode with strict typing.
- *    The decomp sources use NULL as a numeric zero sentinel in struct
- *    initializers (e.g. {NULL, NULL} where fields are f32).
- *    Redefine NULL to plain 0 before stddef.h locks it in.
- *    This must come before ALL system includes.
+ * 3. NULL REDEFINITION
+ * NDK Clang defines NULL as ((void*)0) which is not implicitly
+ * convertible to f32/s16/u32 in C mode with strict typing.
+ * The decomp sources use NULL as a numeric zero sentinel in struct
+ * initializers. Redefine NULL to plain 0 before stddef.h locks it in.
  */
 #ifdef NULL
 #undef NULL
@@ -54,7 +36,7 @@ typedef s32 OSId;
 #define NULL 0
 
 /**
- * 5. SYSTEM INCLUDES & POLYFILLS
+ * 4. SYSTEM INCLUDES & POLYFILLS
  */
 #include <sys/types.h>
 #include <stddef.h>
@@ -69,9 +51,7 @@ typedef s32 OSId;
 #include <math.h>
 #include <unistd.h>
 
-/* Guarantee M_PI family regardless of include order.
- * NDK math.h only exposes these when _GNU_SOURCE is active at first
- * inclusion; any prior transitive include seals their absence.         */
+/* Guarantee M_PI family regardless of include order. */
 #ifndef M_PI
 #define M_PI     3.14159265358979323846
 #endif
@@ -92,6 +72,27 @@ typedef s32 OSId;
 #ifndef sched_yield
   #define sched_yield() usleep(1)
 #endif
+
+/**
+ * 5. CORE N64 SCALARS (Using strict standard integers)
+ */
+#ifndef CORE_PRIMITIVES_DEFINED
+#define CORE_PRIMITIVES_DEFINED
+typedef uint8_t  u8;
+typedef int8_t   s8;
+typedef uint16_t u16;
+typedef int16_t  s16;
+typedef uint32_t u32;
+typedef int32_t  s32;
+typedef uint64_t u64;
+typedef int64_t  s64;
+typedef float    f32;
+typedef double   f64;
+#endif
+
+typedef int n64_bool;
+typedef s32 OSPri;
+typedef s32 OSId;
 
 /**
  * 6. N64 OS FOUNDATION STRUCTURES
@@ -153,9 +154,6 @@ struct OSThread_s {
 
 /**
  * 7. GBI / RSP / OS STUBS
- *
- * _GBI_H_ blocks gbi.h and _OS_H_ blocks os.h, but game headers depend
- * on the types below. Minimal stubs provided; all guarded for idempotency.
  */
 
 /* ── Acmd ─────────────────────────────────────────────────────────────── */
@@ -206,10 +204,38 @@ typedef union {
 /* ── Mtx ─────────────────────────────────────────────────────────────── */
 #ifndef MTX_DEFINED
 #define MTX_DEFINED
-typedef struct {
-    s16 intPart[4][4];
-    u16 fracPart[4][4];
+/* N64 Mtx: fixed-point 16.16 matrix */
+typedef union {
+    s32  i[4][4];    
+    f32  f[4][4];    
+} __Mtx_data;
+
+typedef struct Mtx_s {
+    s16  m[4][4];    
+    u16  h[4][4];    
 } Mtx;
+#endif
+
+/* ── LookAt ──────────────────────────────────────────────────────────── */
+#ifndef LOOKAT_DEFINED
+#define LOOKAT_DEFINED
+/* N64 LookAt */
+typedef struct {
+    u8 col[3];
+    u8 pad1;
+    u8 colc[3];
+    u8 pad2;
+    s8 dir[3];
+    u8 pad3;
+} __Light_t;
+
+typedef struct {
+    __Light_t l;
+} __LookAtDir;
+
+typedef struct LookAt_s {
+    __LookAtDir l[2];
+} LookAt;
 #endif
 
 /* ── OSContPad ───────────────────────────────────────────────────────── */
@@ -223,10 +249,7 @@ typedef struct {
 } OSContPad;
 #endif
 
-/* ── OSTimer ─────────────────────────────────────────────────────────────
- * OS countdown timer struct. Normally from os.h, blocked by _OS_H_.
- * Required by: osint.h:24,34,35 (via src/core1/os/seteventmesg.c and
- * any other TU that includes osint.h).                                  */
+/* ── OSTimer ─────────────────────────────────────────────────────────── */
 #ifndef OS_TIMER_DEFINED
 #define OS_TIMER_DEFINED
 typedef struct OSTimer_s {
@@ -260,4 +283,4 @@ extern volatile u32 __OSGlobalIntMask;
 typedef struct actor_s Actor;
 typedef struct actorMarker_s ActorMarker;
 
-#endif
+#endif /* N64_TYPES_H */
