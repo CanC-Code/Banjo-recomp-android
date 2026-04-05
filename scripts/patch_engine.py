@@ -50,10 +50,27 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
+    # FIX: Robustly inject missing matrix prototypes directly into n64_types.h
+    gu_prototypes = [
+        "void guMtxIdentF(float mf[4][4]);",
+        "void guMtxIdent(Mtx *m);",
+        "void guMtxF2L(float mf[4][4], Mtx *m);",
+        "void guMtxL2F(float mf[4][4], Mtx *m);",
+        "void guTranslateF(float mf[4][4], float x, float y, float z);",
+        "void guScaleF(float mf[4][4], float x, float y, float z);",
+        "void guRotateF(float mf[4][4], float a, float x, float y, float z);",
+        "void guLookAtReflectF(float mf[4][4], LookAt *l, float xEye, float yEye, float zEye, float xAt, float yAt, float zAt, float xUp, float yUp, float zUp);"
+    ]
+    for proto in gu_prototypes:
+        if proto not in types_content:
+            types_content += f"\n{proto}\n"
+            fixes += 1
+
     for filepath, func in sorted(categories["conflicting_types"]):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
-        pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
+        # FIX: Safer matching to handle arrays like float mf[4][4] in function signatures
+        pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*\[\]]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
         match = re.search(pattern, content)
         if match:
             sig_full = match.group(0)
@@ -333,7 +350,6 @@ def apply_fixes(categories):
             types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\bMtx\b[^;]*;\n?", "", types_content)
             types_content = re.sub(rf"typedef\s+struct\s+(?:Mtx|Mtx_s)\s+[^;]*\bMtx\b[^;]*;\n?", "", types_content)
             types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
-            # FIX: Safely wipe anonymous union dependencies of Mtx
             types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
             
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
@@ -359,7 +375,6 @@ def apply_fixes(categories):
                 types_content = re.sub(rf"typedef\s+struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
                 
-                # FIX: Safely wipe anonymous struct dependencies of LookAt
                 if tag == "LookAt":
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__LookAtDir\s*;\n?", "", types_content)
@@ -421,4 +436,5 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
+    write_file(TYPES_HEADER, types_content)
     return fixes, fixed_files
