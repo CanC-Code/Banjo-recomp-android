@@ -57,7 +57,8 @@ def apply_fixes(categories):
     for filepath, func in sorted(categories["conflicting_types"]):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
-        pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
+        # Handle indented functions and parameter brackets
+        pattern = rf"(?:^|\n)[ \t]*([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*[\n\s]*\{{"
         match = re.search(pattern, content)
         if match:
             sig_full = match.group(0)
@@ -337,24 +338,43 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["need_mtx_body"]:
+    # ── Move missing_types above need_struct_body to forward N64 SDK structs ──
+    if categories["missing_types"]:
         types_content = read_file(TYPES_HEADER)
-        if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\bMtx\b[^;]*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+struct\s+(?:Mtx|Mtx_s)\s+[^;]*\bMtx\b[^;]*;\n?", "", types_content)
-            types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
-            # Safely wipe anonymous union dependencies of Mtx
-            types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
-            
-            types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
+        types_added = False
+        for tag in sorted(categories["missing_types"]):
+            if tag in N64_STRUCT_BODIES:
+                # Forward to need_struct_body
+                if isinstance(categories["need_struct_body"], set):
+                    categories["need_struct_body"].add(tag)
+                elif isinstance(categories["need_struct_body"], list):
+                    categories["need_struct_body"].append(tag)
+                else:
+                    categories["need_struct_body"] = {tag}
+                continue
+                
+            if tag in KNOWN_GLOBAL_TYPES: continue
+            if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
+                types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
+                types_added = True
+        if types_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
     if categories["need_struct_body"]:
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
-        for tag in sorted(categories["need_struct_body"]):
-            if tag == "Mtx": continue  
+        
+        # Ensure safely iterable
+        nsb = categories["need_struct_body"]
+        if not isinstance(nsb, (list, set, tuple)): nsb = []
+        
+        for raw_tag in sorted(nsb):
+            # Parse 'OSPfs_s' into 'OSPfs' for dictionary lookup
+            tag = raw_tag[:-2] if raw_tag.endswith("_s") else raw_tag
+            if tag == "Mtx": 
+                categories["need_mtx_body"] = True
+                continue  
             body = N64_STRUCT_BODIES.get(tag)
             
             check_str = f"typedef struct {tag}_s {{"
@@ -365,11 +385,12 @@ def apply_fixes(categories):
             elif tag == "OSPiHandle": check_str = "u8 pageSize;"
             
             if body and check_str not in types_content:
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
+                # Completely wipe any variations of the struct to prevent redefinitions
+                types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
+                types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
+                types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
                 
-                # Safely wipe anonymous struct dependencies of LookAt
                 if tag == "LookAt":
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__LookAtDir\s*;\n?", "", types_content)
@@ -377,6 +398,20 @@ def apply_fixes(categories):
                 types_content += "\n" + body
                 bodies_added = True
         if bodies_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    if categories["need_mtx_body"]:
+        types_content = read_file(TYPES_HEADER)
+        if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
+            # Comprehensively wipe all legacy dummy Mtx typedefs
+            types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\bMtx\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\bMtx\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
+            
+            types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
@@ -406,18 +441,6 @@ def apply_fixes(categories):
                 write_file(filepath, content)
                 fixed_files.add(filepath)
                 fixes += 1
-
-    if categories["missing_types"]:
-        types_content = read_file(TYPES_HEADER)
-        types_added = False
-        for tag in sorted(categories["missing_types"]):
-            if tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES: continue
-            if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
-                types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
-                types_added = True
-        if types_added:
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
 
     if categories["missing_globals"]:
         types_content = read_file(TYPES_HEADER)
