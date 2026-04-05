@@ -1,13 +1,12 @@
 """
 dynamic_corrector.py — Self-healing build driver for the BK AArch64 Android port.
-v84.0 — Global SDK Type enforcement and complex alias preservation during struct retagging.
+v85.0 — Global SDK Type enforcement, complex alias preservation, POSIX conflict resolution, and tuple-based source tracking.
 """
 
 import os
 import re
 import subprocess
 import time
-import sys
 from collections import defaultdict
 
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
@@ -112,6 +111,37 @@ KNOWN_FUNCTION_MACROS = {
     "OS_PHYSICAL_TO_K1": "#define OS_PHYSICAL_TO_K1(x) ((void *)((u32)(x) | 0xA0000000))",
 }
 
+KNOWN_GLOBAL_TYPES = {
+    "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "LookAt", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
+    "OSContPad", "OSContStatus", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
+    "OSIntMask", "OSPfs", "OSPiHandle", "Actor", "ActorMarker",
+    "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
+}
+
+# N64 audio DSP state types
+N64_AUDIO_STATE_TYPES = {
+    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
+    "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE",
+    "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE", "ALVoiceState"
+}
+
+# POSIX / libc reserved function names
+POSIX_RESERVED_NAMES = {
+    "close", "open", "read", "write", "send", "recv",
+    "connect", "accept", "bind", "listen", "select",
+    "poll", "dup", "dup2", "fork", "exec", "exit",
+    "stat", "fstat", "lstat", "access", "unlink", "rename",
+    "mkdir", "rmdir", "chdir", "getcwd", "getpid", "getppid",
+    "getuid", "getgid", "signal", "raise", "kill",
+    "printf", "fprintf", "sprintf", "snprintf", "scanf", "fscanf", "sscanf",
+    "time", "clock", "sleep", "usleep", "malloc", "calloc", "realloc", "free",
+    "memcpy", "memset", "memmove", "memcmp", "strlen", "strcpy", "strncpy",
+    "strcmp", "strncmp", "strcat", "strncat", "strchr", "strrchr", "strstr",
+    "atoi", "atol", "atof", "strtol", "strtod",
+    "abs", "labs", "fabs", "sqrt", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "rand", "srand",
+}
+
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -135,6 +165,21 @@ def run_build():
         except Exception as e:
             print(f"🛑 Build execution failed: {e}")
             return False
+
+def _safe_str(v):
+    return v if isinstance(v, str) else ""
+
+def _unpack_typedef_redef_item(item):
+    if isinstance(item, (list, tuple)) and len(item) >= 3:
+        return str(item[0]), _safe_str(item[1]), _safe_str(item[2])
+    if isinstance(item, (list, tuple)) and len(item) == 2:
+        return str(item[0]), _safe_str(item[1]), ""
+    return str(item), "", ""
+
+def _unpack_pair(item):
+    if isinstance(item, (list, tuple)) and len(item) >= 2:
+        return str(item[0]), _safe_str(item[1])
+    return str(item), ""
 
 def extract_incomplete_type(line):
     m = re.search(r"incomplete (?:element )?type '(?:struct\s+)?([^']+)'", line)
@@ -166,6 +211,86 @@ def is_defined_locally(filepath, tag):
     pattern1 = rf"typedef\s+struct[^{{]*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;"
     pattern2 = rf"struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}"
     return bool(re.search(pattern1, c) or re.search(pattern2, c))
+
+
+def strip_auto_preamble(content):
+    lines = content.split('\n')
+    result = []
+    in_auto_block = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("/* AUTO: forward decl"):
+            in_auto_block = True
+            continue
+        if in_auto_block and re.match(r'(?:typedef\s+)?struct\s+\w+(?:_s)?\s+\w+\s*;', s):
+            continue
+        in_auto_block = False
+        result.append(line)
+    return '\n'.join(result)
+
+def ensure_types_header_base():
+    if os.path.exists(TYPES_HEADER):
+        content = read_file(TYPES_HEADER)
+        if "#pragma once" not in content:
+            content = "#pragma once\n" + content
+    else:
+        content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
+        os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
+        
+    # Proactively inject audio states to prevent the build from failing at all
+    changed = False
+    for t in N64_AUDIO_STATE_TYPES:
+        if f"typedef struct {t}" not in content and f"}} {t};" not in content:
+            content += f"\ntypedef struct {t} {{ long long int force_align[64]; }} {t};\n"
+            changed = True
+            
+    if changed or not os.path.exists(TYPES_HEADER):
+        write_file(TYPES_HEADER, content)
+        
+    return content
+
+def canonical_tag(name):
+    if len(name) > 1 and name[0].islower() and name[1].isupper():
+        base = name[1].lower() + name[2:]
+        return base + "_s"
+    return name + "_s"
+
+def remove_conflicting_fwd_decl(content, alias):
+    expected_tag = canonical_tag(alias)
+    pat = re.compile(
+        r'/\* AUTO: forward decl[^\n]*/\n'
+        r'typedef\s+struct\s+' + re.escape(expected_tag) + r'\s+' + re.escape(alias) + r'\s*;\n?'
+    )
+    new_content, n = pat.subn("", content)
+    if n == 0:
+        pat2 = re.compile(r'typedef\s+struct\s+' + re.escape(expected_tag) + r'\s+' + re.escape(alias) + r'\s*;\n?')
+        new_content, n = pat2.subn("", content)
+    return new_content, n > 0
+
+def fix_body_tag(content, alias):
+    expected = canonical_tag(alias)
+    pat = re.compile(
+        r'(typedef\s+struct\s+)(\w+)(\s*\{[^{}]*\}\s*(?:[^;]*\b)' + re.escape(alias) + r'\b[^;]*;)',
+        re.DOTALL
+    )
+    changed = False
+    def _sub(m):
+        nonlocal changed
+        if m.group(2) == expected: return m.group(0)
+        changed = True
+        return m.group(1) + expected + m.group(3)
+    new_content = pat.sub(_sub, content)
+    return new_content, changed
+
+def _rename_posix_static(content, func_name, filepath):
+    prefix    = os.path.basename(filepath).split('.')[0]
+    new_name  = f"n64_{prefix}_{func_name}"
+    define    = f"\n/* AUTO: rename POSIX-reserved static '{func_name}' */\n#define {func_name} {new_name}\n"
+    if define in content:
+        return content, False
+    includes = list(re.finditer(r'#include\s+.*?\n', content))
+    idx = includes[-1].end() if includes else 0
+    return content[:idx] + define + content[idx:], True
 
 
 # ─── Failed-file log ──────────────────────────────────────────────────────────
@@ -215,26 +340,27 @@ def generate_error_summary(log_data):
 
 def classify_errors(log_data):
     categories = {
-        "missing_n64_types":    set(),
-        "actor_pointer":        set(),
-        "local_struct_fwd":     [],
-        "local_fwd_only":       [],
-        "typedef_redef":        [],
-        "struct_redef":         [],
-        "static_conflict":      [],
-        "conflicting_types":    set(),
-        "incomplete_sizeof":    [],
-        "need_struct_body":     set(),
-        "need_mtx_body":        False,
-        "undeclared_macros":    set(),
-        "undeclared_gbi":       set(),
-        "undeclared_n64_types": set(),
-        "missing_types":        defaultdict(set),
-        "missing_globals":      defaultdict(set),
-        "implicit_func":        set(),
-        "undefined_symbols":    set(),
-        "audio_states":         set(),
-        "extraneous_brace":     False,
+        "missing_n64_types":       set(),
+        "actor_pointer":           set(),
+        "local_struct_fwd":        [],
+        "local_fwd_only":          [],
+        "typedef_redef":           [],
+        "struct_redef":            [],
+        "static_conflict":         [],
+        "posix_reserved_conflict": [],
+        "conflicting_types":       set(),
+        "incomplete_sizeof":       [],
+        "need_struct_body":        set(),
+        "need_mtx_body":           False,
+        "undeclared_macros":       set(),
+        "undeclared_gbi":          set(),
+        "undeclared_n64_types":    set(),
+        "missing_types":           set(), # Flat set of tuples: (filepath, type_name)
+        "missing_globals":         set(), # Flat set of tuples: (filepath, ident)
+        "implicit_func":           set(),
+        "undefined_symbols":       set(),
+        "audio_states":            set(), # Flat set of tuples: (filepath, type_name)
+        "extraneous_brace":        False,
     }
 
     file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx)):"
@@ -266,8 +392,13 @@ def classify_errors(log_data):
         if m_conflict and filepath:
             categories["conflicting_types"].add((filepath, m_conflict.group(1)))
 
-        if m_no_member and m_no_member.group(2) in ("Mtx", "Mtx_s"):
-            categories["need_mtx_body"] = True
+        if m_no_member:
+            tag = m_no_member.group(2)
+            base_tag = tag[:-2] if tag.endswith("_s") else tag
+            if base_tag in ("Mtx", "Mtx_s"):
+                categories["need_mtx_body"] = True
+            if base_tag in N64_STRUCT_BODIES:
+                categories["need_struct_body"].add(base_tag)
 
         if m_incomplete and filepath:
             tag = m_incomplete.group(1)
@@ -286,13 +417,17 @@ def classify_errors(log_data):
 
         if m_unknown_type and filepath:
             type_name = m_unknown_type.group(1)
-            if type_name in {"RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "ALVoiceState"}:
-                categories["audio_states"].add(type_name)
+
+            if type_name in N64_STRUCT_BODIES:
+                categories["need_struct_body"].add(type_name)
+
+            if type_name in N64_AUDIO_STATE_TYPES:
+                categories["audio_states"].add((filepath, type_name)) 
             else:
                 if is_defined_locally(filepath, type_name):
                     categories["local_fwd_only"].append((filepath, type_name))
                 elif type_name.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', type_name):
-                    categories["missing_types"][type_name].add(filepath)
+                    categories["missing_types"].add((filepath, type_name))
                 else:
                     categories["local_fwd_only"].append((filepath, type_name))
 
@@ -305,14 +440,20 @@ def classify_errors(log_data):
             elif ident.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', ident):
                 if filepath and is_defined_locally(filepath, ident): categories["local_fwd_only"].append((filepath, ident))
                 else:
-                    if filepath: categories["missing_types"][ident].add(filepath)
+                    if filepath: categories["missing_types"].add((filepath, ident))
             else:
-                if filepath: categories["missing_globals"][ident].add(filepath)
+                if filepath: categories["missing_globals"].add((filepath, ident))
 
         if m_undef_ref: categories["undefined_symbols"].add(m_undef_ref.group(1).strip())
         if m_undef_sym: categories["undefined_symbols"].add(m_undef_sym.group(1).replace("'", "").strip())
         if m_implicit: categories["implicit_func"].add(m_implicit.group(1))
-        if m_static and filepath: categories["static_conflict"].append((filepath, m_static.group(1)))
+        
+        if m_static and filepath: 
+            func_name = m_static.group(1)
+            if func_name in POSIX_RESERVED_NAMES:
+                categories["posix_reserved_conflict"].append((filepath, func_name))
+            else:
+                categories["static_conflict"].append((filepath, func_name))
             
         if ("invalid application of 'sizeof'" in line or "arithmetic on a pointer to an incomplete type" in line or "array has incomplete element type" in line) and filepath:
             inc_type = extract_incomplete_type(line)
@@ -324,18 +465,11 @@ def classify_errors(log_data):
         if filepath and os.path.exists(filepath):
             if "error:" in line: categories["missing_n64_types"].add(filepath)
 
-    known_global_types = {
-        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "LookAt", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
-        "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
-        "OSIntMask", "OSPfs", "Actor", "ActorMarker",
-        "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
-    }
-    
     seen_local_fwd = set()
     new_local_fwd = []
     for filepath, type_name in categories["local_fwd_only"]:
         base_type = type_name[:-2] if type_name.endswith("_s") else type_name
-        if base_type in known_global_types or type_name in known_global_types:
+        if base_type in KNOWN_GLOBAL_TYPES or type_name in KNOWN_GLOBAL_TYPES:
             categories["missing_n64_types"].add(filepath)
         else:
             key = (filepath, type_name)
@@ -345,45 +479,26 @@ def classify_errors(log_data):
     categories["local_fwd_only"] = new_local_fwd
 
     # Ensure known global types caught in missing_types or globals trigger n64_types.h inclusion
-    for type_name, filepaths in categories["missing_types"].items():
-        if type_name in known_global_types:
-            for fp in filepaths: categories["missing_n64_types"].add(fp)
+    missing_types_clean = set()
+    for fp, type_name in categories["missing_types"]:
+        if type_name in KNOWN_GLOBAL_TYPES:
+            categories["missing_n64_types"].add(fp)
+        else:
+            missing_types_clean.add((fp, type_name))
+    categories["missing_types"] = missing_types_clean
 
-    for ident, filepaths in categories["missing_globals"].items():
-        if ident in known_global_types:
-            for fp in filepaths: categories["missing_n64_types"].add(fp)
+    missing_globals_clean = set()
+    for fp, ident in categories["missing_globals"]:
+        if ident in KNOWN_GLOBAL_TYPES:
+            categories["missing_n64_types"].add(fp)
+        else:
+            missing_globals_clean.add((fp, ident))
+    categories["missing_globals"] = missing_globals_clean
 
     return categories
 
 
-def strip_auto_preamble(content):
-    lines = content.split('\n')
-    result = []
-    in_auto_block = False
-    for line in lines:
-        s = line.strip()
-        if s.startswith("/* AUTO: forward decl"):
-            in_auto_block = True
-            continue
-        if in_auto_block and re.match(r'(?:typedef\s+)?struct\s+\w+(?:_s)?\s+\w+\s*;', s):
-            continue
-        in_auto_block = False
-        result.append(line)
-    return '\n'.join(result)
-
-
-def ensure_types_header_base():
-    if os.path.exists(TYPES_HEADER):
-        content = read_file(TYPES_HEADER)
-        if "#pragma once" not in content:
-            content = "#pragma once\n" + content
-            write_file(TYPES_HEADER, content)
-        return content
-    content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
-    os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
-    write_file(TYPES_HEADER, content)
-    return content
-
+# ─── Main Dispatcher ──────────────────────────────────────────────────────────
 
 def apply_fixes():
     if not os.path.exists(LOG_FILE): return 0, set()
@@ -466,12 +581,6 @@ def apply_fixes():
     for filepath, _, _ in categories["typedef_redef"]: fixd_files.add(filepath)
     for filepath, _ in categories["struct_redef"]: fixd_files.add(filepath)
 
-    known_global_types = {
-        "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "LookAt", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
-        "OSContPad", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
-        "OSIntMask", "OSPfs", "Actor", "ActorMarker"
-    }
-
     for filepath in sorted(fixd_files):
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
         content = read_file(filepath)
@@ -500,7 +609,7 @@ def apply_fixes():
             target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
             alias = tag1 if target_tag == tag2 else tag2
 
-            if alias in known_global_types or target_tag in known_global_types:
+            if alias in KNOWN_GLOBAL_TYPES or target_tag in KNOWN_GLOBAL_TYPES:
                 content, cnt = re.subn(
                     rf'(?:typedef\s+)?struct\s+{re.escape(target_tag)}?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
                     "", content
@@ -508,23 +617,23 @@ def apply_fixes():
                 content = re.sub(rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?', '', content)
                 continue
             
-            # Complex Alias Preserving Regex
+            # Complex Alias Preserving Regex (FIX 1 implemented correctly)
             anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
-                content, cnt = re.subn(
-                    anon_body_pattern,
-                    lambda m: f"typedef struct {target_tag} {{{m.group(1)}}} {m.group(2)};",
-                    content
-                )
+                def _anon_sub(m, tt=target_tag):
+                    body_inner = m.group(1)
+                    declarator = m.group(2)
+                    return f"typedef struct {tt} {{{body_inner}}} {declarator};"
+                content, _ = re.subn(anon_body_pattern, _anon_sub, content)
             else:
-                content, cnt = re.subn(
+                content, _ = re.subn(
                     r"\bstruct\s+" + re.escape(alias) + r"\b",
                     f"struct {target_tag}", content
                 )
 
         for fp2, tag in categories["struct_redef"]:
             if fp2 != filepath: continue
-            if tag in known_global_types:
+            if tag in KNOWN_GLOBAL_TYPES:
                 content, cnt = re.subn(
                     rf'struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}\s*;\n?',
                     "", content
@@ -554,21 +663,31 @@ def apply_fixes():
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
+    # ── Unified Static-name conflicts (POSIX handled correctly) ─────────
     seen_static = set()
-    for filepath, func_name in categories["static_conflict"]:
-        key = (filepath, func_name)
-        if key in seen_static: continue
-        seen_static.add(key)
-        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
-        content = read_file(filepath)
-        prefix = os.path.basename(filepath).split('.')[0]
-        macro_fix = (f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{prefix}_{func_name}\n")
-        if macro_fix not in content:
-            anchor = '#include "ultra/n64_types.h"'
-            content = (content.replace(anchor, anchor + macro_fix) if anchor in content else macro_fix + content)
-            write_file(filepath, content)
-            fixed_files.add(filepath)
-            fixes += 1
+    for cat in ["static_conflict", "posix_reserved_conflict"]:
+        for filepath, func_name in categories.get(cat, []):
+            key = (filepath, func_name)
+            if key in seen_static: continue
+            seen_static.add(key)
+            if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
+            content = read_file(filepath)
+            
+            if func_name in POSIX_RESERVED_NAMES:
+                new_content, changed = _rename_posix_static(content, func_name, filepath)
+                if changed:
+                    write_file(filepath, new_content)
+                    fixed_files.add(filepath); fixes += 1
+                continue
+
+            prefix = os.path.basename(filepath).split('.')[0]
+            macro_fix = (f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{prefix}_{func_name}\n")
+            if macro_fix not in content:
+                anchor = '#include "ultra/n64_types.h"'
+                content = (content.replace(anchor, anchor + macro_fix) if anchor in content else macro_fix + content)
+                write_file(filepath, content)
+                fixed_files.add(filepath)
+                fixes += 1
 
     if categories["undeclared_macros"]:
         types_content = read_file(TYPES_HEADER)
@@ -630,16 +749,38 @@ def apply_fixes():
             write_file(STUBS_FILE, existing_stubs)
             fixes += 1
 
-    if categories["audio_states"]:
-        types_content = read_file(TYPES_HEADER)
-        audio_added = False
-        for t in sorted(categories["audio_states"]):
-            if f"typedef struct {t}" not in types_content:
-                types_content += f"\ntypedef struct {t} {{ long long int force_align[32]; }} {t};\n"
-                audio_added = True
-        if audio_added:
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
+    # ── Missing Type / Audio Type Handlers (File Injection Fixed) ───────
+    for cat in ["audio_states", "missing_types"]:
+        if categories.get(cat):
+            types_content = read_file(TYPES_HEADER)
+            types_added   = False
+            
+            for filepath, tag in sorted(categories[cat]):
+                # ALWAYS ensure the file throwing the type error has the definitions imported!
+                if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+                    c = read_file(filepath)
+                    if 'include "ultra/n64_types.h"' not in c:
+                        write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                        fixed_files.add(filepath); fixes += 1
+
+                if tag in N64_AUDIO_STATE_TYPES:
+                    if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
+                        types_content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
+                        types_added = True
+                    continue
+
+                base_tag = tag[:-2] if tag.endswith("_s") else tag
+                if base_tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES:
+                    if base_tag in N64_STRUCT_BODIES:
+                        categories["need_struct_body"].add(base_tag)
+                    continue
+                        
+                if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
+                    types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
+                    types_added = True
+                    
+            if types_added:
+                write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories["undeclared_n64_types"]:
         types_content = read_file(TYPES_HEADER)
@@ -695,6 +836,8 @@ def apply_fixes():
         for tag in sorted(categories["need_struct_body"]):
             if tag == "Mtx": continue  
             body = N64_STRUCT_BODIES.get(tag)
+            
+            # Using your dynamic check_str logic for the new types!
             check_str = "l[2]" if tag == "LookAt" else ("fileSize" if tag == "OSPfs" else tag)
             
             if body and check_str not in types_content:
@@ -734,22 +877,10 @@ def apply_fixes():
                 fixed_files.add(filepath)
                 fixes += 1
 
-    if categories["missing_types"]:
-        types_content = read_file(TYPES_HEADER)
-        types_added = False
-        for tag in sorted(categories["missing_types"]):
-            if tag in N64_STRUCT_BODIES or tag in known_global_types: continue
-            if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
-                types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
-                types_added = True
-        if types_added:
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
-
     if categories["missing_globals"]:
         types_content = read_file(TYPES_HEADER)
         globals_added = False
-        for glob in sorted(categories["missing_globals"]):
+        for filepath, glob in sorted(categories["missing_globals"]):
             if glob == "actor": continue
             if f" {glob};" not in types_content and f"*{glob};" not in types_content and f" {glob}[" not in types_content:
                 decl = f"extern void* {glob};" if glob.endswith(("_ptr", "_p")) else f"extern long long int {glob};"
