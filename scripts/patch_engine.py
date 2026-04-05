@@ -2,19 +2,64 @@ import os
 import re
 from collections import defaultdict
 
+# ---------------------------------------------------------------------------
+# Known-data tables
+# ---------------------------------------------------------------------------
+
 BRACE_MATCH = r"[^{}]*"
 
 N64_STRUCT_BODIES = {
     "Mtx": "typedef struct Mtx_s {\n    float m[4][4];\n} Mtx;"
 }
+
 KNOWN_MACROS = {
     "OS_IM_1": "0x0001",
     "OS_IM_2": "0x0002",
 }
+
 KNOWN_FUNCTION_MACROS = {
     "some_macro": "#define some_macro(x) ((x) * 2)"
 }
+
 KNOWN_GLOBAL_TYPES = {"Actor", "Mtx"}
+
+# N64 audio DSP state types defined in synthInternals.h — they appear as
+# bare typedef names but their definitions live inside the SDK headers.
+# We inject opaque stubs so files that only use pointers to them can compile.
+N64_AUDIO_STATE_TYPES = {
+    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
+    "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE",
+    "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE",
+}
+
+# POSIX / libc reserved function names that collide with N64 source static fns.
+# When a source file declares  static <type> <name>(...)  and the NDK header
+# already has a non-static extern declaration of the same name the compiler
+# rejects it.  We rename these proactively via a #define alias.
+POSIX_RESERVED_NAMES = {
+    "close", "open", "read", "write", "send", "recv",
+    "connect", "accept", "bind", "listen", "select",
+    "poll", "dup", "dup2", "fork", "exec", "exit",
+    "stat", "fstat", "lstat", "access", "unlink", "rename",
+    "mkdir", "rmdir", "chdir", "getcwd",
+    "getpid", "getppid", "getuid", "getgid",
+    "signal", "raise", "kill",
+    "printf", "fprintf", "sprintf", "snprintf",
+    "scanf", "fscanf", "sscanf",
+    "time", "clock", "sleep", "usleep",
+    "malloc", "calloc", "realloc", "free",
+    "memcpy", "memset", "memmove", "memcmp",
+    "strlen", "strcpy", "strncpy", "strcmp", "strncmp",
+    "strcat", "strncat", "strchr", "strrchr", "strstr",
+    "atoi", "atol", "atof", "strtol", "strtod",
+    "abs", "labs", "fabs", "sqrt", "pow",
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "rand", "srand",
+}
+
+# ---------------------------------------------------------------------------
+# File I/O helpers
+# ---------------------------------------------------------------------------
 
 def read_file(filepath):
     with open(filepath, 'r', errors='replace') as f:
@@ -24,11 +69,15 @@ def write_file(filepath, content):
     with open(filepath, 'w') as f:
         f.write(content)
 
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
 # ---------------------------------------------------------------------------
-# Safe unpackers for category entries
+# Safe unpackers — tolerate any shape from the error parser
 # ---------------------------------------------------------------------------
 
 def _safe_str(v):
@@ -51,6 +100,7 @@ def _unpack_pair(item):
 # ---------------------------------------------------------------------------
 
 def strip_auto_preamble(content):
+    """Remove auto-injected forward-declaration blocks to prevent duplicates."""
     lines = content.split('\n')
     result = []
     in_auto_block = False
@@ -97,8 +147,8 @@ def scan_struct_bodies(content):
 def canonical_tag(name):
     """
     Derive the expected _s struct tag for a typedef alias.
-      sChVegetable -> chVegetable_s
-      MyType       -> MyType_s
+      sChVegetable  -> chVegetable_s
+      LetterFloorTile -> LetterFloorTile_s
     """
     if len(name) > 1 and name[0].islower() and name[1].isupper():
         base = name[1].lower() + name[2:]
@@ -124,7 +174,6 @@ def fix_body_tag(content, alias):
     """
     If the file has  typedef struct wrong_tag { ... } Alias;
     rewrite wrong_tag to canonical_tag(alias) in place.
-    Returns (new_content, changed).
     """
     expected = canonical_tag(alias)
     pat = re.compile(
@@ -142,17 +191,55 @@ def fix_body_tag(content, alias):
     new_content = pat.sub(_sub, content)
     return new_content, changed
 
+def _has_body_for_alias(content, alias):
+    """
+    Return True when the file already contains a full struct body whose
+    closing  } alias;  resolves to the given alias name.
+    """
+    pat = re.compile(
+        r'typedef\s+struct\s*(?:\w+\s*)?\{[^{}]*\}\s*[^;]*\b'
+        + re.escape(alias) + r'\b[^;]*;',
+        re.DOTALL
+    )
+    return bool(pat.search(content))
+
+# ---------------------------------------------------------------------------
+# Rename a POSIX-reserved static function name in a source file
+# ---------------------------------------------------------------------------
+
+def _rename_posix_static(content, func_name, filepath):
+    """
+    Inject a #define that renames func_name to a file-local alias so that
+    the static definition no longer clashes with the POSIX extern prototype.
+    Works for both declaration and definition sites.
+    """
+    prefix    = os.path.basename(filepath).split('.')[0]
+    new_name  = f"n64_{prefix}_{func_name}"
+    define    = f"\n/* AUTO: rename POSIX-reserved static '{func_name}' */\n#define {func_name} {new_name}\n"
+    if define in content:
+        return content, False
+    # Insert right after the last #include, or at the top
+    includes = list(re.finditer(r'#include\s+.*?\n', content))
+    if includes:
+        idx = includes[-1].end()
+    else:
+        idx = 0
+    return content[:idx] + define + content[idx:], True
+
 # ---------------------------------------------------------------------------
 # Main fix dispatcher
 # ---------------------------------------------------------------------------
 
 def apply_fixes(categories):
+    """Iterate parsed compilation errors and apply automatic code fixes."""
     fixes       = 0
     fixed_files = set()
 
     types_content = ensure_types_header_base()
 
+    # ------------------------------------------------------------------
     # 1. Extraneous brace cleanup
+    # ------------------------------------------------------------------
     if categories.get("extraneous_brace"):
         original = types_content
         types_content = re.sub(
@@ -162,10 +249,11 @@ def apply_fixes(categories):
             r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{",
             r"typedef struct \1 {", types_content)
         if types_content != original:
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
+            write_file(TYPES_HEADER, types_content); fixes += 1
 
+    # ------------------------------------------------------------------
     # 2. Conflicting implicit-type prototypes
+    # ------------------------------------------------------------------
     for item in sorted(categories.get("conflicting_types", []), key=str):
         filepath, func = _unpack_pair(item)
         if not func or not os.path.exists(filepath): continue
@@ -183,10 +271,11 @@ def apply_fixes(categories):
                 idx = includes[-1].end() if includes else 0
                 content = content[:idx] + injection + content[idx:]
                 write_file(filepath, content)
-                fixed_files.add(filepath)
-                fixes += 1
+                fixed_files.add(filepath); fixes += 1
 
+    # ------------------------------------------------------------------
     # 3. Missing n64_types.h include
+    # ------------------------------------------------------------------
     for item in sorted(categories.get("missing_n64_types", []), key=str):
         filepath = item if isinstance(item, str) else str(item)
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
@@ -195,7 +284,9 @@ def apply_fixes(categories):
             write_file(filepath, '#include "ultra/n64_types.h"\n' + content)
             fixed_files.add(filepath); fixes += 1
 
-    # 4. Actor pointer
+    # ------------------------------------------------------------------
+    # 4. Actor pointer injection
+    # ------------------------------------------------------------------
     for item in sorted(categories.get("actor_pointer", []), key=str):
         filepath = item if isinstance(item, str) else str(item)
         if not os.path.exists(filepath): continue
@@ -206,7 +297,9 @@ def apply_fixes(categories):
             write_file(filepath, content)
             fixed_files.add(filepath); fixes += 1
 
+    # ------------------------------------------------------------------
     # 5. Local struct forward declarations
+    # ------------------------------------------------------------------
     if categories.get("local_struct_fwd"):
         file_to_types = defaultdict(set)
         for item in categories["local_struct_fwd"]:
@@ -223,7 +316,9 @@ def apply_fixes(categories):
                 write_file(filepath, "/* AUTO: forward declarations */\n" + "\n".join(fwd_lines) + "\n" + content)
                 fixed_files.add(filepath); fixes += 1
 
+    # ------------------------------------------------------------------
     # 6. Typedef / struct redefinitions
+    # ------------------------------------------------------------------
     fixd_files = set()
     for item in categories.get("typedef_redef", []):
         fp, _, _ = _unpack_typedef_redef_item(item)
@@ -238,8 +333,9 @@ def apply_fixes(categories):
         original = content
         content  = strip_auto_preamble(content)
 
-        # Deduplicate repeated struct bodies
-        tagged_body_re = re.compile(r'(?:typedef\s+)?struct\s+(\w+)\s*\{([^{}]*)\}\s*[^;]*;', re.DOTALL)
+        # Deduplicate repeated struct bodies by tag
+        tagged_body_re = re.compile(
+            r'(?:typedef\s+)?struct\s+(\w+)\s*\{([^{}]*)\}\s*[^;]*;', re.DOTALL)
         tag_matches = defaultdict(list)
         for m in tagged_body_re.finditer(content):
             tag_matches[m.group(1)].append(m)
@@ -272,23 +368,29 @@ def apply_fixes(categories):
                         re.escape(target_tag), re.escape(alias), re.escape(alias)), "", content)
                 continue
 
-            # Mismatched body tag → rewrite tag and drop any orphaned fwd decl
+            # Mismatched body tag → rewrite in place, drop orphan fwd decl
             new_content, tag_fixed = fix_body_tag(content, alias)
             if tag_fixed:
                 content = new_content
                 content, _ = remove_conflicting_fwd_decl(content, alias)
                 continue
 
-            # Anonymous body → graft target_tag onto it
-            anon_pat = r"typedef\s+struct\s*\{{[^{{}}]*\}}\s*([^;]*\b{}\b[^;]*);".format(re.escape(alias))
-            if re.search(anon_pat, content):
+            # Anonymous body → graft target_tag onto it.
+            # Pattern: typedef struct { BODY } ALIAS_PART ;
+            # Group 1 = everything inside braces, Group 2 = alias declarator
+            anon_pat = (
+                r"typedef\s+struct\s*\{([^{}]*)\}\s*([^;]*\b"
+                + re.escape(alias) + r"\b[^;]*);"
+            )
+            if re.search(anon_pat, content, re.DOTALL):
                 _tt = target_tag
-                content, _ = re.subn(
-                    anon_pat,
-                    lambda m, tt=_tt: f"typedef struct {tt} {{{m.group(1)}}} {m.group(2)};",
-                    content
-                )
+                def _anon_sub(m, tt=_tt):
+                    body_inner = m.group(1)
+                    declarator = m.group(2)
+                    return f"typedef struct {tt} {{{body_inner}}} {declarator};"
+                content, _ = re.subn(anon_pat, _anon_sub, content, flags=re.DOTALL)
             else:
+                # Named body / forward reference mismatch — rename struct tag refs
                 content, _ = re.subn(
                     r"\bstruct\s+" + re.escape(alias) + r"\b",
                     f"struct {target_tag}", content)
@@ -297,13 +399,16 @@ def apply_fixes(categories):
             fp2, tag = _unpack_pair(item)
             if fp2 != filepath: continue
             if tag in KNOWN_GLOBAL_TYPES:
-                content, _ = re.subn(r'struct\s+{}\s*\{{[^{{}}]*\}};'.format(re.escape(tag)), "", content)
+                content, _ = re.subn(
+                    r'struct\s+{}\s*\{{[^{{}}]*\}};'.format(re.escape(tag)), "", content)
 
         if content != original:
             write_file(filepath, content)
             fixed_files.add(filepath); fixes += 1
 
-    # 7. Incomplete sizeof
+    # ------------------------------------------------------------------
+    # 7. Incomplete sizeof → inject opaque body
+    # ------------------------------------------------------------------
     if categories.get("incomplete_sizeof"):
         types_content = read_file(TYPES_HEADER)
         types_added = False
@@ -327,7 +432,9 @@ def apply_fixes(categories):
         if types_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # 8. Static-name conflicts
+    # ------------------------------------------------------------------
+    # 8. Static-name conflicts — generic handler + POSIX reserved names
+    # ------------------------------------------------------------------
     seen_static = set()
     for item in categories.get("static_conflict", []):
         filepath, func_name = _unpack_pair(item)
@@ -335,7 +442,7 @@ def apply_fixes(categories):
         if key in seen_static: continue
         seen_static.add(key)
         if not func_name or not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
-        content   = read_file(filepath)
+        content = read_file(filepath)
         prefix    = os.path.basename(filepath).split('.')[0]
         macro_fix = f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{prefix}_{func_name}\n"
         if macro_fix not in content:
@@ -344,7 +451,20 @@ def apply_fixes(categories):
             write_file(filepath, content)
             fixed_files.add(filepath); fixes += 1
 
+    # Proactive sweep: catch POSIX-reserved static names not yet in categories
+    if categories.get("posix_conflict"):
+        for item in categories.get("posix_conflict", []):
+            filepath, func_name = _unpack_pair(item)
+            if not func_name or not os.path.exists(filepath): continue
+            content = read_file(filepath)
+            new_content, changed = _rename_posix_static(content, func_name, filepath)
+            if changed:
+                write_file(filepath, new_content)
+                fixed_files.add(filepath); fixes += 1
+
+    # ------------------------------------------------------------------
     # 9. Undeclared macros
+    # ------------------------------------------------------------------
     if categories.get("undeclared_macros"):
         types_content = read_file(TYPES_HEADER)
         macros_added  = False
@@ -365,7 +485,9 @@ def apply_fixes(categories):
         if macros_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # 10. Implicit function declarations
+    # ------------------------------------------------------------------
+    # 10. Implicit function declarations → add system headers
+    # ------------------------------------------------------------------
     if categories.get("implicit_func"):
         math_funcs   = {"sinf","cosf","sqrtf","abs","fabs","pow","floor","ceil","round"}
         string_funcs = {"memcpy","memset","strlen","strcpy","strncpy","strcmp","memcmp"}
@@ -384,7 +506,9 @@ def apply_fixes(categories):
         if includes_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
+    # ------------------------------------------------------------------
     # 11. Undefined linker symbols → stubs
+    # ------------------------------------------------------------------
     if categories.get("undefined_symbols"):
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
@@ -406,7 +530,9 @@ def apply_fixes(categories):
         if stubs_added:
             write_file(STUBS_FILE, existing_stubs); fixes += 1
 
-    # 12. Audio-state opaque types
+    # ------------------------------------------------------------------
+    # 12. Audio-state opaque types (explicit category)
+    # ------------------------------------------------------------------
     if categories.get("audio_states"):
         types_content = read_file(TYPES_HEADER)
         audio_added   = False
@@ -418,7 +544,44 @@ def apply_fixes(categories):
         if audio_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # 13. Undeclared N64 platform types
+    # ------------------------------------------------------------------
+    # 12b. N64 DSP audio state types (RESAMPLE_STATE, POLEF_STATE, etc.)
+    #      These appear in synthInternals.h as unknown type names when
+    #      the header's own typedef chain is broken by include ordering.
+    #      We inject opaque stubs so pointer-only uses can compile.
+    # ------------------------------------------------------------------
+    if categories.get("unknown_audio_state_types"):
+        types_content = read_file(TYPES_HEADER)
+        added = False
+        for t in sorted(categories["unknown_audio_state_types"]):
+            if not isinstance(t, str): continue
+            if t not in N64_AUDIO_STATE_TYPES: continue
+            if f"typedef struct {t}" not in types_content and f"}} {t};" not in types_content:
+                types_content += f"\ntypedef struct {t} {{ long long int force_align[64]; }} {t};\n"
+                added = True
+        if added:
+            write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # Auto-detect unknown_audio_state_types from missing_types if not already
+    # categorised separately (so the error-parser doesn't need to know about them)
+    if categories.get("missing_types"):
+        types_content = read_file(TYPES_HEADER)
+        added = False
+        mt = categories["missing_types"]
+        if not isinstance(mt, (list, set, tuple)): mt = []
+        for item in sorted(mt, key=str):
+            tag = item[1] if isinstance(item, tuple) and len(item) >= 2 else item
+            if not isinstance(tag, str): continue
+            if tag in N64_AUDIO_STATE_TYPES:
+                if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
+                    types_content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
+                    added = True
+        if added:
+            write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # ------------------------------------------------------------------
+    # 13. Undeclared N64 platform types (OSIntMask etc.)
+    # ------------------------------------------------------------------
     if categories.get("undeclared_n64_types"):
         types_content = read_file(TYPES_HEADER)
         k_added = False
@@ -438,7 +601,9 @@ def apply_fixes(categories):
                 existing_stubs += "OSIntMask osSetIntMask(OSIntMask mask) { (void)mask; return 0; }\n"
                 write_file(STUBS_FILE, existing_stubs); fixes += 1
 
+    # ------------------------------------------------------------------
     # 14. Undeclared GBI constants
+    # ------------------------------------------------------------------
     if categories.get("undeclared_gbi"):
         types_content = read_file(TYPES_HEADER)
         gbi_added = False
@@ -453,7 +618,9 @@ def apply_fixes(categories):
         if gbi_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # 15. Missing types → opaque stubs
+    # ------------------------------------------------------------------
+    # 15. Missing types → opaque stubs in n64_types.h
+    # ------------------------------------------------------------------
     if categories.get("missing_types"):
         types_content = read_file(TYPES_HEADER)
         types_added   = False
@@ -466,6 +633,8 @@ def apply_fixes(categories):
             else:
                 tag = item
             if not isinstance(tag, str): continue
+            # Already handled above as audio state type
+            if tag in N64_AUDIO_STATE_TYPES: continue
             base_tag = tag[:-2] if tag.endswith("_s") else tag
             if base_tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES:
                 if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
@@ -485,7 +654,9 @@ def apply_fixes(categories):
         if types_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
+    # ------------------------------------------------------------------
     # 16. Full struct bodies for known N64 types
+    # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
@@ -527,7 +698,9 @@ def apply_fixes(categories):
         if bodies_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
+    # ------------------------------------------------------------------
     # 17. Mtx special body
+    # ------------------------------------------------------------------
     if categories.get("need_mtx_body"):
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
@@ -543,7 +716,9 @@ def apply_fixes(categories):
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content); fixes += 1
 
+    # ------------------------------------------------------------------
     # 18. Local forward-only declarations
+    # ------------------------------------------------------------------
     if categories.get("local_fwd_only"):
         file_to_types = defaultdict(set)
         for item in categories.get("local_fwd_only", []):
@@ -567,7 +742,6 @@ def apply_fixes(categories):
                 if body_match:
                     actual_tag = body_match.group(1)
                     if actual_tag != expected:
-                        # Rewrite body tag → canonical
                         fixed = body_match.group(0).replace(
                             f"struct {actual_tag}", f"struct {expected}", 1)
                         content = content[:body_match.start()] + fixed + content[body_match.end():]
@@ -585,7 +759,9 @@ def apply_fixes(categories):
                 write_file(filepath, content)
                 fixed_files.add(filepath); fixes += 1
 
+    # ------------------------------------------------------------------
     # 19. Missing global extern declarations
+    # ------------------------------------------------------------------
     if categories.get("missing_globals"):
         types_content = read_file(TYPES_HEADER)
         globals_added = False
@@ -599,5 +775,20 @@ def apply_fixes(categories):
                 globals_added = True
         if globals_added:
             write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # ------------------------------------------------------------------
+    # 20. POSIX reserved name conflicts detected by build_driver's parser
+    #     (also swept proactively in §8 above if categorised explicitly)
+    # ------------------------------------------------------------------
+    if categories.get("posix_reserved_conflict"):
+        for item in categories.get("posix_reserved_conflict", []):
+            filepath, func_name = _unpack_pair(item)
+            if not func_name or not os.path.exists(filepath): continue
+            if func_name not in POSIX_RESERVED_NAMES: continue
+            content = read_file(filepath)
+            new_content, changed = _rename_posix_static(content, func_name, filepath)
+            if changed:
+                write_file(filepath, new_content)
+                fixed_files.add(filepath); fixes += 1
 
     return fixes, fixed_files
