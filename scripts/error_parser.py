@@ -250,11 +250,11 @@ def classify_errors(log_data):
                 categories["undeclared_gbi"].add(ident)
             elif ident in KNOWN_MACROS or ident in KNOWN_FUNCTION_MACROS:
                 categories["undeclared_macros"].add(ident)
-            # BUG FIX: Intercept known audio states / globals so they don't get cast as macros
+            # BUG FIX: Ensure types are ALWAYS passed to missing_types, not missing_globals or macros!
             elif ident in N64_AUDIO_STATE_TYPES:
                 if filepath: categories["audio_states"].add((filepath, ident))
             elif ident in KNOWN_GLOBAL_TYPES:
-                if filepath: categories["missing_globals"].add((filepath, ident))
+                if filepath: categories["missing_types"].add((filepath, ident))
             elif ident.isupper():
                 categories["undeclared_macros"].add(ident)
             elif ident.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', ident):
