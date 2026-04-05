@@ -2,11 +2,9 @@ import os
 import re
 from collections import defaultdict
 
-# Imports from your parser
 from error_parser import (
-    BRACE_MATCH, N64_IDENT_TYPES, N64_STRUCT_BODIES, KNOWN_MACROS, 
-    KNOWN_FUNCTION_MACROS, KNOWN_GLOBAL_TYPES, N64_AUDIO_STATE_TYPES, 
-    POSIX_RESERVED_NAMES, read_file, write_file
+    BRACE_MATCH, N64_STRUCT_BODIES, KNOWN_MACROS, 
+    KNOWN_FUNCTION_MACROS, POSIX_RESERVED_NAMES, read_file, write_file
 )
 
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
@@ -28,7 +26,7 @@ def strip_auto_preamble(content):
     return '\n'.join(result)
 
 def ensure_types_header_base():
-    """Ensure n64_types.h exists, cleans up bad macros, and injects primitives & audio states."""
+    """Ensure n64_types.h exists, cleans up bad macros, and injects primitives dynamically."""
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
         if "#pragma once" not in content:
@@ -37,68 +35,31 @@ def ensure_types_header_base():
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
-    required_types = [
-        ("#include <stdint.h>", "#include <stdint.h>"),
-        ("typedef uint32_t u32;", "typedef uint8_t u8;\ntypedef int8_t s8;\ntypedef uint16_t u16;\ntypedef int16_t s16;\ntypedef uint32_t u32;\ntypedef int32_t s32;\ntypedef uint64_t u64;\ntypedef int64_t s64;\ntypedef float f32;\ntypedef double f64;")
-    ]
-    
+    core_primitives = """
+#include <stdint.h>
+#ifndef CORE_PRIMITIVES_DEFINED
+#define CORE_PRIMITIVES_DEFINED
+typedef uint8_t u8;
+typedef int8_t s8;
+typedef uint16_t u16;
+typedef int16_t s16;
+typedef uint32_t u32;
+typedef int32_t s32;
+typedef uint64_t u64;
+typedef int64_t s64;
+typedef float f32;
+typedef double f64;
+#endif
+"""
     changed = False
-    for check, injection in required_types:
-        if check not in content:
-            content = content.replace("#pragma once", f"#pragma once\n{injection}\n")
-            changed = True
-            
-    # BULLETPROOF BUG FIX: Purge any bad auto-macros that were accidentally injected
-    bad_macro_types = set(N64_AUDIO_STATE_TYPES) | set(KNOWN_GLOBAL_TYPES) | {"Mtx", "LookAt", "OSPfs"}
-    for t in bad_macro_types:
-        pattern = rf"(?m)^[ \t]*#ifndef\s+{t}[ \t]*\n[ \t]*#define\s+{t}\s+0\s*/\*\s*AUTO-INJECTED UNKNOWN MACRO\s*\*/[ \t]*\n[ \t]*#endif[ \t]*\n?"
-        new_content, count = re.subn(pattern, "", content)
-        if count > 0:
-            content = new_content
-            changed = True
-            
-    for t in N64_AUDIO_STATE_TYPES:
-        if f"typedef struct {t}" not in content and f"}} {t};" not in content:
-            content += f"\ntypedef struct {t} {{ long long int force_align[64]; }} {t};\n"
-            changed = True
+    if "CORE_PRIMITIVES_DEFINED" not in content:
+        content = content.replace("#pragma once", f"#pragma once\n{core_primitives}\n")
+        changed = True
             
     if changed or not os.path.exists(TYPES_HEADER):
         write_file(TYPES_HEADER, content)
         
     return content
-
-def canonical_tag(name):
-    if len(name) > 1 and name[0].islower() and name[1].isupper():
-        base = name[1].lower() + name[2:]
-        return base + "_s"
-    return name + "_s"
-
-def remove_conflicting_fwd_decl(content, alias):
-    expected_tag = canonical_tag(alias)
-    pat = re.compile(
-        r'/\* AUTO: forward decl[^\n]*/\n'
-        r'typedef\s+struct\s+' + re.escape(expected_tag) + r'\s+' + re.escape(alias) + r'\s*;\n?'
-    )
-    new_content, n = pat.subn("", content)
-    if n == 0:
-        pat2 = re.compile(r'typedef\s+struct\s+' + re.escape(expected_tag) + r'\s+' + re.escape(alias) + r'\s*;\n?')
-        new_content, n = pat2.subn("", content)
-    return new_content, n > 0
-
-def fix_body_tag(content, alias):
-    expected = canonical_tag(alias)
-    pat = re.compile(
-        r'(typedef\s+struct\s+)(\w+)(\s*\{[^{}]*\}\s*(?:[^;]*\b)' + re.escape(alias) + r'\b[^;]*;)',
-        re.DOTALL
-    )
-    changed = False
-    def _sub(m):
-        nonlocal changed
-        if m.group(2) == expected: return m.group(0)
-        changed = True
-        return m.group(1) + expected + m.group(3)
-    new_content = pat.sub(_sub, content)
-    return new_content, changed
 
 def _rename_posix_static(content, func_name, filepath):
     prefix    = os.path.basename(filepath).split('.')[0]
@@ -116,6 +77,82 @@ def apply_fixes(categories):
 
     types_content = ensure_types_header_base()
 
+    # --- DYNAMIC STRUCT REDEFINITION FIXES ---
+    for type_name in sorted(categories.get("conflict_typedef", [])):
+        types_content = read_file(TYPES_HEADER)
+        # Actively strip the offending generic struct that conflicts with the SDK's internal typedef
+        pattern = rf"(?:typedef\s+)?struct\s+{type_name}\s*\{{[^}}]*\}}\s*{type_name}?\s*;\n?"
+        new_types, n = re.subn(pattern, "", types_content)
+        if n > 0:
+            # Recreate it securely as `struct Name_s` to avoid collision with `typedef ... Name;`
+            if f"struct {type_name}_s {{" not in new_types:
+                new_types += f"\nstruct {type_name}_s {{ long long int force_align[64]; }};\n"
+            write_file(TYPES_HEADER, new_types)
+            types_content = new_types
+            fixes += 1
+
+    # --- DYNAMIC MISSING MEMBERS GENERATION ---
+    for struct_name, member_name in sorted(categories.get("missing_members", [])):
+        types_content = read_file(TYPES_HEADER)
+        
+        pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}})"
+        def inject_member(match):
+            body = match.group(2)
+            if member_name not in body:
+                return f"{match.group(1)}{body}    long long int {member_name};\n{match.group(3)}"
+            return match.group(0)
+            
+        if re.search(pattern, types_content):
+            new_types, n = re.subn(pattern, inject_member, types_content)
+            if n > 0:
+                write_file(TYPES_HEADER, new_types)
+                types_content = new_types
+                fixes += 1
+        else:
+            # If the struct does not exist yet at all, auto-generate it dynamically
+            types_content += f"\nstruct {struct_name} {{\n    long long int {member_name};\n    long long int force_align[64];\n}};\n"
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    # --- DYNAMIC VARIABLE REDEFINITION FIXES ---
+    for filepath, var in sorted(categories.get("redefinition", [])):
+        if os.path.exists(filepath):
+            content = read_file(filepath)
+            new_content, n = re.subn(rf"^(.*?\b{re.escape(var)}\b.*?;)", r"/* AUTO-REMOVED REDEF: \1 */", content, flags=re.MULTILINE)
+            if n > 0:
+                write_file(filepath, new_content)
+                fixed_files.add(filepath)
+                fixes += 1
+
+    # --- DYNAMIC MISSING TYPE GENERATION ---
+    for filepath, tag in sorted(categories.get("missing_types", [])):
+        types_content = read_file(TYPES_HEADER)
+        
+        if tag in N64_STRUCT_BODIES:
+            categories.setdefault("need_struct_body", set()).add(tag)
+        else:
+            struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
+            decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
+            
+            if f"struct {struct_tag}" not in types_content and f" {tag};" not in types_content:
+                # Remove any bad macros that might have been accidentally generated
+                bad_macro = f"\n#ifndef {tag}\n#define {tag} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
+                if bad_macro in types_content:
+                    types_content = types_content.replace(bad_macro, "")
+                
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
+                write_file(TYPES_HEADER, types_content)
+                fixed_files.add(TYPES_HEADER)
+                fixes += 1
+            
+        if filepath and os.path.exists(filepath):
+            c = read_file(filepath)
+            if 'include "ultra/n64_types.h"' not in c:
+                write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                fixed_files.add(filepath)
+                fixes += 1
+
+    # STANDARD FIXES
     if categories["extraneous_brace"]:
         original = types_content
         types_content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", types_content)
@@ -212,13 +249,11 @@ def apply_fixes(categories):
             target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
             alias = tag1 if target_tag == tag2 else tag2
 
-            if alias in KNOWN_GLOBAL_TYPES or target_tag in KNOWN_GLOBAL_TYPES:
-                content, cnt = re.subn(
-                    rf'(?:typedef\s+)?struct\s+{re.escape(target_tag)}?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
-                    "", content
-                )
-                content = re.sub(rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?', '', content)
-                continue
+            content, cnt = re.subn(
+                rf'(?:typedef\s+)?struct\s+{re.escape(target_tag)}?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
+                "", content
+            )
+            content = re.sub(rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?', '', content)
             
             anon_body_pattern = rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_body_pattern, content):
@@ -235,11 +270,10 @@ def apply_fixes(categories):
 
         for fp2, tag in categories["struct_redef"]:
             if fp2 != filepath: continue
-            if tag in KNOWN_GLOBAL_TYPES:
-                content, cnt = re.subn(
-                    rf'struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}\s*;\n?',
-                    "", content
-                )
+            content, cnt = re.subn(
+                rf'struct\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}\s*;\n?',
+                "", content
+            )
 
         if content != original:
             write_file(filepath, content)
@@ -314,13 +348,13 @@ def apply_fixes(categories):
     if categories["implicit_func"]:
         math_funcs   = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
         string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
-        stdlib_funcs = {"malloc", "free", "exit", "atoi", "rand", "srand"}
+        stdlib_funcs = {"stdlib.h": ["malloc", "free", "exit", "atoi", "rand", "srand"]}
         types_content = read_file(TYPES_HEADER)
         includes_added = False
         for func in sorted(categories["implicit_func"]):
             if func in math_funcs:       header = "<math.h>"
             elif func in string_funcs:   header = "<string.h>"
-            elif func in stdlib_funcs:   header = "<stdlib.h>"
+            elif func in stdlib_funcs["stdlib.h"]:   header = "<stdlib.h>"
             else:                        continue
             if f"#include {header}" not in types_content:
                 types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header}")
@@ -350,58 +384,6 @@ def apply_fixes(categories):
             write_file(STUBS_FILE, existing_stubs)
             fixes += 1
 
-    for cat in ["audio_states", "missing_types"]:
-        if categories.get(cat):
-            types_content = read_file(TYPES_HEADER)
-            types_added   = False
-            
-            for filepath, tag in sorted(categories[cat]):
-                if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
-                    c = read_file(filepath)
-                    if 'include "ultra/n64_types.h"' not in c:
-                        write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
-                        fixed_files.add(filepath); fixes += 1
-
-                if tag in N64_AUDIO_STATE_TYPES:
-                    if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
-                        types_content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
-                        types_added = True
-                    continue
-
-                base_tag = tag[:-2] if tag.endswith("_s") else tag
-                if base_tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES:
-                    if base_tag in N64_STRUCT_BODIES:
-                        categories["need_struct_body"].add(base_tag)
-                    continue
-                        
-                if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
-                    types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
-                    types_added = True
-                    
-            if types_added:
-                write_file(TYPES_HEADER, types_content); fixes += 1
-
-    if categories["undeclared_n64_types"]:
-        types_content = read_file(TYPES_HEADER)
-        k_added = False
-        if "OSIntMask" in categories["undeclared_n64_types"]:
-            if "OSIntMask" not in types_content:
-                types_content += "\n/* N64 interrupt mask type */\ntypedef u32 OSIntMask;\n"
-                k_added = True
-            for macro, val in sorted(KNOWN_MACROS.items()):
-                if macro.startswith("OS_IM_") and f"#define {macro}" not in types_content:
-                    types_content += f"\n#ifndef {macro}\n#define {macro} {val}\n#endif\n"
-                    k_added = True
-        if k_added:
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
-        if os.path.exists(STUBS_FILE):
-            existing_stubs = read_file(STUBS_FILE)
-            if "osSetIntMask" not in existing_stubs:
-                existing_stubs += "OSIntMask osSetIntMask(OSIntMask mask) { (void)mask; return 0; }\n"
-                write_file(STUBS_FILE, existing_stubs)
-                fixes += 1
-
     if categories["undeclared_gbi"]:
         types_content = read_file(TYPES_HEADER)
         gbi_added = False
@@ -417,32 +399,15 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    if categories["need_mtx_body"]:
-        types_content = read_file(TYPES_HEADER)
-        if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s+Mtx(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:Mtx\s*)?;?\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*Mtx\s*;\n?", "", types_content)
-            types_content = re.sub(r"typedef\s+struct\s+Mtx(?:_s)?\s+Mtx\s*;\n?", "", types_content)
-            types_content = re.sub(r"struct\s+Mtx(?:_s)?\s*;\n?", "", types_content)
-            
-            types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
-
     if categories["need_struct_body"]:
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
         for tag in sorted(categories["need_struct_body"]):
-            if tag == "Mtx": continue  
             body = N64_STRUCT_BODIES.get(tag)
-            
             if body:
+                check_str = body.split('\n')[2].strip() 
                 if tag == "LookAt": check_str = "__Light_t"
                 elif tag == "OSPfs": check_str = "fileSize;"
-                elif tag == "OSContStatus": check_str = "errno;"
-                elif tag == "OSContPad": check_str = "stick_x;"
-                elif tag == "OSPiHandle": check_str = "pageSize;"
-                else: check_str = body.split('\n')[2].strip() 
                 
                 if check_str not in types_content:
                     types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
