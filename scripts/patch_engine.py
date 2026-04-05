@@ -57,13 +57,17 @@ def apply_fixes(categories):
     for filepath, func in sorted(categories["conflicting_types"]):
         if not os.path.exists(filepath): continue
         content = read_file(filepath)
-        # Handle indented functions and parameter brackets
-        pattern = rf"(?:^|\n)[ \t]*([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*[\n\s]*\{{"
+        # Robust multi-line matcher: captures return type and arguments correctly
+        pattern = rf"(?:^|\n)([A-Za-z_][^;{{]*?\b{re.escape(func)}\b\s*\([^;{{]*\))\s*\{{"
         match = re.search(pattern, content)
         if match:
-            sig_full = match.group(0)
-            prototype = sig_full[:sig_full.rfind('{')].strip() + ";"
-            if prototype not in content:
+            prototype = match.group(1).strip() + ";"
+            prototype = re.sub(r'//.*', '', prototype)
+            prototype = re.sub(r'/\*.*?\*/', '', prototype, flags=re.DOTALL)
+            prototype = re.sub(r'\s+', ' ', prototype).strip()
+            
+            normalized_content = re.sub(r'\s+', ' ', content)
+            if prototype not in normalized_content:
                 includes = list(re.finditer(r"#include\s+.*?\n", content))
                 injection = f"\n/* AUTO: resolve conflicting implicit type */\n{prototype}\n"
                 if includes:
@@ -201,6 +205,13 @@ def apply_fixes(categories):
         types_added = False
         seen = set()
         for filepath, tag in categories["incomplete_sizeof"]:
+            if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+                c = read_file(filepath)
+                if 'include "ultra/n64_types.h"' not in c:
+                    write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                    fixed_files.add(filepath)
+                    fixes += 1
+
             if tag in seen: continue
             seen.add(tag)
             
@@ -338,25 +349,46 @@ def apply_fixes(categories):
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ── Move missing_types above need_struct_body to forward N64 SDK structs ──
+    # ── Forward N64 SDK structs and ensure header includes ──
     if categories["missing_types"]:
         types_content = read_file(TYPES_HEADER)
         types_added = False
-        for tag in sorted(categories["missing_types"]):
-            if tag in N64_STRUCT_BODIES:
-                # Forward to need_struct_body
-                if isinstance(categories["need_struct_body"], set):
-                    categories["need_struct_body"].add(tag)
-                elif isinstance(categories["need_struct_body"], list):
-                    categories["need_struct_body"].append(tag)
-                else:
-                    categories["need_struct_body"] = {tag}
-                continue
+        
+        # Ensure safely iterable logic handles both strings and tuples
+        mt = categories["missing_types"]
+        if not isinstance(mt, (list, set, tuple)): mt = []
+        
+        for item in sorted(mt, key=str):
+            filepath = None
+            if isinstance(item, tuple) and len(item) >= 2:
+                filepath, tag = item[0], item[1]
+            else:
+                tag = item
                 
-            if tag in KNOWN_GLOBAL_TYPES: continue
+            base_tag = tag[:-2] if tag.endswith("_s") else tag
+            
+            # Forward directly to the SDK struct bodies resolver and inject #includes
+            if base_tag in N64_STRUCT_BODIES or tag in KNOWN_GLOBAL_TYPES:
+                if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+                    c = read_file(filepath)
+                    if 'include "ultra/n64_types.h"' not in c:
+                        write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                        fixed_files.add(filepath)
+                        fixes += 1
+                        
+                if base_tag in N64_STRUCT_BODIES:
+                    if isinstance(categories["need_struct_body"], set):
+                        categories["need_struct_body"].add(base_tag)
+                    elif isinstance(categories["need_struct_body"], list):
+                        categories["need_struct_body"].append(base_tag)
+                    else:
+                        categories["need_struct_body"] = {base_tag}
+                continue
+
             if f"typedef struct {tag}" not in types_content and f"}} {tag};" not in types_content:
                 types_content += f"\ntypedef struct {tag} {{ int dummy_data[128]; }} {tag};\n"
                 types_added = True
+                
         if types_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
@@ -365,12 +397,10 @@ def apply_fixes(categories):
         types_content = read_file(TYPES_HEADER)
         bodies_added = False
         
-        # Ensure safely iterable
         nsb = categories["need_struct_body"]
         if not isinstance(nsb, (list, set, tuple)): nsb = []
         
         for raw_tag in sorted(nsb):
-            # Parse 'OSPfs_s' into 'OSPfs' for dictionary lookup
             tag = raw_tag[:-2] if raw_tag.endswith("_s") else raw_tag
             if tag == "Mtx": 
                 categories["need_mtx_body"] = True
@@ -384,19 +414,31 @@ def apply_fixes(categories):
             elif tag == "OSContPad": check_str = "s8  stick_x;"
             elif tag == "OSPiHandle": check_str = "u8 pageSize;"
             
-            if body and check_str not in types_content:
+            needs_injection = False
+            if body:
+                if check_str not in types_content:
+                    needs_injection = True
+                elif not body.startswith("typedef union") and f"struct {tag}_s {{" not in types_content:
+                    needs_injection = True
+                    
+            if needs_injection:
                 # Completely wipe any variations of the struct to prevent redefinitions
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
+                types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:{re.escape(tag)}|{re.escape(tag)}_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b{re.escape(tag)}\b[^;]*;\n?", "", types_content)
+                types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:{re.escape(tag)}|{re.escape(tag)}_s)\s+[^;]*\b(?:{re.escape(tag)}|{re.escape(tag)}_s)\b[^;]*;\n?", "", types_content)
                 types_content = re.sub(rf"struct\s+(?:{re.escape(tag)}|{re.escape(tag)}_s)\s*;\n?", "", types_content)
                 
                 if tag == "LookAt":
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__Light_t\s*;\n?", "", types_content)
                     types_content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*__LookAtDir\s*;\n?", "", types_content)
 
+                # Fix: Make sure inner SDK structs explicitly define the `_s` naming pattern requested by decompiled C code
+                if not body.startswith("typedef union") and f"struct {tag}_s" not in body:
+                    body = re.sub(rf"typedef\s+struct\s*(?:{re.escape(tag)})?\s*\{{", f"typedef struct {tag}_s {{", body, count=1)
+
                 types_content += "\n" + body
                 bodies_added = True
+                
         if bodies_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
@@ -405,12 +447,15 @@ def apply_fixes(categories):
         types_content = read_file(TYPES_HEADER)
         if "i[4][4]" not in types_content and "m[4][4]" not in types_content:
             # Comprehensively wipe all legacy dummy Mtx typedefs
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\bMtx\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(rf"(?:typedef\s+)?struct\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
             types_content = re.sub(rf"struct\s+(?:Mtx|Mtx_s)\s*\{{({BRACE_MATCH})\}}\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\bMtx\b[^;]*;\n?", "", types_content)
+            types_content = re.sub(rf"typedef\s+(?:struct\s+)?(?:Mtx|Mtx_s)\s+[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
             types_content = re.sub(r"struct\s+(?:Mtx|Mtx_s)\s*;\n?", "", types_content)
             types_content = re.sub(rf"typedef\s+union\s*\{{({BRACE_MATCH})\}}\s*__Mtx_data\s*;\n?", "", types_content)
             
+            # Wipe any "typedef union Mtx { ... } Mtx;" dummies if they exist
+            types_content = re.sub(rf"typedef\s+union\s*(?:Mtx|Mtx_s)?\s*\{{({BRACE_MATCH})\}}\s*[^;]*\b(?:Mtx|Mtx_s)\b[^;]*;\n?", "", types_content)
+
             types_content += "\n" + N64_STRUCT_BODIES["Mtx"]
             write_file(TYPES_HEADER, types_content)
             fixes += 1
