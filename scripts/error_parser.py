@@ -2,15 +2,9 @@ import os
 import re
 from collections import defaultdict
 
-# Matches up to 4 levels of nested braces securely
 BRACE_MATCH = r"[^{}]*"
 for _ in range(4):
     BRACE_MATCH = r"(?:[^{}]|\{" + BRACE_MATCH + r"\})*"
-
-N64_IDENT_TYPES = {
-    "OSIntMask", "OSMesgQueue", "OSMesg", "OSThread", "OSTimer", "OSTime",
-    "OSEvent", "OSPri", "OSId", "OSTask", "OSTask_t", "CPUState",
-}
 
 N64_STRUCT_BODIES = {
     "Mtx": """\
@@ -24,7 +18,6 @@ typedef struct Mtx_s {
     u16  h[4][4];    
 } Mtx;
 """,
-
     "LookAt": """\
 /* N64 LookAt */
 typedef struct {
@@ -42,7 +35,6 @@ typedef struct LookAt_s {
     __LookAtDir l[2];
 } LookAt;
 """,
-
     "OSPfs": """\
 /* N64 OSPfs stub */
 typedef struct OSPfs_s {
@@ -88,21 +80,6 @@ KNOWN_FUNCTION_MACROS = {
     "OS_PHYSICAL_TO_K1": "#define OS_PHYSICAL_TO_K1(x) ((void *)((u32)(x) | 0xA0000000))",
 }
 
-KNOWN_GLOBAL_TYPES = {
-    "Acmd", "ADPCM_STATE", "Vtx", "Gfx", "Mtx", "LookAt", "RESAMPLE_STATE", "ENVMIX_STATE", "POLEF_STATE",
-    "OSContPad", "OSContStatus", "OSTimer", "OSTime", "OSMesg", "OSEvent", "OSThread", "OSMesgQueue", "OSTask", "OSTask_t", "CPUState",
-    "OSIntMask", "OSPfs", "OSPiHandle", "Actor", "ActorMarker",
-    "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
-}
-
-# N64 audio DSP state types
-N64_AUDIO_STATE_TYPES = {
-    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
-    "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE",
-    "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE", "ALVoiceState"
-}
-
-# POSIX / libc reserved function names
 POSIX_RESERVED_NAMES = {
     "close", "open", "read", "write", "send", "recv",
     "connect", "accept", "bind", "listen", "select",
@@ -121,9 +98,6 @@ POSIX_RESERVED_NAMES = {
 
 def read_file(path):
     with open(path, "r", encoding="utf-8", errors="replace") as f: return f.read()
-
-def write_file(path, content):
-    with open(path, "w", encoding="utf-8") as f: f.write(content)
 
 def extract_incomplete_type(line):
     m = re.search(r"incomplete (?:element )?type '(?:struct\s+)?([^']+)'", line)
@@ -163,16 +137,16 @@ def classify_errors(log_data):
         "conflicting_types":       set(),
         "incomplete_sizeof":       [],
         "need_struct_body":        set(),
-        "need_mtx_body":           False,
         "undeclared_macros":       set(),
         "undeclared_gbi":          set(),
-        "undeclared_n64_types":    set(),
         "missing_types":           set(), 
         "missing_globals":         set(), 
         "implicit_func":           set(),
         "undefined_symbols":       set(),
-        "audio_states":            set(), 
         "extraneous_brace":        False,
+        "missing_members":         set(),
+        "conflict_typedef":        set(),
+        "redefinition":            set(),
     }
 
     file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx)):"
@@ -200,17 +174,22 @@ def classify_errors(log_data):
         m_incomplete   = re.search(r"incomplete definition of type '(?:struct\s+)?([^']+)'", line)
         m_tentative    = re.search(r"tentative definition has type '([^']+)' \(aka '(?:struct\s+)?([^']+)'\) that is never completed", line)
         m_conflict     = re.search(r"error: conflicting types for '([^']+)'", line)
+        m_conflict_td  = re.search(r"definition of type '([^']+)' conflicts with typedef of the same name", line)
+        m_redef_var    = re.search(r"redefinition of '([^']+)' with a different type", line)
+
+        if m_conflict_td:
+            categories["conflict_typedef"].add(m_conflict_td.group(1))
+            
+        if m_redef_var and filepath:
+            categories["redefinition"].add((filepath, m_redef_var.group(1)))
 
         if m_conflict and filepath:
             categories["conflicting_types"].add((filepath, m_conflict.group(1)))
 
         if m_no_member:
-            tag = m_no_member.group(2)
-            base_tag = tag[:-2] if tag.endswith("_s") else tag
-            if base_tag in ("Mtx", "Mtx_s"):
-                categories["need_mtx_body"] = True
-            if base_tag in N64_STRUCT_BODIES:
-                categories["need_struct_body"].add(base_tag)
+            member = m_no_member.group(1)
+            struct = m_no_member.group(2)
+            categories["missing_members"].add((struct, member))
 
         if m_incomplete and filepath:
             tag = m_incomplete.group(1)
@@ -231,30 +210,17 @@ def classify_errors(log_data):
             type_name = m_unknown_type.group(1)
             if type_name in N64_STRUCT_BODIES:
                 categories["need_struct_body"].add(type_name)
-
-            if type_name in N64_AUDIO_STATE_TYPES:
-                categories["audio_states"].add((filepath, type_name)) 
+            elif is_defined_locally(filepath, type_name):
+                categories["local_fwd_only"].append((filepath, type_name))
             else:
-                if is_defined_locally(filepath, type_name):
-                    categories["local_fwd_only"].append((filepath, type_name))
-                elif type_name.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', type_name):
-                    categories["missing_types"].add((filepath, type_name))
-                else:
-                    categories["local_fwd_only"].append((filepath, type_name))
+                categories["missing_types"].add((filepath, type_name))
 
         if m_ident:
             ident = m_ident.group(1)
-            if ident in N64_IDENT_TYPES: 
-                categories["undeclared_n64_types"].add(ident)
-            elif ident.startswith("G_") or ident.startswith("g_"): 
+            if ident.startswith("G_") or ident.startswith("g_"): 
                 categories["undeclared_gbi"].add(ident)
             elif ident in KNOWN_MACROS or ident in KNOWN_FUNCTION_MACROS:
                 categories["undeclared_macros"].add(ident)
-            # BUG FIX: Ensure types are ALWAYS passed to missing_types, not missing_globals or macros!
-            elif ident in N64_AUDIO_STATE_TYPES:
-                if filepath: categories["audio_states"].add((filepath, ident))
-            elif ident in KNOWN_GLOBAL_TYPES:
-                if filepath: categories["missing_types"].add((filepath, ident))
             elif ident.isupper():
                 categories["undeclared_macros"].add(ident)
             elif ident.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', ident):
@@ -288,31 +254,11 @@ def classify_errors(log_data):
     seen_local_fwd = set()
     new_local_fwd = []
     for filepath, type_name in categories["local_fwd_only"]:
-        base_type = type_name[:-2] if type_name.endswith("_s") else type_name
-        if base_type in KNOWN_GLOBAL_TYPES or type_name in KNOWN_GLOBAL_TYPES:
-            categories["missing_n64_types"].add(filepath)
-        else:
-            key = (filepath, type_name)
-            if key not in seen_local_fwd:
-                seen_local_fwd.add(key)
-                new_local_fwd.append((filepath, type_name))
+        key = (filepath, type_name)
+        if key not in seen_local_fwd:
+            seen_local_fwd.add(key)
+            new_local_fwd.append((filepath, type_name))
     categories["local_fwd_only"] = new_local_fwd
-
-    missing_types_clean = set()
-    for fp, type_name in categories["missing_types"]:
-        if type_name in KNOWN_GLOBAL_TYPES:
-            categories["missing_n64_types"].add(fp)
-        else:
-            missing_types_clean.add((fp, type_name))
-    categories["missing_types"] = missing_types_clean
-
-    missing_globals_clean = set()
-    for fp, ident in categories["missing_globals"]:
-        if ident in KNOWN_GLOBAL_TYPES:
-            categories["missing_n64_types"].add(fp)
-        else:
-            missing_globals_clean.add((fp, ident))
-    categories["missing_globals"] = missing_globals_clean
 
     return categories
 
