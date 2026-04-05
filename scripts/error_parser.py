@@ -143,6 +143,35 @@ KNOWN_GLOBAL_TYPES = {
     "s8", "u8", "s16", "u16", "s32", "u32", "s64", "u64", "f32", "f64", "n64_bool", "OSPri", "OSId",
 }
 
+# N64 audio DSP state types defined in synthInternals.h.
+N64_AUDIO_STATE_TYPES = {
+    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
+    "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE",
+    "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE", "ALVoiceState"
+}
+
+# POSIX / libc reserved function names that collide with N64 source static fns.
+POSIX_RESERVED_NAMES = {
+    "close", "open", "read", "write", "send", "recv",
+    "connect", "accept", "bind", "listen", "select",
+    "poll", "dup", "dup2", "fork", "exec", "exit",
+    "stat", "fstat", "lstat", "access", "unlink", "rename",
+    "mkdir", "rmdir", "chdir", "getcwd",
+    "getpid", "getppid", "getuid", "getgid",
+    "signal", "raise", "kill",
+    "printf", "fprintf", "sprintf", "snprintf",
+    "scanf", "fscanf", "sscanf",
+    "time", "clock", "sleep", "usleep",
+    "malloc", "calloc", "realloc", "free",
+    "memcpy", "memset", "memmove", "memcmp",
+    "strlen", "strcpy", "strncpy", "strcmp", "strncmp",
+    "strcat", "strncat", "strchr", "strrchr", "strstr",
+    "atoi", "atol", "atof", "strtol", "strtod",
+    "abs", "labs", "fabs", "sqrt", "pow",
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "rand", "srand",
+}
+
 def read_file(path):
     with open(path, "r", encoding="utf-8", errors="replace") as f: return f.read()
 
@@ -176,26 +205,27 @@ def is_defined_locally(filepath, tag):
 
 def classify_errors(log_data):
     categories = {
-        "missing_n64_types":    set(),
-        "actor_pointer":        set(),
-        "local_struct_fwd":     [],
-        "local_fwd_only":       [],
-        "typedef_redef":        [],
-        "struct_redef":         [],
-        "static_conflict":      [],
-        "conflicting_types":    set(),
-        "incomplete_sizeof":    [],
-        "need_struct_body":     set(),
-        "need_mtx_body":        False,
-        "undeclared_macros":    set(),
-        "undeclared_gbi":       set(),
-        "undeclared_n64_types": set(),
-        "missing_types":        defaultdict(set),
-        "missing_globals":      defaultdict(set),
-        "implicit_func":        set(),
-        "undefined_symbols":    set(),
-        "audio_states":         set(),
-        "extraneous_brace":     False,
+        "missing_n64_types":       set(),
+        "actor_pointer":           set(),
+        "local_struct_fwd":        [],
+        "local_fwd_only":          [],
+        "typedef_redef":           [],
+        "struct_redef":            [],
+        "static_conflict":         [],
+        "posix_reserved_conflict": [], # ADDED: Catch POSIX naming specifically
+        "conflicting_types":       set(),
+        "incomplete_sizeof":       [],
+        "need_struct_body":        set(),
+        "need_mtx_body":           False,
+        "undeclared_macros":       set(),
+        "undeclared_gbi":          set(),
+        "undeclared_n64_types":    set(),
+        "missing_types":           set(), # CHANGED: Store as tuples for patcher compatibility
+        "missing_globals":         set(), # CHANGED: Store as tuples for patcher compatibility
+        "implicit_func":           set(),
+        "undefined_symbols":       set(),
+        "audio_states":            set(), # CHANGED: Will now store (filepath, name) tuples
+        "extraneous_brace":        False,
     }
 
     file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx)):"
@@ -252,17 +282,18 @@ def classify_errors(log_data):
 
         if m_unknown_type and filepath:
             type_name = m_unknown_type.group(1)
-            
+
             if type_name in N64_STRUCT_BODIES:
                 categories["need_struct_body"].add(type_name)
 
-            if type_name in {"RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "ALVoiceState"}:
-                categories["audio_states"].add(type_name)
+            # ENHANCEMENT: Uses the master N64_AUDIO_STATE_TYPES set and stores filepath
+            if type_name in N64_AUDIO_STATE_TYPES:
+                categories["audio_states"].add((filepath, type_name)) 
             else:
                 if is_defined_locally(filepath, type_name):
                     categories["local_fwd_only"].append((filepath, type_name))
                 elif type_name.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', type_name):
-                    categories["missing_types"][type_name].add(filepath)
+                    categories["missing_types"].add((filepath, type_name))
                 else:
                     categories["local_fwd_only"].append((filepath, type_name))
 
@@ -275,15 +306,22 @@ def classify_errors(log_data):
             elif ident.istitle() or re.match(r'^[A-Z][A-Za-z0-9_]*$', ident):
                 if filepath and is_defined_locally(filepath, ident): categories["local_fwd_only"].append((filepath, ident))
                 else:
-                    if filepath: categories["missing_types"][ident].add(filepath)
+                    if filepath: categories["missing_types"].add((filepath, ident))
             else:
-                if filepath: categories["missing_globals"][ident].add(filepath)
+                if filepath: categories["missing_globals"].add((filepath, ident))
 
         if m_undef_ref: categories["undefined_symbols"].add(m_undef_ref.group(1).strip())
         if m_undef_sym: categories["undefined_symbols"].add(m_undef_sym.group(1).replace("'", "").strip())
         if m_implicit: categories["implicit_func"].add(m_implicit.group(1))
-        if m_static and filepath: categories["static_conflict"].append((filepath, m_static.group(1)))
-            
+        
+        # ENHANCEMENT: Separates POSIX static conflicts using the main POSIX_RESERVED_NAMES set
+        if m_static and filepath: 
+            func_name = m_static.group(1)
+            if func_name in POSIX_RESERVED_NAMES:
+                categories["posix_reserved_conflict"].append((filepath, func_name))
+            else:
+                categories["static_conflict"].append((filepath, func_name))
+
         if ("invalid application of 'sizeof'" in line or "arithmetic on a pointer to an incomplete type" in line or "array has incomplete element type" in line) and filepath:
             inc_type = extract_incomplete_type(line)
             if inc_type:
@@ -293,7 +331,10 @@ def classify_errors(log_data):
 
         if filepath and os.path.exists(filepath):
             if "error:" in line: categories["missing_n64_types"].add(filepath)
-    
+
+    # -------------------------------------------------------------
+    # Cleanup routines updated to handle Tuples properly
+    # -------------------------------------------------------------
     seen_local_fwd = set()
     new_local_fwd = []
     for filepath, type_name in categories["local_fwd_only"]:
@@ -307,13 +348,22 @@ def classify_errors(log_data):
                 new_local_fwd.append((filepath, type_name))
     categories["local_fwd_only"] = new_local_fwd
 
-    for type_name, filepaths in categories["missing_types"].items():
+    # ENHANCEMENT: Properly unpacks flat tuple sets for globals and types
+    missing_types_clean = set()
+    for fp, type_name in categories["missing_types"]:
         if type_name in KNOWN_GLOBAL_TYPES:
-            for fp in filepaths: categories["missing_n64_types"].add(fp)
+            categories["missing_n64_types"].add(fp)
+        else:
+            missing_types_clean.add((fp, type_name))
+    categories["missing_types"] = missing_types_clean
 
-    for ident, filepaths in categories["missing_globals"].items():
+    missing_globals_clean = set()
+    for fp, ident in categories["missing_globals"]:
         if ident in KNOWN_GLOBAL_TYPES:
-            for fp in filepaths: categories["missing_n64_types"].add(fp)
+            categories["missing_n64_types"].add(fp)
+        else:
+            missing_globals_clean.add((fp, ident))
+    categories["missing_globals"] = missing_globals_clean
 
     return categories
 
