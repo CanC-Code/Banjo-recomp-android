@@ -410,7 +410,18 @@ def _scrape_logs_into_categories(categories: dict) -> None:
     except Exception:
         pass
 
-    mt = categories.setdefault("missing_types", [])
+    # Type-safe normalization to avoid AttributeError if driver passes sets
+    if "missing_types" not in categories:
+        categories["missing_types"] = []
+    elif isinstance(categories["missing_types"], set):
+        categories["missing_types"] = list(categories["missing_types"])
+    mt = categories["missing_types"]
+
+    if "posix_reserved_conflict" not in categories:
+        categories["posix_reserved_conflict"] = []
+    elif isinstance(categories["posix_reserved_conflict"], set):
+        categories["posix_reserved_conflict"] = list(categories["posix_reserved_conflict"])
+    pc = categories["posix_reserved_conflict"]
 
     for log_file in set(log_candidates):
         if not os.path.exists(log_file):
@@ -443,7 +454,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 r"static declaration of '(\w+)' follows non-static declaration",
                 content):
             filepath, func = m.group(1), m.group(2)
-            pc = categories.setdefault("posix_reserved_conflict", [])
             if (filepath, func) not in pc:
                 pc.append((filepath, func))
 
