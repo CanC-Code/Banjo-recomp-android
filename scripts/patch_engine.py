@@ -162,6 +162,42 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     fixes = 0
     fixed_files = set()
 
+    # --- NATIVE LOG SCRAPER: PREVENT DRIVER STALLS ---
+    log_files = [
+        "Android/failed_files.log", 
+        "full_build_log.txt", 
+        "build_log.txt", 
+        "Android/build_log.txt"
+    ]
+    try:
+        # Dynamically append any root logs if they exist
+        for f in os.listdir("."):
+            if f.endswith(".txt") or f.endswith(".log"):
+                log_files.append(f)
+    except Exception:
+        pass
+
+    for log_file in set(log_files):
+        if not os.path.exists(log_file):
+            continue
+        content = read_file(log_file)
+        
+        # 1. Unknown type names with filepath (Self-Healing regex)
+        for match in re.finditer(r"(?m)^(/[^\s:]+):\d+:\d+:\s+error:\s+unknown type name '(\w+)'", content):
+            filepath, tag = match.groups()
+            if "missing_types" not in categories: categories["missing_types"] = []
+            if (filepath, tag) not in categories["missing_types"]:
+                categories["missing_types"].append((filepath, tag))
+        
+        # 2. Catch-all without filepath
+        for match in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
+            tag = match.group(1)
+            if "missing_types" not in categories: categories["missing_types"] = []
+            if not any(isinstance(x, (list, tuple)) and x[1] == tag for x in categories["missing_types"]):
+                if tag not in categories["missing_types"]:
+                    categories["missing_types"].append(tag)
+    # -------------------------------------------------
+
     # FIRST: Clean up all conflicting typedefs
     clean_conflicting_typedefs()
 
@@ -301,7 +337,9 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 continue
             struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
             decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
-            if f"struct {struct_tag}" not in types_content and f" {tag};" not in types_content:
+            
+            # Robust duplicate guard
+            if not re.search(rf"\b{re.escape(tag)}\b", types_content):
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 write_file(TYPES_HEADER, types_content)
                 fixed_files.add(TYPES_HEADER)
@@ -309,7 +347,8 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
 
         if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
             c = read_file(filepath)
-            if 'include "ultra/n64_types.h"' not in c:
+            # More relaxed include check
+            if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
                 write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                 fixed_files.add(filepath)
                 fixes += 1
@@ -374,7 +413,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
             continue
         content = read_file(filepath)
-        if 'include "ultra/n64_types.h"' not in content:
+        if 'n64_types.h"' not in content and '<n64_types.h>' not in content:
             write_file(filepath, '#include "ultra/n64_types.h"\n' + content)
             fixed_files.add(filepath)
             fixes += 1
@@ -657,13 +696,16 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             else:
                 struct_tag = f"{t}_s" if not t.endswith("_s") else t
                 decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {t};\n"
-                if f"struct {struct_tag}" not in types_content and f" {t};" not in types_content:
+                
+                # Robust duplicate guard
+                if not re.search(rf"\b{re.escape(t)}\b", types_content):
                     types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\n{decl}#endif\n"
                     k_added = True
 
             if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
                 c = read_file(filepath)
-                if 'include "ultra/n64_types.h"' not in c:
+                # More relaxed include check
+                if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
                     write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                     fixed_files.add(filepath)
                     fixes += 1
