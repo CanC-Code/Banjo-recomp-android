@@ -63,10 +63,29 @@ def strip_auto_preamble(content: str) -> str:
         result.append(line)
     return '\n'.join(result)
 
+def clean_conflicting_typedefs():
+    """Remove all conflicting typedefs for N64 SDK types."""
+    if not os.path.exists(TYPES_HEADER):
+        return
+
+    content = read_file(TYPES_HEADER)
+    original_content = content
+
+    # List of types that must NOT be redefined
+    protected_types = ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]
+
+    for p in protected_types:
+        # Remove ALL typedefs for these types, regardless of their definition
+        content = re.sub(rf"typedef\s+(?:u32|s32|u16|s16|u8|s8|u64|s64|int|unsigned\s+int|long|unsigned\s+long)\s+{p}\s*;", "", content)
+        content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s*\{{[^}}]*\}}\s*{p}\s*;", "", content)
+        content = re.sub(rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{p}\s*;", "", content)
+
+    if content != original_content:
+        write_file(TYPES_HEADER, content)
+
 def ensure_types_header_base() -> str:
-    """Ensure n64_types.h exists and is properly initialized."""
-    types_header = Path(TYPES_HEADER)
-    if types_header.exists():
+    """Ensure n64_types.h exists, cleans up bad macros, and injects primitives."""
+    if os.path.exists(TYPES_HEADER):
         original_content = read_file(TYPES_HEADER)
         content = original_content
         content = content.replace('#include "ultra/n64_types.h"\n', '')
@@ -75,10 +94,25 @@ def ensure_types_header_base() -> str:
     else:
         original_content = ""
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
-        types_header.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
+    # 1. Rip out the entire CORE_PRIMITIVES block so we can re-inject cleanly
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
 
+    # 2. Aggressively wipe out ANY loose primitive typedefs
+    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
+                       "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]
+    for p in primitive_types:
+        content = re.sub(rf"\btypedef\s+[^;]+\b{p}\s*;", "", content)
+
+    # 3. Scrub ALL conflicting typedefs for N64 SDK aliases (even if they are not primitives)
+    for p in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
+        content = re.sub(rf"(?:typedef\s+)?(?:struct\s+)?{p}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{p}\s*)?;?\n?", "", content)
+        content = re.sub(rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{p}\s*;\n?", "", content)
+        content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s+{p}\s*;\n?", "", content)
+        content = re.sub(rf"struct\s+{p}(?:_s)?\s*;\n?", "", content)
+
+    # 4. Reconstruct the core primitives block with ONLY the correct definitions
     core_primitives = """
 #include <stdint.h>
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -95,14 +129,15 @@ typedef float f32;
 typedef double f64;
 typedef int n64_bool;
 
-/* N64 SDK Primitive Aliases */
+/* N64 SDK Primitive Aliases (ONLY ONE DEFINITION PER TYPE) */
 typedef u32 OSIntMask;
 typedef u64 OSTime;
-typedef u32 OSId;
-typedef s32 OSPri;
+typedef u32 OSId;      /* MUST MATCH THE ORIGINAL SDK */
+typedef s32 OSPri;     /* MUST MATCH THE ORIGINAL SDK */
 typedef void* OSMesg;
 #endif
 """
+    # Replace only the FIRST #pragma once to prevent duplicate injections
     content = content.replace("#pragma once", f"#pragma once\n{core_primitives}", 1)
 
     if content != original_content:
@@ -127,6 +162,10 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     fixes = 0
     fixed_files = set()
 
+    # FIRST: Clean up all conflicting typedefs
+    clean_conflicting_typedefs()
+
+    # THEN: Ensure the types header is properly initialized
     types_content = ensure_types_header_base()
 
     # --- Dynamic Macro Scrubber ---
@@ -157,8 +196,11 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     # --- Dynamic Struct Redefinition Fixes ---
     for type_name in sorted(categories.get("conflict_typedef", [])):
         types_content = read_file(TYPES_HEADER)
-        pattern = rf"(?:typedef\s+)?struct\s+{type_name}\s*\{{[^}}]*\}}\s*{type_name}?\s*;\n?"
+        # Remove ALL definitions of this type, not just structs
+        pattern = rf"(?:typedef\s+)?(?:struct\s+)?{type_name}\s*\{{[^}}]*\}}\s*{type_name}?\s*;\n?"
         new_types, n = re.subn(pattern, "", types_content)
+        # Also remove any loose typedefs
+        new_types = re.sub(rf"typedef\s+(?:u32|s32|u16|s16|u8|s8|u64|s64|int|unsigned\s+int|long|unsigned\s+long)\s+{type_name}\s*;", "", new_types)
         if n > 0:
             if f"struct {type_name}_s {{" not in new_types:
                 new_types += f"\nstruct {type_name}_s {{ long long int force_align[64]; }};\n"
@@ -596,14 +638,29 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     if categories.get("undeclared_n64_types"):
         types_content = read_file(TYPES_HEADER)
         k_added = False
-        if "OSIntMask" in categories["undeclared_n64_types"]:
-            if "OSIntMask" not in types_content and "CORE_PRIMITIVES_DEFINED" not in types_content:
-                types_content += "\n/* N64 interrupt mask type */\ntypedef u32 OSIntMask;\n"
-                k_added = True
-            for macro, val in sorted(KNOWN_MACROS.items()):
-                if macro.startswith("OS_IM_") and f"#define {macro}" not in types_content:
-                    types_content += f"\n#ifndef {macro}\n#define {macro} {val}\n#endif\n"
-                    k_added = True
+        for t in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
+            if t in categories["undeclared_n64_types"]:
+                # Remove ALL existing definitions first
+                types_content = re.sub(rf"typedef\s+.+?\s+{t}\s*;", "", types_content)
+                types_content = re.sub(rf"typedef\s+struct\s+{t}(?:_s)?\s*\{{[^}}]*\}}\s*{t}\s*;", "", types_content)
+
+        # Re-inject the correct definitions
+        if "OSIntMask" not in types_content:
+            types_content += "\n/* N64 interrupt mask type */\ntypedef u32 OSIntMask;\n"
+            k_added = True
+        if "OSTime" not in types_content:
+            types_content += "\ntypedef u64 OSTime;\n"
+            k_added = True
+        if "OSId" not in types_content:
+            types_content += "\ntypedef u32 OSId;\n"  # MUST MATCH THE ORIGINAL SDK
+            k_added = True
+        if "OSPri" not in types_content:
+            types_content += "\ntypedef s32 OSPri;\n"  # MUST MATCH THE ORIGINAL SDK
+            k_added = True
+        if "OSMesg" not in types_content:
+            types_content += "\ntypedef void* OSMesg;\n"
+            k_added = True
+
         if k_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
