@@ -135,23 +135,6 @@ typedef u64 OSTime;
 typedef u32 OSId;      /* MUST MATCH THE ORIGINAL SDK */
 typedef s32 OSPri;     /* MUST MATCH THE ORIGINAL SDK */
 typedef void* OSMesg;
-
-/* N64 SDK Extra Failsafe Stub Types */
-#ifndef OSPfs_DEFINED
-#define OSPfs_DEFINED
-typedef struct OSPfs_s { long long int force_align[64]; } OSPfs;
-#endif
-
-#ifndef OSContStatus_DEFINED
-#define OSContStatus_DEFINED
-typedef struct OSContStatus_s { long long int force_align[8]; } OSContStatus;
-#endif
-
-#ifndef OSContPad_DEFINED
-#define OSContPad_DEFINED
-typedef struct OSContPad_s { long long int force_align[8]; } OSContPad;
-#endif
-
 #endif
 """
     # Replace only the FIRST #pragma once to prevent duplicate injections
@@ -185,24 +168,6 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     # THEN: Ensure the types header is properly initialized
     types_content = ensure_types_header_base()
 
-    # --- Global Failsafe: Ensure all files mentioned in categories include n64_types.h ---
-    # This completely eliminates "unknown type name" errors due to missing includes!
-    for cat_name, items in categories.items():
-        if isinstance(items, (list, set, tuple)):
-            for item in items:
-                filepath = None
-                if isinstance(item, str) and item.endswith((".c", ".h", ".cpp")):
-                    filepath = item
-                elif isinstance(item, (list, tuple)) and len(item) > 0 and isinstance(item[0], str) and item[0].endswith((".c", ".h", ".cpp")):
-                    filepath = item[0]
-                
-                if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
-                    c = read_file(filepath)
-                    if 'include "ultra/n64_types.h"' not in c:
-                        write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
-                        fixed_files.add(filepath)
-                        fixes += 1
-
     # --- Dynamic Macro Scrubber ---
     known_types = set()
     for item in categories.get("missing_types", []):
@@ -228,31 +193,20 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     if macros_cleaned:
         write_file(TYPES_HEADER, types_content)
 
-    # --- Dynamic Struct Redefinition Fixes (Non-Destructive Update!) ---
+    # --- Dynamic Struct Redefinition Fixes ---
     for type_name in sorted(categories.get("conflict_typedef", [])):
-        if not isinstance(type_name, str): continue
         types_content = read_file(TYPES_HEADER)
-        
-        # Capture the body so we don't destroy it.
-        pattern = rf"(?:typedef\s+)?struct\s*(?:{type_name}(?:_s)?)?\s*\{{([^}}]*)\}}\s*{type_name}?\s*;\n?"
-        
-        if re.search(pattern, types_content):
-            def _conflict_sub(m):
-                body = m.group(1)
-                return f"\n#ifndef {type_name}_DEFINED\n#define {type_name}_DEFINED\ntypedef struct {type_name}_s {{{body}}} {type_name};\n#endif\n"
-            types_content, n = re.subn(pattern, _conflict_sub, types_content)
-            if n > 0:
-                write_file(TYPES_HEADER, types_content)
-                fixes += 1
-        else:
-            # Also clean loose primitive typedefs if they clash
-            loose_pattern = rf"typedef\s+(?:u32|s32|u16|s16|u8|s8|u64|s64|int|unsigned\s+int|long|unsigned\s+long)\s+{type_name}\s*;"
-            types_content, n = re.subn(loose_pattern, "", types_content)
-            if n > 0 or f"struct {type_name}_s {{" not in types_content:
-                if f"struct {type_name}_s {{" not in types_content:
-                    types_content += f"\n#ifndef {type_name}_DEFINED\n#define {type_name}_DEFINED\ntypedef struct {type_name}_s {{ long long int force_align[64]; }} {type_name};\n#endif\n"
-                write_file(TYPES_HEADER, types_content)
-                fixes += 1
+        # Remove ALL definitions of this type, not just structs
+        pattern = rf"(?:typedef\s+)?(?:struct\s+)?{type_name}\s*\{{[^}}]*\}}\s*{type_name}?\s*;\n?"
+        new_types, n = re.subn(pattern, "", types_content)
+        # Also remove any loose typedefs
+        new_types = re.sub(rf"typedef\s+(?:u32|s32|u16|s16|u8|s8|u64|s64|int|unsigned\s+int|long|unsigned\s+long)\s+{type_name}\s*;", "", new_types)
+        if n > 0:
+            if f"struct {type_name}_s {{" not in new_types:
+                new_types += f"\nstruct {type_name}_s {{ long long int force_align[64]; }};\n"
+            write_file(TYPES_HEADER, new_types)
+            types_content = new_types
+            fixes += 1
 
     # --- Dynamic Missing Members Injection ---
     for item in sorted(categories.get("missing_members", [])):
@@ -313,7 +267,6 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     N64_PRIMITIVES = {
         "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
         "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg",
-        "OSPfs", "OSContStatus", "OSContPad"
     }
     N64_AUDIO_STATE_TYPES = {
         "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
@@ -344,12 +297,21 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         if tag in N64_STRUCT_BODIES:
             categories.setdefault("need_struct_body", set()).add(tag)
         else:
+            if tag in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
+                continue
             struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
             decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
             if f"struct {struct_tag}" not in types_content and f" {tag};" not in types_content:
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 write_file(TYPES_HEADER, types_content)
                 fixed_files.add(TYPES_HEADER)
+                fixes += 1
+
+        if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+            c = read_file(filepath)
+            if 'include "ultra/n64_types.h"' not in c:
+                write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                fixed_files.add(filepath)
                 fixes += 1
 
     # --- Explicit Unknown Audio State Types ---
@@ -405,6 +367,17 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 write_file(filepath, content)
                 fixed_files.add(filepath)
                 fixes += 1
+
+    # --- Missing n64_types.h Include ---
+    for item in sorted(categories.get("missing_n64_types", []), key=str):
+        filepath = item if isinstance(item, str) else str(item)
+        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
+            continue
+        content = read_file(filepath)
+        if 'include "ultra/n64_types.h"' not in content:
+            write_file(filepath, '#include "ultra/n64_types.h"\n' + content)
+            fixed_files.add(filepath)
+            fixes += 1
 
     # --- Actor Pointer Injection ---
     for item in sorted(categories.get("actor_pointer", []), key=str):
@@ -509,15 +482,8 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             fp2, tag = item[0], item[1]
             if fp2 != filepath:
                 continue
-            
-            # Non-Destructive Update: Ensure the struct is safely guarded by an #ifndef instead of deleted
-            pattern = rf'struct\s+{re.escape(tag)}\s*\{{([^}}]*)\}}\s*;'
-            if re.search(pattern, content):
-                def _struct_redef_sub(m):
-                    return f"\n#ifndef {tag}_STRUCT_DEFINED\n#define {tag}_STRUCT_DEFINED\nstruct {tag} {{{m.group(1)}}};\n#endif\n"
-                content, _ = re.subn(pattern, _struct_redef_sub, content)
-            else:
-                content, _ = re.subn(rf'struct\s+{re.escape(tag)}\s*\{{[^}}]*\}}\s*;\n?', "", content)
+            content, _ = re.subn(
+                rf'struct\s+{re.escape(tag)}\s*\{{[^}}]*\}}\s*;\n?', "", content)
 
         if content != original:
             write_file(filepath, content)
@@ -674,38 +640,46 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     if categories.get("undeclared_n64_types"):
         types_content = read_file(TYPES_HEADER)
         k_added = False
-        for t in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
-            if t in categories["undeclared_n64_types"]:
-                # Remove ALL existing definitions first
-                types_content = re.sub(rf"typedef\s+.+?\s+{t}\s*;", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s+{t}(?:_s)?\s*\{{[^}}]*\}}\s*{t}\s*;", "", types_content)
+        
+        for item in sorted(categories["undeclared_n64_types"], key=str):
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                filepath, t = item[0], item[1]
+            elif isinstance(item, str):
+                filepath, t = None, item
+            else:
+                continue
 
-        # Re-inject the correct definitions
-        if "OSIntMask" not in types_content:
-            types_content += "\n/* N64 interrupt mask type */\ntypedef u32 OSIntMask;\n"
-            k_added = True
-        if "OSTime" not in types_content:
-            types_content += "\ntypedef u64 OSTime;\n"
-            k_added = True
-        if "OSId" not in types_content:
-            types_content += "\ntypedef u32 OSId;\n"  # MUST MATCH THE ORIGINAL SDK
-            k_added = True
-        if "OSPri" not in types_content:
-            types_content += "\ntypedef s32 OSPri;\n"  # MUST MATCH THE ORIGINAL SDK
-            k_added = True
-        if "OSMesg" not in types_content:
-            types_content += "\ntypedef void* OSMesg;\n"
-            k_added = True
+            if not isinstance(t, str):
+                continue
+
+            if t in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
+                pass
+            else:
+                struct_tag = f"{t}_s" if not t.endswith("_s") else t
+                decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {t};\n"
+                if f"struct {struct_tag}" not in types_content and f" {t};" not in types_content:
+                    types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\n{decl}#endif\n"
+                    k_added = True
+
+            if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+                c = read_file(filepath)
+                if 'include "ultra/n64_types.h"' not in c:
+                    write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
+                    fixed_files.add(filepath)
+                    fixes += 1
 
         if k_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
+            fixed_files.add(TYPES_HEADER)
+
         if os.path.exists(STUBS_FILE):
             existing_stubs = read_file(STUBS_FILE)
             if "osSetIntMask" not in existing_stubs:
                 existing_stubs += "OSIntMask osSetIntMask(OSIntMask mask) { (void)mask; return 0; }\n"
                 write_file(STUBS_FILE, existing_stubs)
                 fixes += 1
+
 
     # --- Undeclared GBI Constants ---
     if categories.get("undeclared_gbi"):
