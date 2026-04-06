@@ -382,5 +382,21 @@ def apply_fixes(categories):
                 
                 types_content += "\n" + body; bodies_added = True
         if bodies_added: write_file(TYPES_HEADER, types_content); fixes += 1
-
+    # 14. Missing global extern declarations (From Old script)
+    # Satisfies linker errors for global variables by declaring them extern in the header
+    missing_g = categories.get("missing_globals", [])
+    if isinstance(missing_g, (list, set, tuple)):
+        types_content = read_file(TYPES_HEADER) or ""
+        added = False
+        for item in sorted(missing_g, key=str):
+            # Handle both string and tuple formats from the parser
+            glob = item[1] if isinstance(item, (list, tuple)) else item
+            if not isinstance(glob, str) or glob == "actor": continue
+            
+            if f" {glob};" not in types_content and f"*{glob};" not in types_content:
+                decl = (f"extern void* {glob};" if glob.endswith(("_ptr", "_p"))
+                        else f"extern long long int {glob};")
+                types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"
+                added = True
+        if added: write_file(TYPES_HEADER, types_content); fixes += 1
     return fixes, fixed_files
