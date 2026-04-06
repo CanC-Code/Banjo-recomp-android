@@ -42,14 +42,13 @@ def ensure_types_header_base():
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
 
     # 2. Aggressively wipe out ANY loose primitive typedefs with an unstoppable regex
-    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri"]
+    primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]
     for p in primitive_types:
-        # Match ANY typedef declaration ending in the primitive name (ignoring line breaks, comments, etc.)
         pattern = rf"\btypedef\s+[^;]+\b{p}\s*;"
         content = re.sub(pattern, "", content)
 
-    # 3. Actively scrub incorrect structural stubs for primitive N64 SDK aliases
-    for p in ["OSIntMask", "OSTime", "OSId", "OSPri"]:
+    # 3. Actively scrub incorrect structural stubs for primitive N64 SDK aliases (Added OSMesg)
+    for p in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
         content = re.sub(rf"(?:typedef\s+)?struct\s+{p}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{p}\s*)?;?\n?", "", content)
         content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{p}\s*;\n?", "", content)
         content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s+{p}\s*;\n?", "", content)
@@ -72,14 +71,14 @@ typedef float f32;
 typedef double f64;
 typedef int n64_bool;
 
-/* N64 SDK Primitive Aliases */
+/* N64 SDK Primitive & Pointer Aliases */
 typedef u32 OSIntMask;
 typedef u64 OSTime;
 typedef u32 OSId;
 typedef s32 OSPri;
+typedef void* OSMesg;
 #endif
 """
-    # CRITICAL FIX: Ensure it only replaces the FIRST occurrence of #pragma once to prevent duplicate injections
     content = content.replace("#pragma once", f"#pragma once\n{core_primitives}", 1)
             
     if content != original_content:
@@ -148,7 +147,7 @@ def apply_fixes(categories):
             if member_name not in body:
                 if member_name in array_names:
                     return f"{match.group(1)}{body}    unsigned char {member_name}[128]; /* AUTO-ARRAY */\n{match.group(3)}"
-                elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower():
+                elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower() or "msg" in member_name.lower():
                     return f"{match.group(1)}{body}    void* {member_name}; /* AUTO-POINTER */\n{match.group(3)}"
                 else:
                     return f"{match.group(1)}{body}    long long int {member_name};\n{match.group(3)}"
@@ -163,7 +162,7 @@ def apply_fixes(categories):
         else:
             if member_name in array_names:
                 injected_field = f"unsigned char {member_name}[128]; /* AUTO-ARRAY */"
-            elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower():
+            elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower() or "msg" in member_name.lower():
                 injected_field = f"void* {member_name}; /* AUTO-POINTER */"
             else:
                 injected_field = f"long long int {member_name};"
@@ -188,7 +187,7 @@ def apply_fixes(categories):
         if tag in N64_STRUCT_BODIES:
             categories.setdefault("need_struct_body", set()).add(tag)
         else:
-            if tag in ["OSIntMask", "OSTime", "OSId", "OSPri"]: continue
+            if tag in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]: continue
             
             struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
             decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
@@ -466,7 +465,7 @@ def apply_fixes(categories):
         file_to_types = defaultdict(set)
         for filepath, type_name in categories["local_fwd_only"]: file_to_types[filepath].add(type_name)
 
-        for filepath, type_names in sorted(file_to_types.items()):
+        for filepath, type_names in sorted(file_to_items.items()):
             if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
             content = read_file(filepath)
             content = strip_auto_preamble(content)
