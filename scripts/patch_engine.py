@@ -459,7 +459,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 continue
             seen.add(tag)
             base_tag = tag[:-2] if tag.endswith("_s") else tag
-            if base_tag in N64_PRIMITIVES:
+            if base_tag in N64_STRUCT_BODIES:
                 continue
             is_sdk = (tag.isupper() or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_"))
                       or (tag.endswith("_s") and tag[:-2].isupper()))
@@ -722,28 +722,3 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             fixes += 1
 
     return fixes, fixed_files
-
-# Example usage
-if __name__ == "__main__":
-    categories = {
-        "missing_types": [("some_file.c", "SomeType")],
-        "need_struct_body": ["SomeStruct"],
-        "incomplete_sizeof": [("some_file.c", "SomeSize")],
-        "conflict_typedef": ["SomeConflict"],
-        "missing_members": [("SomeStruct", "someMember")],
-        "redefinition": [("some_file.c", "someVar")],
-        "static_conflict": [("some_file.c", "someFunc")],
-        "posix_conflict": [("some_file.c", "somePosixFunc")],
-        "posix_reserved_conflict": [("some_file.c", "someReservedFunc")],
-        "undeclared_macros": ["SOME_MACRO"],
-        "implicit_func": ["someFunc"],
-        "undefined_symbols": ["someSymbol"],
-        "audio_states": ["SomeAudioState"],
-        "undeclared_n64_types": ["OSIntMask"],
-        "undeclared_gbi": ["G_BI_1"],
-        "need_struct_body": ["Mtx"],
-        "local_fwd_only": [("some_file.c", "SomeType")],
-        "missing_globals": [("some_file.c", "someGlobal")],
-    }
-    fixes, fixed_files = apply_fixes(categories)
-    print(f"Applied {fixes} fixes to {len(fixed_files)} files.")
