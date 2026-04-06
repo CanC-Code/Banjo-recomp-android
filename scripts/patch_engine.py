@@ -330,6 +330,19 @@ typedef void* OSMesg;
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def normalize_path(filepath: str) -> str:
+    """Converts absolute CI/CD paths to local relative paths."""
+    # Look for common project root folder names
+    markers = ["Banjo-recomp-android/", "Android/app/"]
+    for marker in markers:
+        if marker in filepath:
+            return filepath.split(marker)[-1]
+    
+    # If it starts with a slash but we couldn't find a marker, try stripping the leading slash
+    if filepath.startswith("/"):
+        return filepath.lstrip("/")
+    return filepath
+
 def strip_auto_preamble(content: str) -> str:
     lines = content.split('\n')
     result = []
@@ -535,7 +548,8 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         # Missing Types
         for m in re.finditer(
                 r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+unknown type name '(\w+)'", content):
-            filepath, tag = m.group(1), m.group(2)
+            filepath = normalize_path(m.group(1))
+            tag = m.group(2)
             if (filepath, tag) not in mt and not any(isinstance(x, (list, tuple)) and len(x) >= 2 and x[1] == tag for x in mt):
                 mt.append((filepath, tag))
 
@@ -547,18 +561,21 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         # POSIX Conflicts
         for m in re.finditer(
                 r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+static declaration of '(\w+)' follows non-static declaration", content):
-            filepath, func = m.group(1), m.group(2)
+            filepath = normalize_path(m.group(1))
+            func = m.group(2)
             if (filepath, func) not in pc:
                 pc.append((filepath, func))
 
         # Struct/Typedef Redefinitions
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redefinition of '(\w+)'", content):
-            filepath, tag = m.group(1), m.group(2)
+            filepath = normalize_path(m.group(1))
+            tag = m.group(2)
             if (filepath, tag) not in sr:
                 sr.append((filepath, tag))
 
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+typedef redefinition with different types .*? vs '(?:struct )?(\w+)'", content):
-            filepath, tag = m.group(1), m.group(2)
+            filepath = normalize_path(m.group(1))
+            tag = m.group(2)
             if (filepath, tag) not in sr:
                 sr.append((filepath, tag))
 
@@ -588,7 +605,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         # We now know certain globals are actually macros or structs. 
         # Remove any blind Phase 1 "extern long long int" guesses.
         scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable"}
-        
+
         for target in scrub_targets:
             # Match #ifndef / #define / extern / #endif blocks
             types_content = re.sub(
@@ -598,7 +615,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             types_content = re.sub(
                 rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", 
                 "", types_content)
-                
+
         if types_content != original_types:
             logger.info("🧹 Phase 2 Cleanup: Removed incorrect Phase 1 primitive guesses.")
             write_file(TYPES_HEADER, types_content)
@@ -1137,4 +1154,3 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             fixes += 1
 
     return fixes, fixed_files
-
