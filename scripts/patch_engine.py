@@ -347,7 +347,7 @@ def ensure_types_header_base() -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# Log scraper (Upgraded)
+# Log scraper (Upgraded to handle Relative & Absolute Ninja paths!)
 # ---------------------------------------------------------------------------
 def _scrape_logs_into_categories(categories: dict) -> None:
     log_candidates = ["Android/failed_files.log", "Android/full_build_log.txt", "full_build_log.txt", "build_log.txt", "Android/build_log.txt"]
@@ -390,8 +390,8 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
 
-        # Missing Types
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+unknown type name '(\w+)'", content):
+        # Missing Types (Updated Regex to capture paths without leading slashes)
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+unknown type name '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if (filepath, tag) not in mt and not any(isinstance(x, (list, tuple)) and len(x) >= 2 and x[1] == tag for x in mt):
                 mt.append((filepath, tag))
@@ -408,34 +408,33 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 mt.append(tag)
 
         # POSIX Conflicts
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+static declaration of '(\w+)' follows non-static declaration", content):
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+static declaration of '(\w+)' follows non-static declaration", content):
             filepath, func = normalize_path(m.group(1)), m.group(2)
             if (filepath, func) not in pc: pc.append((filepath, func))
 
         # Struct/Typedef Redefinitions
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redefinition of '(\w+)'", content):
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redefinition of '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if (filepath, tag) not in sr: sr.append((filepath, tag))
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+typedef redefinition with different types .*? vs '(?:struct )?(\w+)'", content):
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+typedef redefinition with different types .*? vs '(?:struct )?(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if (filepath, tag) not in sr: sr.append((filepath, tag))
 
         # Undeclared identifiers
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+use of undeclared identifier '(\w+)'", content):
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+use of undeclared identifier '(\w+)'", content):
             ui.add(m.group(2))
             
         # Implicit functions
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+implicit declaration of function '(\w+)'", content):
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+implicit declaration of function '(\w+)'", content):
             if_stubs.add(m.group(2))
             
         # Incomplete types / member access into incomplete type
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+member access into incomplete type '(?:struct )?(\w+)'", content):
+        for m in re.finditer(r"(?m)^([^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+member access into incomplete type '(?:struct )?(\w+)'", content):
             nsb.add(m.group(2))
             
         # Catch 'not a pointer' errors to dynamically re-cast dummy struct members to void*
         for m in re.finditer(r"(?m)error:\s+member reference (?:base )?type '.*?' is not a (?:pointer|structure or union)\n([^\n]+)\n", content):
             snippet = m.group(1)
-            # Find all words right before -> or .
             for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', snippet):
                 nap.add(mm.group(1))
 
@@ -475,7 +474,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     # Regret Cleanup (Levels 2 & 3)
     if intelligence_level >= 2:
         original_types = types_content
-        # Crucial addition: Clean up any accidentally defined __OSBlockInfo globals
         scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable", "__OSBlockInfo", "__OSTranxInfo"}
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
@@ -518,7 +516,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         changed = False
         for member in sorted(categories["not_a_pointer"]):
             if not isinstance(member, str): continue
-            # If our earlier logic injected `long long int member;` but it was actually a pointer, rewrite it!
             new_types, n = re.subn(rf"\blong\s+long\s+int\s+{re.escape(member)}\s*;", f"void* {member}; /* AUTO-FIX: NOT A POINTER */", types_content)
             if n > 0:
                 types_content = new_types
