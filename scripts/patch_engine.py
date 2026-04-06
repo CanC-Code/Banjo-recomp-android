@@ -456,26 +456,25 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
             alias = tag1 if target_tag == tag2 else tag2
 
-            content, _ = re.subn(
-                rf'(?:typedef\s+)?struct\s+{re.escape(target_tag)}?\s*\{{[^}}]*\}}\s*[^;]*\b{re.escape(alias)}\b[^;]*;\n?',
-                "", content)
-            content = re.sub(
-                rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?',
-                '', content)
-
-            # --- THE CRITICAL FIX IS HERE ---
-            # Added capturing parentheses around [^}}]* inside the curly braces
+            # 1. Rename anonymous structs defining the alias
             anon_pat = rf"typedef\s+struct\s*\{{([^}}]*)\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_pat, content):
-                _tt = target_tag
-                def _anon_sub(m, tt=_tt):
-                    # m.group(1) is now the struct body, and m.group(2) is the alias part
-                    return f"typedef struct {tt} {{{m.group(1)}}} {m.group(2)};"
+                def _anon_sub(m):
+                    return f"typedef struct {target_tag} {{{m.group(1)}}} {m.group(2)};"
                 content, _ = re.subn(anon_pat, _anon_sub, content)
-            else:
-                content, _ = re.subn(
-                    r"\bstruct\s+" + re.escape(alias) + r"\b",
-                    f"struct {target_tag}", content)
+
+            # 2. Rename explicitly named structs that improperly use the alias as their tag
+            bad_named_pat = rf"(?:typedef\s+)?struct\s+{re.escape(alias)}\s*\{{([^}}]*)\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
+            if re.search(bad_named_pat, content):
+                def _bad_named_sub(m):
+                    return f"typedef struct {target_tag} {{{m.group(1)}}} {m.group(2)};"
+                content, _ = re.subn(bad_named_pat, _bad_named_sub, content)
+
+            # 3. Replace remaining occurrences of `struct alias` with `struct target_tag`
+            content, _ = re.subn(
+                r"\bstruct\s+" + re.escape(alias) + r"\b",
+                f"struct {target_tag}", content)
+
 
         for item in categories.get("struct_redef", []):
             if not isinstance(item, (list, tuple)) or len(item) < 2:
