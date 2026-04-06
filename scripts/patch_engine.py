@@ -1,7 +1,3 @@
-# Let's start by refactoring the script according to the suggestions.
-# I'll break it down into logical modules, add error handling, logging, and use pathlib for path manipulation.
-# I'll also add type hints and documentation, and make the script more dynamic and modular.
-
 import os
 import re
 import logging
@@ -14,7 +10,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Constants and Config ---
-# Load these from a config file or environment variables in a real-world scenario
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
@@ -34,7 +29,6 @@ N64_AUDIO_STATE_TYPES = {
 }
 
 # --- Helper Functions ---
-
 def read_file(filepath: str) -> str:
     """Read content from a file."""
     try:
@@ -53,7 +47,6 @@ def write_file(filepath: str, content: str) -> None:
         logger.error(f"Failed to write {filepath}: {e}")
 
 # --- Core Logic ---
-
 def strip_auto_preamble(content: str) -> str:
     """Strip auto-generated preamble from content."""
     lines = content.split('\n')
@@ -86,7 +79,7 @@ def ensure_types_header_base() -> str:
 
     # Clean up and inject core primitives
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
-    
+
     # Inject core primitives
     core_primitives = """
 #include <stdint.h>
@@ -120,7 +113,6 @@ typedef void* OSMesg;
     return content
 
 # --- Main Fix Dispatcher ---
-
 def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     """Apply all fixes based on the provided categories."""
     fixes = 0
@@ -172,7 +164,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             continue
         struct_name, member_name = item[0], item[1]
         types_content = read_file(TYPES_HEADER)
-        pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}}")"
+        pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}})"
 
         array_names = {"id", "label", "name", "buffer", "data", "str", "string", "temp"}
 
@@ -278,9 +270,10 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         types_content = read_file(TYPES_HEADER)
         original = types_content
         types_content = re.sub(
-            r"struct\s+[A-Za-z_]\[\w*\]\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", types_content)
+            r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n",
+            "", types_content)
         types_content = re.sub(
-            r"typedef\s+struct\s+([A-Za-z_]\[\w*\])\s+\w+\s*\{",
+            r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{",
             r"typedef struct \1 {", types_content)
         if types_content != original:
             write_file(TYPES_HEADER, types_content)
@@ -295,7 +288,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         if not os.path.exists(filepath):
             continue
         content = read_file(filepath)
-        pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;\{{]*\)\s*\{{"
+        pattern = rf"(?:^|\n)([A-Za-z_][A-Za-z0-9_\s\*]+?)\s+\b{re.escape(func)}\s*\([^;{{]*\)\s*\{{"
         match = re.search(pattern, content)
         if match:
             sig_full = match.group(0)
@@ -330,7 +323,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             continue
         content = original = read_file(filepath)
         if "Actor *actor =" not in content and "this" in content:
-            content = re.sub(r'\)\s*\{\s*', r') {\n    Actor *actor = (Actor *)this;', content, count=1)
+            content = re.sub(r')\s*\{', r') {\n    Actor *actor = (Actor *)this;', content, count=1)
         if content != original:
             write_file(filepath, content)
             fixed_files.add(filepath)
@@ -605,7 +598,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             content = strip_auto_preamble(content)
             changed = False
             for t in sorted(type_names):
-                body_pattern = rf"typedef\s+struct[^{{\]]*\{{[^}}]*\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
+                body_pattern = rf"typedef\s+struct[^{{\]]*{{[^}}]*}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
                 if re.search(body_pattern, content):
                     fwd = f"/* AUTO: forward decl for type defined below */\ntypedef struct {t}_s {t};\n"
                     if f"typedef struct {t}_s {t};" not in content:
