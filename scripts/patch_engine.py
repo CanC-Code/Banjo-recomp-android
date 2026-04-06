@@ -13,16 +13,20 @@ logger = logging.getLogger(__name__)
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
-N64_PRIMITIVES = {
-    "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
-    "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg",
+# --- Imported Constants (Mock for demonstration) ---
+BRACE_MATCH = r"[^{}]*"
+N64_STRUCT_BODIES = {
+    "Mtx": "typedef struct Mtx { float m[4][4]; } Mtx;",
+    "LookAt": "typedef struct LookAt { float x, y, z; } LookAt;",
 }
-
-N64_AUDIO_STATE_TYPES = {
-    "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
-    "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE",
-    "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE",
+KNOWN_MACROS = {
+    "OS_IM_1": "0x0001",
+    "OS_IM_2": "0x0002",
 }
+KNOWN_FUNCTION_MACROS = {
+    "SOME_FUNCTION_MACRO": "#define SOME_FUNCTION_MACRO(x) ((x) * 2)",
+}
+POSIX_RESERVED_NAMES = {"open", "close", "read", "write", "stat"}
 
 # --- Helper Functions ---
 def read_file(filepath: str) -> str:
@@ -105,6 +109,17 @@ typedef void* OSMesg;
         write_file(TYPES_HEADER, content)
 
     return content
+
+def _rename_posix_static(content: str, func_name: str, filepath: str) -> Tuple[str, bool]:
+    """Rename POSIX-reserved static functions."""
+    prefix = os.path.basename(filepath).split('.')[0]
+    new_name = f"n64_{prefix}_{func_name}"
+    define = f"\n/* AUTO: rename POSIX-reserved static '{func_name}' */\n#define {func_name} {new_name}\n"
+    if define in content:
+        return content, False
+    includes = list(re.finditer(r'#include\s+.*?\n', content))
+    idx = includes[-1].end() if includes else 0
+    return content[:idx] + define + content[idx:], True
 
 # --- Main Fix Dispatcher ---
 def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
@@ -207,6 +222,16 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 fixes += 1
 
     # --- Missing Types → Opaque Stubs ---
+    N64_PRIMITIVES = {
+        "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
+        "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg",
+    }
+    N64_AUDIO_STATE_TYPES = {
+        "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE",
+        "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE",
+        "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE",
+    }
+
     for item in sorted(categories.get("missing_types", []), key=str):
         if isinstance(item, (list, tuple)) and len(item) >= 2:
             filepath, tag = item[0], item[1]
@@ -227,15 +252,18 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 fixes += 1
             continue
 
-        if tag in ["OSIntMask", "OSTime", "OSId", "OSPri"]:
-            continue
-        struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
-        decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
-        if f"struct {struct_tag}" not in types_content and f" {tag};" not in types_content:
-            types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
-            write_file(TYPES_HEADER, types_content)
-            fixed_files.add(TYPES_HEADER)
-            fixes += 1
+        if tag in N64_STRUCT_BODIES:
+            categories.setdefault("need_struct_body", set()).add(tag)
+        else:
+            if tag in ["OSIntMask", "OSTime", "OSId", "OSPri"]:
+                continue
+            struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
+            decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
+            if f"struct {struct_tag}" not in types_content and f" {tag};" not in types_content:
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
+                write_file(TYPES_HEADER, types_content)
+                fixed_files.add(TYPES_HEADER)
+                fixes += 1
 
         if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
             c = read_file(filepath)
@@ -316,7 +344,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             continue
         content = original = read_file(filepath)
         if "Actor *actor =" not in content and "this" in content:
-            content = re.sub(r')\s*\{', r') {\n    Actor *actor = (Actor *)this;', content, count=1)
+            content = re.sub(r'\)\s*\{', r') {\n    Actor *actor = (Actor *)this;', content, count=1)
         if content != original:
             write_file(filepath, content)
             fixed_files.add(filepath)
@@ -457,6 +485,14 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 continue
             content = read_file(filepath)
 
+            if func_name in POSIX_RESERVED_NAMES:
+                new_content, changed = _rename_posix_static(content, func_name, filepath)
+                if changed:
+                    write_file(filepath, new_content)
+                    fixed_files.add(filepath)
+                    fixes += 1
+                continue
+
             prefix = os.path.basename(filepath).split('.')[0]
             macro_fix = f"\n/* AUTO: fix static conflict */\n#define {func_name} auto_renamed_{prefix}_{func_name}\n"
             if macro_fix not in content:
@@ -474,18 +510,45 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         for macro in sorted(categories["undeclared_macros"]):
             if not isinstance(macro, str):
                 continue
-            if macro in ["sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"]:
+            if macro in KNOWN_FUNCTION_MACROS:
+                defn = KNOWN_FUNCTION_MACROS[macro]
+                if defn not in types_content:
+                    types_content += f"\n{defn}\n"
+                    macros_added = True
+            elif macro in KNOWN_MACROS:
+                if f"#define {macro}" not in types_content:
+                    types_content += f"\n#ifndef {macro}\n#define {macro} {KNOWN_MACROS[macro]}\n#endif\n"
+                    macros_added = True
+            else:
+                if f"#define {macro}" not in types_content:
+                    types_content += f"\n#ifndef {macro}\n#define {macro} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
+                    macros_added = True
+        if macros_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    # --- Implicit Function Declarations → System Headers ---
+    if categories.get("implicit_func"):
+        math_funcs = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
+        string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
+        stdlib_funcs = {"malloc", "free", "exit", "atoi", "rand", "srand"}
+        types_content = read_file(TYPES_HEADER)
+        includes_added = False
+        for func in sorted(categories["implicit_func"]):
+            if not isinstance(func, str):
+                continue
+            if func in math_funcs:
                 header = "<math.h>"
-            elif macro in ["memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"]:
+            elif func in string_funcs:
                 header = "<string.h>"
-            elif macro in ["malloc", "free", "exit", "atoi", "rand", "srand"]:
+            elif func in stdlib_funcs:
                 header = "<stdlib.h>"
             else:
                 continue
             if f"#include {header}" not in types_content:
                 types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header}")
-                macros_added = True
-        if macros_added:
+                includes_added = True
+        if includes_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
@@ -537,6 +600,10 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             if "OSIntMask" not in types_content and "CORE_PRIMITIVES_DEFINED" not in types_content:
                 types_content += "\n/* N64 interrupt mask type */\ntypedef u32 OSIntMask;\n"
                 k_added = True
+            for macro, val in sorted(KNOWN_MACROS.items()):
+                if macro.startswith("OS_IM_") and f"#define {macro}" not in types_content:
+                    types_content += f"\n#ifndef {macro}\n#define {macro} {val}\n#endif\n"
+                    k_added = True
         if k_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
@@ -554,10 +621,12 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         for ident in sorted(categories["undeclared_gbi"]):
             if not isinstance(ident, str):
                 continue
-            if ident in ["G_BI_1", "G_BI_2"]:
-                if f"#define {ident}" not in types_content:
-                    types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* TODO: unknown GBI constant */\n#endif\n"
-                    gbi_added = True
+            if ident in KNOWN_MACROS and f"#define {ident}" not in types_content:
+                types_content += f"\n#ifndef {ident}\n#define {ident} {KNOWN_MACROS[ident]}\n#endif\n"
+                gbi_added = True
+            elif ident not in KNOWN_MACROS and f"#define {ident}" not in types_content:
+                types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* TODO: unknown GBI constant */\n#endif\n"
+                gbi_added = True
         if gbi_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
@@ -569,10 +638,32 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
         for tag in sorted(categories["need_struct_body"]):
             if not isinstance(tag, str):
                 continue
-            body = "typedef struct Mtx { float m[4][4]; } Mtx;"
-            if f"struct {tag} {{" not in types_content:
-                types_content += f"\n{body}\n"
-                bodies_added = True
+            body = N64_STRUCT_BODIES.get(tag)
+            if not body:
+                continue
+            already = (re.search(rf"\}}\s*{re.escape(tag)}\s*;", types_content) or
+                      re.search(rf"typedef\s+struct\s+{re.escape(tag)}\b", types_content))
+            if already:
+                continue
+            if tag == "LookAt":
+                types_content = re.sub(
+                    rf"(?m)^typedef\s+struct\s*\{{[^}}]*\}}\s*__Light_t\s*;\n?", "", types_content)
+                types_content = re.sub(
+                    rf"(?m)^typedef\s+struct\s*\{{[^}}]*\}}\s*__LookAtDir\s*;\n?", "", types_content)
+            if tag == "Mtx":
+                types_content = re.sub(
+                    rf"(?m)^typedef\s+union\s*\{{[^}}]*\}}\s*__Mtx_data\s*;\n?", "", types_content)
+            types_content = re.sub(
+                rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{re.escape(tag)}\s*)?;?\n?",
+                "", types_content)
+            types_content = re.sub(
+                rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;\n?", "", types_content)
+            types_content = re.sub(
+                rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?", "", types_content)
+            types_content = re.sub(
+                rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", types_content)
+            types_content += "\n" + body
+            bodies_added = True
         if bodies_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
@@ -591,7 +682,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             content = strip_auto_preamble(content)
             changed = False
             for t in sorted(type_names):
-                body_pattern = rf"typedef\s+struct[^{{\]]*{{[^}}]*}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
+                body_pattern = rf"typedef\s+struct[^{{]*\{{[^}}]*\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
                 if re.search(body_pattern, content):
                     fwd = f"/* AUTO: forward decl for type defined below */\ntypedef struct {t}_s {t};\n"
                     if f"typedef struct {t}_s {t};" not in content:
