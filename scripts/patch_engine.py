@@ -13,10 +13,6 @@ logger = logging.getLogger(__name__)
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
-# Example: Load from a JSON config
-# with open("n64_config.json", "r") as f:
-#     config = json.load(f)
-
 N64_PRIMITIVES = {
     "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
     "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg",
@@ -77,10 +73,8 @@ def ensure_types_header_base() -> str:
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         types_header.parent.mkdir(parents=True, exist_ok=True)
 
-    # Clean up and inject core primitives
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
 
-    # Inject core primitives
     core_primitives = """
 #include <stdint.h>
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -118,7 +112,6 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
     fixes = 0
     fixed_files = set()
 
-    # Ensure types header is ready
     types_content = ensure_types_header_base()
 
     # --- Dynamic Macro Scrubber ---
