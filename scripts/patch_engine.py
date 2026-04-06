@@ -41,10 +41,11 @@ def ensure_types_header_base():
     # 1. Safely rip out the entire CORE_PRIMITIVES block
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
 
-    # 2. Aggressively wipe out ANY loose primitive typedefs
+    # 2. Aggressively wipe out ANY loose primitive typedefs with an unstoppable regex
     primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri"]
     for p in primitive_types:
-        pattern = rf"(?m)^\s*typedef\s+(?:signed\s+|unsigned\s+)?(?:char|short|int|long\s+long|long|float|double|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int32_t|uint64_t|int64_t|u32|u64|s32)\s+{p}\s*;\n?"
+        # Match ANY typedef declaration ending in the primitive name (ignoring line breaks, comments, etc.)
+        pattern = rf"\btypedef\s+[^;]+\b{p}\s*;"
         content = re.sub(pattern, "", content)
 
     # 3. Actively scrub incorrect structural stubs for primitive N64 SDK aliases
@@ -78,7 +79,8 @@ typedef u32 OSId;
 typedef s32 OSPri;
 #endif
 """
-    content = content.replace("#pragma once", f"#pragma once\n{core_primitives}")
+    # CRITICAL FIX: Ensure it only replaces the FIRST occurrence of #pragma once to prevent duplicate injections
+    content = content.replace("#pragma once", f"#pragma once\n{core_primitives}", 1)
             
     if content != original_content:
         write_file(TYPES_HEADER, content)
@@ -138,7 +140,7 @@ def apply_fixes(categories):
         types_content = read_file(TYPES_HEADER)
         pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}})"
         
-        # SMART HEURISTIC: Inject arrays or pointers based on member names to avoid subscript errors
+        # SMART HEURISTIC: Inject arrays or pointers based on member names
         array_names = {"id", "label", "name", "buffer", "data", "str", "string", "temp"}
         
         def inject_member(match):
@@ -160,9 +162,9 @@ def apply_fixes(categories):
                 fixes += 1
         else:
             if member_name in array_names:
-                injected_field = f"unsigned char {member_name}[128];"
+                injected_field = f"unsigned char {member_name}[128]; /* AUTO-ARRAY */"
             elif "ptr" in member_name.lower() or "func" in member_name.lower() or "cb" in member_name.lower():
-                injected_field = f"void* {member_name};"
+                injected_field = f"void* {member_name}; /* AUTO-POINTER */"
             else:
                 injected_field = f"long long int {member_name};"
                 
@@ -186,7 +188,6 @@ def apply_fixes(categories):
         if tag in N64_STRUCT_BODIES:
             categories.setdefault("need_struct_body", set()).add(tag)
         else:
-            # Prevent primitive aliases from being stubbed as structs
             if tag in ["OSIntMask", "OSTime", "OSId", "OSPri"]: continue
             
             struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
