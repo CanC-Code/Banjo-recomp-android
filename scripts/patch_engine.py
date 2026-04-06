@@ -98,12 +98,29 @@ PHASE_3_MACROS = {
     "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
 }
 
+# IMPORTANT: These are sorted in topological order so dependencies are met!
 _N64_OS_STRUCT_BODIES = {
     "Mtx": """\
 typedef union {
     struct { float mf[4][4]; } f;
     struct { s16   mi[4][4]; s16 pad; } i;
 } Mtx;""",
+    "OSContStatus": "typedef struct OSContStatus_s { u16 type; u8 status; u8 errno; } OSContStatus;",
+    "OSContPad": "typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errno; } OSContPad;",
+    "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;",
+    "OSThread": "typedef struct OSThread_s { struct OSThread_s *next; OSPri priority; struct OSThread_s **queue; struct OSThread_s *tlnext; u16 state; u16 flags; OSId id; int fp; long long int context[67]; } OSThread;",
+    "OSMesgHdr": "typedef struct { u16 type; u8 pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
+    "OSPiHandle": """\
+#ifndef __OSBlockInfo_DEFINED
+#define __OSBlockInfo_DEFINED
+typedef struct { u32 errStatus; void *dramAddr; void *C2Addr; u32 sectorSize; u32 C1ErrNum; u32 C1ErrSector[4]; } __OSBlockInfo;
+#endif
+#ifndef __OSTranxInfo_DEFINED
+#define __OSTranxInfo_DEFINED
+typedef struct { u32 cmdType; u16 transferMode; u16 blockNum; s32 sectorNum; u32 devAddr; u32 bmCtlShadow; u32 seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;
+#endif
+typedef struct OSPiHandle_s { struct OSPiHandle_s *next; u8 type; u8 latency; u8 pageSize; u8 relDuration; u8 pulse; u8 domain; u32 baseAddress; u32 speed; __OSTranxInfo transferInfo; } OSPiHandle;""",
+    "OSIoMesg": "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; u32 devAddr; u32 size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
     "OSPfs": """\
 typedef struct OSPfs_s {
     struct OSIoMesg_s    ioMesgBuf;
@@ -121,26 +138,10 @@ typedef struct OSPfs_s {
     u32         inodeCacheIndex;
     u8          inodeCache[256];
 } OSPfs;""",
-    "OSContStatus": "typedef struct OSContStatus_s { u16 type; u8 status; u8 errno; } OSContStatus;",
-    "OSContPad": "typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errno; } OSContPad;",
-    "OSPiHandle": """\
-#ifndef __OSBlockInfo_DEFINED
-#define __OSBlockInfo_DEFINED
-typedef struct { u32 errStatus; void *dramAddr; void *C2Addr; u32 sectorSize; u32 C1ErrNum; u32 C1ErrSector[4]; } __OSBlockInfo;
-#endif
-#ifndef __OSTranxInfo_DEFINED
-#define __OSTranxInfo_DEFINED
-typedef struct { u32 cmdType; u16 transferMode; u16 blockNum; s32 sectorNum; u32 devAddr; u32 bmCtlShadow; u32 seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;
-#endif
-typedef struct OSPiHandle_s { struct OSPiHandle_s *next; u8 type; u8 latency; u8 pageSize; u8 relDuration; u8 pulse; u8 domain; u32 baseAddress; u32 speed; __OSTranxInfo transferInfo; } OSPiHandle;""",
-    "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;",
-    "OSThread": "typedef struct OSThread_s { struct OSThread_s *next; OSPri priority; struct OSThread_s **queue; struct OSThread_s *tlnext; u16 state; u16 flags; OSId id; int fp; long long int context[67]; } OSThread;",
-    "OSMesgHdr": "typedef struct { u16 type; u8 pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
-    "OSIoMesg": "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; u32 devAddr; u32 size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
     "OSDevMgr": "typedef struct OSDevMgr_s { s32 active; struct OSThread_s *thread; struct OSMesgQueue_s *cmdQueue; struct OSMesgQueue_s *evtQueue; struct OSMesgQueue_s *acsQueue; s32 (*dma)(s32, u32, void *, u32); s32 (*edma)(struct OSPiHandle_s *, s32, u32, void *, u32); } OSDevMgr;",
     "OSTimer": "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; OSTime interval; OSTime value; struct OSMesgQueue_s *mq; OSMesg msg; } OSTimer;",
-    "OSScTask": "typedef struct OSScTask_s { struct OSScTask_s *next; u32 state; u32 flags; struct OSTask_s *list; struct OSMesgQueue_s *msgQ; OSMesg msg; u8 *framebuffer; u32 tid; } OSScTask;",
     "OSTask": "typedef struct OSTask_s { u32 type; u32 flags; u64 *ucode_boot; u32 ucode_boot_size; u64 *ucode; u32 ucode_size; u64 *ucode_data; u32 ucode_data_size; u64 *dram_stack; u32 dram_stack_size; u64 *output_buff; u64 *output_buff_size; u64 *data_ptr; u32 data_size; u64 *yield_data_ptr; u32 yield_data_size; } OSTask;",
+    "OSScTask": "typedef struct OSScTask_s { struct OSScTask_s *next; u32 state; u32 flags; struct OSTask_s *list; struct OSMesgQueue_s *msgQ; OSMesg msg; u8 *framebuffer; u32 tid; } OSScTask;",
     "LookAt": "typedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;",
 }
 
@@ -346,7 +347,7 @@ def ensure_types_header_base() -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# Log scraper (Upgraded to Catch Non-Pointers & Stub Overrides)
+# Log scraper (Upgraded)
 # ---------------------------------------------------------------------------
 def _scrape_logs_into_categories(categories: dict) -> None:
     log_candidates = ["Android/failed_files.log", "Android/full_build_log.txt", "full_build_log.txt", "build_log.txt", "Android/build_log.txt"]
@@ -396,6 +397,12 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 mt.append((filepath, tag))
 
         for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
+            tag = m.group(1)
+            if not any((isinstance(x, (list, tuple)) and len(x) >= 2 and x[1] == tag) or x == tag for x in mt):
+                mt.append(tag)
+                
+        # Catch missing types masquerading as binary multiplication (e.g. __OSBlockInfo *blockInfo;)
+        for m in re.finditer(r"(?m)error:\s+invalid operands to binary expression.*?\n\s*([A-Za-z0-9_]+)\s*\*\s*([A-Za-z0-9_]+)\s*;", content):
             tag = m.group(1)
             if not any((isinstance(x, (list, tuple)) and len(x) >= 2 and x[1] == tag) or x == tag for x in mt):
                 mt.append(tag)
@@ -456,6 +463,11 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
 
     for _k, _v in _EP_STRUCTS.items(): ACTIVE_STRUCTS[_k] = _v
 
+    # NEW INTELLIGENCE: Force true definition of all active structs at Level 2/3
+    if intelligence_level >= 2:
+        for tag in ACTIVE_STRUCTS.keys():
+            categories.setdefault("need_struct_body", set()).add(tag)
+
     _scrape_logs_into_categories(categories)
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base()
@@ -463,7 +475,8 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     # Regret Cleanup (Levels 2 & 3)
     if intelligence_level >= 2:
         original_types = types_content
-        scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable"}
+        # Crucial addition: Clean up any accidentally defined __OSBlockInfo globals
+        scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable", "__OSBlockInfo", "__OSTranxInfo"}
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
             types_content = re.sub(rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", "", types_content)
@@ -973,12 +986,18 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             fixes += 1
 
     # ------------------------------------------------------------------
-    # FULL STRUCT BODY REWRITER (UPGRADED FOR AGGRESSIVE OVERRIDE)
+    # FULL STRUCT BODY REWRITER (TOPOLOGICALLY SORTED OVERRIDES)
     # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
-        for tag in sorted(categories["need_struct_body"]):
+        
+        # Iterate over ACTIVE_STRUCTS keys to preserve the safe topological order,
+        # then do the rest (alphabetically)
+        ordered_tags = [t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set())]
+        other_tags = sorted([t for t in categories.get("need_struct_body", set()) if t not in ACTIVE_STRUCTS])
+
+        for tag in ordered_tags + other_tags:
             if not isinstance(tag, str): continue
             body = ACTIVE_STRUCTS.get(tag)
             if not body:
@@ -999,6 +1018,11 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"):
                 types_content = strip_redefinition(types_content, f"{tag}_s")
+            
+            # Additional targeted strip for inner structs defined inside macros like OSPiHandle
+            if tag == "OSPiHandle":
+                types_content = strip_redefinition(types_content, "__OSBlockInfo")
+                types_content = strip_redefinition(types_content, "__OSTranxInfo")
             
             # Destroy the outer macro guards just to be perfectly sure.
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
