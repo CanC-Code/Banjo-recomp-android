@@ -46,14 +46,6 @@ def write_file(filepath: str, content: str) -> None:
     except Exception as e:
         logger.error(f"Failed to write {filepath}: {e}")
 
-def is_type_defined(tag: str, content: str) -> bool:
-    """Check if a type is safely defined in the given C code content."""
-    if f"typedef struct {tag}_s {tag};" in content: return True
-    if f"typedef struct {tag} {tag};" in content: return True
-    if re.search(rf"\}\s*{re.escape(tag)}\s*;", content): return True
-    if re.search(rf"typedef\s+[^;]+?\b{re.escape(tag)}\s*;", content): return True
-    return False
-
 # --- Core Logic ---
 def strip_auto_preamble(content: str) -> str:
     """Strip auto-generated preamble from content."""
@@ -346,8 +338,8 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
             decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
             
-            # Robust duplicate guard
-            if not is_type_defined(tag, types_content):
+            # Use strict structural checking instead of word boundary searches
+            if f"typedef struct {struct_tag} {tag};" not in types_content and f"}} {tag};" not in types_content:
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 write_file(TYPES_HEADER, types_content)
                 fixed_files.add(TYPES_HEADER)
@@ -355,7 +347,6 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
 
         if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
             c = read_file(filepath)
-            # More relaxed include check
             if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
                 write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                 fixed_files.add(filepath)
@@ -705,14 +696,13 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 struct_tag = f"{t}_s" if not t.endswith("_s") else t
                 decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {t};\n"
                 
-                # Robust duplicate guard
-                if not is_type_defined(t, types_content):
+                # Use strict structural checking instead of word boundary searches
+                if f"typedef struct {struct_tag} {t};" not in types_content and f"}} {t};" not in types_content:
                     types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\n{decl}#endif\n"
                     k_added = True
 
             if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
                 c = read_file(filepath)
-                # More relaxed include check
                 if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
                     write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                     fixed_files.add(filepath)
@@ -729,7 +719,6 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 existing_stubs += "OSIntMask osSetIntMask(OSIntMask mask) { (void)mask; return 0; }\n"
                 write_file(STUBS_FILE, existing_stubs)
                 fixes += 1
-
 
     # --- Undeclared GBI Constants ---
     if categories.get("undeclared_gbi"):
