@@ -73,6 +73,7 @@ except ImportError:
 
 # ---------------------------------------------------------------------------
 # Full N64 OS struct body definitions
+# (Updated to use struct XXX_s * to break cyclical/order dependencies)
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
     "Mtx": """\
@@ -84,19 +85,19 @@ typedef union {
     "OSPfs": """\
 typedef struct OSPfs_s {
     OSIoMesg    ioMesgBuf;
-    OSMesgQueue *queue;
+    struct OSMesgQueue_s *queue;
     s32         channel;
     u8          activebank;
     u8          banks;
-    u8          inodeTable[PFS_INODE_TABLE_SIZE];
-    u8          dir[PFS_FILE_TABLE_SIZE * sizeof(OSPfsState)];
-    u32         label[PFS_LABEL_SIZE / sizeof(u32)];
-    s32         repairList[PFS_INODE_TABLE_SIZE];
-    OSPfsState  *status;
+    u8          inodeTable[256];
+    u8          dir[256];
+    u32         label[8];
+    s32         repairList[256];
+    struct OSPfsState_s  *status;
     u32         version;
     u32         checksum;
     u32         inodeCacheIndex;
-    u8          inodeCache[PFS_ONE_PAGE];
+    u8          inodeCache[256];
 } OSPfs;""",
 
     "OSContStatus": """\
@@ -130,8 +131,8 @@ typedef struct OSPiHandle_s {
 
     "OSMesgQueue": """\
 typedef struct OSMesgQueue_s {
-    OSThread    *mtqueue;
-    OSThread    *fullqueue;
+    struct OSThread_s *mtqueue;
+    struct OSThread_s *fullqueue;
     s32          validCount;
     s32          first;
     s32          msgCount;
@@ -156,8 +157,8 @@ typedef struct OSIoMesg_s {
     OSMesg      hdr;
     OSMesg      dramAddr;
     u32         devAddr;
-    size_t      size;
-    OSPiHandle *hHandle;
+    u32         size;
+    struct OSPiHandle_s *hHandle;
 } OSIoMesg;""",
 
     "OSTimer": """\
@@ -166,7 +167,7 @@ typedef struct OSTimer_s {
     struct OSTimer_s *prev;
     OSTime            interval;
     OSTime            value;
-    OSMesgQueue      *mq;
+    struct OSMesgQueue_s *mq;
     OSMesg            msg;
 } OSTimer;""",
 
@@ -176,7 +177,7 @@ typedef struct OSScTask_s {
     u32                state;
     u32                flags;
     struct OSTask_s   *list;
-    OSMesgQueue       *msgQ;
+    struct OSMesgQueue_s *msgQ;
     OSMesg             msg;
     u8                *framebuffer;
     u32                tid;
