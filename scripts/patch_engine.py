@@ -3,7 +3,7 @@ import re
 from collections import defaultdict
 import logging
 
-# Set up logging for the "Dynamic" process
+# Set up logging for the dynamic build process
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 from error_parser import (
@@ -18,16 +18,15 @@ class N64PatchEngine:
     def __init__(self):
         self.fixes_count = 0
         self.modified_files = set()
-        self.type_registry = set() # Track what we've defined dynamically
 
     def deterministic_hash(self, name):
-        """Generates a unique but stable ID for macros/types."""
+        """Generates a stable unique ID for macros to prevent switch-case collisions."""
         h = 0
         for c in name: h = (31 * h + ord(c)) & 0xFFFFFFFF
         return (h % 80000) + 2000
 
     def ensure_base_types(self):
-        """Ensures the foundation of the port is present and uncorrupted."""
+        """Maintains the core foundation of the AArch64 port."""
         primitives = """
 #ifndef CORE_PRIMITIVES_DEFINED
 #define CORE_PRIMITIVES_DEFINED
@@ -46,6 +45,10 @@ typedef u32 OSIntMask; typedef u64 OSTime;
 typedef u32 OSId;      typedef s32 OSPri;
 typedef void* OSMesg;
 
+/* SDK Audio/Gfx State Structs - Aligned for AArch64 */
+typedef struct { long long int data[16]; } RESAMPLE_STATE;
+typedef struct { long long int data[16]; } ENVMIX_STATE;
+
 #ifndef OS_READ
   #define OS_READ 0
   #define OS_WRITE 1
@@ -56,104 +59,126 @@ typedef void* OSMesg;
         if "CORE_PRIMITIVES_DEFINED" not in content:
             new_content = "#pragma once\n" + primitives + "\n" + content.replace("#pragma once", "")
             write_file(TYPES_HEADER, new_content)
-            logging.info("Injected Core Primitive Layer.")
+            logging.info("Foundation Established: Core Primitive Layer injected.")
 
-    def inject_missing_member(self, struct_name, member_name, context_hint=None):
+    def promote_or_inject_member(self, struct_name, member_name, context_line=""):
         """
-        DYNAMISM: Infers type based on 'context_hint' (the error line).
+        DYNAMISM: Upgrades types from scalars to pointers/arrays if the code context requires it.
         """
         content = read_file(TYPES_HEADER)
-        pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}})"
         
-        # Heuristic Logic
-        inferred_type = "long long int"
-        if context_hint:
-            if "->" in context_hint or "*" in context_hint: inferred_type = "void*"
-            elif "." in context_hint: inferred_type = "struct unknown_s"
-            elif any(x in member_name.lower() for x in ["id", "buf", "name", "data"]): 
-                inferred_type = "u8[128]" # Likely an array
+        # Inference Heuristic: Determine type from usage
+        target_type = "long long int"
+        if "->" in context_line or "*" in context_line or "ptr" in member_name.lower(): 
+            target_type = "void*"
+        elif "[" in context_line or any(x in member_name.lower() for x in ["id", "buf", "name", "data"]):
+            target_type = "u8[256]"
 
-        def replacer(match):
-            body = match.group(2)
-            if member_name in body: return match.group(0)
+        struct_pattern = rf"(struct\s+{struct_name}\s*\{{)([^}}]*?)(\}})"
+        match = re.search(struct_pattern, content)
+        
+        if match:
+            header, body, footer = match.groups()
+            # PROMOTION: If it exists as a scalar but code tries to use it as a pointer/array
+            if f" {member_name};" in body:
+                if target_type == "void*" and "long long int" in body:
+                    body = body.replace(f"long long int {member_name};", f"void* {member_name}; /* PROMOTED */")
+                    logging.info(f"Promoted {struct_name}.{member_name} to Pointer.")
+                elif "u8[" in target_type and "long long int" in body:
+                    body = body.replace(f"long long int {member_name};", f"u8 {member_name}[256]; /* PROMOTED */")
+                    logging.info(f"Promoted {struct_name}.{member_name} to Array.")
+            elif f" {member_name}" not in body:
+                # INJECTION: Add the member if missing
+                decl = f"    void* {member_name}; /* AUTO-PTR */" if target_type == "void*" else \
+                       (f"    u8 {member_name}[256]; /* AUTO-ARR */" if "u8[" in target_type else f"    long long int {member_name};")
+                body = body.rstrip() + f"\n{decl}\n"
+                logging.info(f"Injected {struct_name}.{member_name} as {target_type}.")
             
-            if "[" in inferred_type:
-                base, size = inferred_type.split("[")
-                decl = f"    {base} {member_name}[{size} /* AUTO-ARRAY */"
-            else:
-                decl = f"    {inferred_type} {member_name}; /* AUTO-INFERRED */"
-                
-            return f"{match.group(1)}{body}\n{decl}\n{match.group(3)}"
-
-        if re.search(pattern, content):
-            new_content = re.sub(pattern, replacer, content)
+            new_content = content[:match.start()] + header + body + footer + content[match.end():]
             write_file(TYPES_HEADER, new_content)
             self.fixes_count += 1
 
-    def apply_surgical_fix(self, filepath, error_category, data):
-        """Applies fixes only to specific lines or contexts to prevent corruption."""
-        if not os.path.exists(filepath): return
-        content = read_file(filepath)
-        original = content
-
-        if error_category == "expected_expression":
-            # Fix: n64_memcpy(dest, {literal}, size) -> n64_memcpy(dest, (f32[]){literal}, size)
-            content = re.sub(r'n64_memcpy\s*\(([^,]+),\s*\{([^}]+)\},\s*([^)]+)\)', 
-                             r'n64_memcpy(\1, (f32[]){\2}, \3)', content)
-
-        if error_category == "redefinition":
-            # Comment out redefinitions instead of deleting (safety first)
-            var_name = data
-            content = re.sub(rf"^(.*?\b{re.escape(var_name)}\b.*?;)", r"/* AUTO-REDEF */ // \1", content, flags=re.MULTILINE)
-
-        if content != original:
-            write_file(filepath, content)
-            self.modified_files.add(filepath)
-            self.fixes_count += 1
+    def handle_global_promotion(self, var_name, context_line=""):
+        """Upgrades global externs if they are accessed like objects/arrays."""
+        content = read_file(TYPES_HEADER)
+        if "->" in context_line or "[" in context_line:
+            old_decl = f"extern long long int {var_name};"
+            new_decl = f"extern void* {var_name}; /* PROMOTED */"
+            if old_decl in content:
+                write_file(TYPES_HEADER, content.replace(old_decl, new_decl))
+                logging.info(f"Promoted Global Extern '{var_name}' to Pointer.")
+                self.fixes_count += 1
 
     def run_cycle(self, categories):
-        """The main execution loop for the Dynamic Recompiler."""
         self.ensure_base_types()
 
-        # Handle Missing Members (The most complex dynamic part)
-        for struct_name, member_name in categories.get("missing_members", []):
-            self.inject_missing_member(struct_name, member_name)
-
-        # Handle Surgical File Fixes
+        # 1. Surgical Fixes (High-risk syntax fixes)
         for cat in ["expected_expression", "redefinition"]:
             for filepath, data in categories.get(cat, []):
-                self.apply_surgical_fix(filepath, cat, data)
+                if not os.path.exists(filepath): continue
+                content = read_file(filepath)
+                if cat == "expected_expression":
+                    # Fix: n64_memcpy(dest, {literal}, size) -> n64_memcpy(dest, (f32[]){literal}, size)
+                    content = re.sub(r'n64_memcpy\s*\(([^,]+),\s*\{([^}]+)\},\s*([^)]+)\)', 
+                                     r'n64_memcpy(\1, (f32[]){\2}, \3)', content)
+                elif cat == "redefinition":
+                    content = re.sub(rf"^(.*?\b{re.escape(data)}\b.*?;)", r"/* AUTO-REDEF */ // \1", content, flags=re.MULTILINE)
+                write_file(filepath, content)
+                self.modified_files.add(filepath); self.fixes_count += 1
 
-        # Handle Missing Types
+        # 2. Dynamic Structural Fixes
+        for struct_name, member_name in categories.get("missing_members", []):
+            self.promote_or_inject_member(struct_name, member_name, context_line=member_name)
+
+        for filepath, glob in categories.get("missing_globals", []):
+            self.handle_global_promotion(glob, context_line=glob)
+            types_content = read_file(TYPES_HEADER)
+            if f" {glob};" not in types_content:
+                types_content += f"\n#ifndef {glob}_DEFINED\nextern long long int {glob};\n#define {glob}_DEFINED\n#endif"
+                write_file(TYPES_HEADER, types_content)
+
+        # 3. Type Discovery & SDK Body Injection
         types_content = read_file(TYPES_HEADER)
         for filepath, tag in categories.get("missing_types", []):
             if tag in N64_STRUCT_BODIES:
-                # Use the real SDK body if we have it
                 if f"struct {tag}" not in types_content:
                     types_content += "\n" + N64_STRUCT_BODIES[tag]
                     self.fixes_count += 1
-            else:
-                # Generate a safe generic struct
+            elif tag not in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg", "RESAMPLE_STATE", "ENVMIX_STATE"]:
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
                 if f"struct {struct_tag}" not in types_content:
                     types_content += f"\nstruct {struct_tag} {{ long long int pad[64]; }};\ntypedef struct {struct_tag} {tag};"
                     self.fixes_count += 1
             
-            # Ensure file includes the type header
+            # Ensure the source file knows about our types
             if filepath and os.path.exists(filepath) and "n64_types.h" not in read_file(filepath):
                 write_file(filepath, '#include "ultra/n64_types.h"\n' + read_file(filepath))
 
-        # Handle Switch-Case Macro Conflicts
+        # 4. Conflict Resolution (POSIX Renaming)
+        seen_static = set()
+        for cat in ["static_conflict", "posix_reserved_conflict"]:
+            for filepath, func_name in categories.get(cat, []):
+                if (filepath, func_name) in seen_static or not os.path.exists(filepath): continue
+                seen_static.add((filepath, func_name))
+                content = read_file(filepath)
+                prefix = os.path.basename(filepath).split('.')[0]
+                macro = f"\n/* AUTO: POSIX Conflict Fix */\n#define {func_name} n64_renamed_{prefix}_{func_name}\n"
+                if macro not in content:
+                    anchor = '#include "ultra/n64_types.h"'
+                    content = content.replace(anchor, anchor + macro) if anchor in content else macro + content
+                    write_file(filepath, content); self.modified_files.add(filepath); self.fixes_count += 1
+
+        # 5. Deterministic Macro Injection
+        types_content = read_file(TYPES_HEADER)
         for macro in categories.get("undeclared_macros", []):
             if macro not in KNOWN_MACROS and f"#define {macro}" not in types_content:
                 val = self.deterministic_hash(macro)
-                types_content += f"\n#ifndef {macro}\n  #define {macro} {val}\n#endif"
+                types_content += f"\n#ifndef {macro}\n  #define {macro} {val} /* AUTO-INJECTED */\n#endif"
                 self.fixes_count += 1
-
         write_file(TYPES_HEADER, types_content)
+
         return self.fixes_count, self.modified_files
 
-# --- Entry Point ---
 def apply_fixes(categories):
     engine = N64PatchEngine()
     return engine.run_cycle(categories)
