@@ -68,7 +68,7 @@ except ImportError:
     }
 
 # ---------------------------------------------------------------------------
-# Phase Definitions
+# Phase Definitions (Now Includes Level 3 Graphics)
 # ---------------------------------------------------------------------------
 PHASE_1_MACROS = {
     "OS_IM_1": "0x0001", "OS_IM_2": "0x0002",
@@ -92,6 +92,15 @@ PHASE_2_MACROS = {
     "OS_WRITE": "1",
     "OS_MESG_NOBLOCK": "0",
     "OS_MESG_BLOCK": "1",
+}
+
+PHASE_3_MACROS = {
+    **PHASE_2_MACROS,
+    "G_IM_FMT_RGBA": "0", "G_IM_FMT_YUV": "1", "G_IM_FMT_CI": "2", 
+    "G_IM_FMT_IA": "3", "G_IM_FMT_I": "4",
+    "G_IM_SIZ_4b": "0", "G_IM_SIZ_8b": "1", "G_IM_SIZ_16b": "2", "G_IM_SIZ_32b": "3",
+    "G_TX_WRAP": "0", "G_TX_MIRROR": "1", "G_TX_CLAMP": "2",
+    "G_ON": "1", "G_OFF": "0",
 }
 
 _N64_OS_STRUCT_BODIES = {
@@ -275,6 +284,28 @@ typedef struct {
 } LookAt;""",
 }
 
+_PHASE_3_STRUCTS = {
+    **_N64_OS_STRUCT_BODIES,
+    "Gfx": """\
+typedef struct {
+    u32 words[2];
+} Gfx;""",
+
+    "Vtx_t": """\
+typedef struct {
+    s16 ob[3];
+    u16 flag;
+    s16 tc[2];
+    u8  cn[4];
+} Vtx_t;""",
+
+    "Vtx": """\
+typedef union {
+    Vtx_t v;
+    long long int force_align[8];
+} Vtx;""",
+}
+
 # ---------------------------------------------------------------------------
 # N64 OS type sets
 # ---------------------------------------------------------------------------
@@ -290,7 +321,7 @@ N64_OS_OPAQUE_TYPES = {
     "OSScTask", "OSTask", "OSScClient", "OSScKiller",
     "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr",
     "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr",
-    "SPTask", "GBIarg",
+    "SPTask", "GBIarg", "Gfx", "Vtx", "uObjMtx",
 }
 
 N64_AUDIO_STATE_TYPES = {
@@ -332,13 +363,10 @@ typedef void* OSMesg;
 # ---------------------------------------------------------------------------
 def normalize_path(filepath: str) -> str:
     """Converts absolute CI/CD paths to local relative paths."""
-    # Look for common project root folder names
     markers = ["Banjo-recomp-android/", "Android/app/"]
     for marker in markers:
         if marker in filepath:
             return filepath.split(marker)[-1]
-    
-    # If it starts with a slash but we couldn't find a marker, try stripping the leading slash
     if filepath.startswith("/"):
         return filepath.lstrip("/")
     return filepath
@@ -511,7 +539,7 @@ def ensure_types_header_base() -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# Log scraper
+# Deep Log Scraper
 # ---------------------------------------------------------------------------
 def _scrape_logs_into_categories(categories: dict) -> None:
     log_candidates = [
@@ -521,24 +549,22 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         "build_log.txt",
         "Android/build_log.txt",
     ]
-    try:
-        for f in os.listdir("."):
-            if f.endswith((".txt", ".log")):
-                log_candidates.append(f)
-    except Exception:
-        pass
+    
+    # Initialize all lists if not present
+    for key in ["missing_types", "posix_reserved_conflict", "struct_redef", 
+                "undeclared_macros", "missing_globals", "incomplete_sizeof", 
+                "implicit_func", "conflicting_types"]:
+        if key not in categories: categories[key] = []
+        elif isinstance(categories[key], set): categories[key] = list(categories[key])
 
-    if "missing_types" not in categories: categories["missing_types"] = []
-    elif isinstance(categories["missing_types"], set): categories["missing_types"] = list(categories["missing_types"])
     mt = categories["missing_types"]
-
-    if "posix_reserved_conflict" not in categories: categories["posix_reserved_conflict"] = []
-    elif isinstance(categories["posix_reserved_conflict"], set): categories["posix_reserved_conflict"] = list(categories["posix_reserved_conflict"])
     pc = categories["posix_reserved_conflict"]
-
-    if "struct_redef" not in categories: categories["struct_redef"] = []
-    elif isinstance(categories["struct_redef"], set): categories["struct_redef"] = list(categories["struct_redef"])
     sr = categories["struct_redef"]
+    um = categories["undeclared_macros"]
+    mg = categories["missing_globals"]
+    iso = categories["incomplete_sizeof"]
+    imp = categories["implicit_func"]
+    ct = categories["conflicting_types"]
 
     for log_file in set(log_candidates):
         if not os.path.exists(log_file):
@@ -579,16 +605,51 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             if (filepath, tag) not in sr:
                 sr.append((filepath, tag))
 
+        # Undeclared Identifiers (Macros vs Globals)
+        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+use of undeclared identifier '(\w+)'", content):
+            filepath = normalize_path(m.group(1))
+            ident = m.group(2)
+            # Standard N64 SDK macros are usually uppercase
+            if ident.isupper():
+                if ident not in um: um.append(ident)
+            else:
+                if (filepath, ident) not in mg: mg.append((filepath, ident))
+
+        # Incomplete Types / Sizeof
+        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+(?:variable has incomplete type|field has incomplete type|incomplete definition of type 'struct|invalid application of 'sizeof' to an incomplete type) '(\w+)'", content):
+            filepath = normalize_path(m.group(1))
+            tag = m.group(2)
+            if (filepath, tag) not in iso: iso.append((filepath, tag))
+
+        # Implicit Function Declarations
+        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+(?:warning|error):\s+implicit declaration of function '(\w+)'", content):
+            func = m.group(2)
+            if func not in imp: imp.append(func)
+            
+        # Conflicting Types
+        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+conflicting types for '(\w+)'", content):
+            filepath = normalize_path(m.group(1))
+            func = m.group(2)
+            if (filepath, func) not in ct: ct.append((filepath, func))
+
 # ---------------------------------------------------------------------------
-# Main fix dispatcher (Now respects Intelligence Level)
+# Main fix dispatcher
 # ---------------------------------------------------------------------------
 def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set]:
     fixes       = 0
     fixed_files = set()
 
     # Determine Active Dictionaries Based on Intelligence
-    ACTIVE_MACROS = PHASE_2_MACROS if intelligence_level >= 2 else PHASE_1_MACROS
-    ACTIVE_STRUCTS = _N64_OS_STRUCT_BODIES if intelligence_level >= 2 else {}
+    if intelligence_level >= 3:
+        ACTIVE_MACROS = PHASE_3_MACROS
+        ACTIVE_STRUCTS = _PHASE_3_STRUCTS
+    elif intelligence_level >= 2:
+        ACTIVE_MACROS = PHASE_2_MACROS
+        ACTIVE_STRUCTS = _N64_OS_STRUCT_BODIES
+    else:
+        ACTIVE_MACROS = PHASE_1_MACROS
+        ACTIVE_STRUCTS = {}
+
     for _k, _v in _EP_STRUCTS.items():
         ACTIVE_STRUCTS[_k] = _v
 
@@ -598,12 +659,12 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     types_content = ensure_types_header_base()
 
     # ------------------------------------------------------------------
-    # Intelligence Level 2: Regret Cleanup
+    # Intelligence Level Up: Regret Cleanup
     # ------------------------------------------------------------------
     if intelligence_level >= 2:
         original_types = types_content
         # We now know certain globals are actually macros or structs. 
-        # Remove any blind Phase 1 "extern long long int" guesses.
+        # Remove any blind lower-level "extern long long int" guesses.
         scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable"}
 
         for target in scrub_targets:
@@ -617,7 +678,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 "", types_content)
 
         if types_content != original_types:
-            logger.info("🧹 Phase 2 Cleanup: Removed incorrect Phase 1 primitive guesses.")
+            logger.info(f"🧹 Phase {intelligence_level} Cleanup: Removed incorrect primitive guesses.")
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
@@ -896,7 +957,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             fixed_files.add(filepath)
             fixes += 1
 
-    # Incomplete sizeof
+    # Incomplete sizeof & types
     if categories.get("incomplete_sizeof"):
         types_content = read_file(TYPES_HEADER)
         types_added = False
