@@ -10,6 +10,13 @@ from error_parser import (
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
+def deterministic_macro_val(macro_name):
+    """Generates a unique but consistent integer for an unknown macro to prevent duplicate switch cases."""
+    h = 0
+    for c in macro_name:
+        h = (31 * h + ord(c)) & 0xFFFFFFFF
+    return (h % 90000) + 1000 # Returns a consistent number between 1000 and 90999
+
 def strip_auto_preamble(content):
     lines = content.split('\n')
     result = []
@@ -41,7 +48,7 @@ def ensure_types_header_base():
     # 2. Safely remove any existing CORE_PRIMITIVES_DEFINED blocks to prevent #if/#endif mismatches
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
 
-    # 3. Aggressively wipe out loose primitive typedefs
+    # 3. Aggressively wipe out loose primitive typedefs that cause conflicts
     primitive_types = ["u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]
     for p in primitive_types:
         pattern = rf"(?m)^\s*typedef\s+[^;]+\b{p}\s*;\s*\n?"
@@ -54,7 +61,7 @@ def ensure_types_header_base():
         content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s+{p}\s*;\n?", "", content)
         content = re.sub(rf"struct\s+{p}(?:_s)?\s*;\n?", "", content)
 
-    # 5. Deterministically reconstruct the core primitives block
+    # 5. Deterministically reconstruct the core primitives block and explicit OS macros
     core_primitives = """
 #ifndef CORE_PRIMITIVES_DEFINED
 #define CORE_PRIMITIVES_DEFINED
@@ -77,9 +84,24 @@ typedef u64 OSTime;
 typedef u32 OSId;
 typedef s32 OSPri;
 typedef void* OSMesg;
+
+/* Common N64 OS Macros to prevent duplicate case values */
+#ifndef OS_READ
+#define OS_READ 0
+#endif
+#ifndef OS_WRITE
+#define OS_WRITE 1
+#endif
+#ifndef OS_MESG_NOBLOCK
+#define OS_MESG_NOBLOCK 0
+#endif
+#ifndef OS_MESG_BLOCK
+#define OS_MESG_BLOCK 1
+#endif
+
 #endif
 """
-    # Ensure #pragma once is at the very top and followed by core primitives
+    # Force #pragma once at the top and followed by core primitives
     content = content.replace("#pragma once", "").strip()
     content = "#pragma once\n" + core_primitives + "\n" + content
             
@@ -113,9 +135,10 @@ def apply_fixes(categories):
     
     macros_cleaned = False
     for tag in known_types:
-        pattern1 = rf"(?m)^\s*#ifndef {tag}\s*\n\s*#define {tag} 0 /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n\s*#endif\s*\n?"
+        # Scrub dynamically injected macros holding digits
+        pattern1 = rf"(?m)^\s*#ifndef {re.escape(tag)}\s*\n\s*#define {re.escape(tag)} \d+ /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n\s*#endif\s*\n?"
         types_content, n1 = re.subn(pattern1, "", types_content)
-        pattern2 = rf"(?m)^\s*#define {tag} 0 /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n?"
+        pattern2 = rf"(?m)^\s*#define {re.escape(tag)} \d+ /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n?"
         types_content, n2 = re.subn(pattern2, "", types_content)
         if n1 > 0 or n2 > 0:
             macros_cleaned = True
@@ -226,19 +249,6 @@ def apply_fixes(categories):
                     content = content.replace(anchor, anchor + macro) if anchor in content else macro + content
                     write_file(filepath, content); fixed_files.add(filepath); fixes += 1
 
-    # --- UNDECLARED SYMBOLS & STUBS ---
-    if categories.get("undefined_symbols", []):
-        if not os.path.exists(STUBS_FILE):
-            os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
-            write_file(STUBS_FILE, '#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
-        existing_stubs = read_file(STUBS_FILE)
-        added = False
-        for sym in sorted(categories["undefined_symbols"]):
-            if not sym.startswith("_Z") and "vtable" not in sym and f" {sym}(" not in existing_stubs:
-                existing_stubs += f"long long int {sym}() {{ return 0; }}\n"
-                added = True
-        if added: write_file(STUBS_FILE, existing_stubs); fixes += 1
-
     # --- STRUCT BODY INJECTION (SDK TYPES) ---
     if categories.get("need_struct_body", []):
         types_content = read_file(TYPES_HEADER)
@@ -251,5 +261,73 @@ def apply_fixes(categories):
                 types_content += "\n" + body
                 added = True
         if added: write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # --- UNDECLARED MACROS (Deterministic Value Injection) ---
+    if categories.get("undeclared_macros", []):
+        types_content = read_file(TYPES_HEADER)
+        macros_added = False
+        for macro in sorted(categories["undeclared_macros"]):
+            if macro in KNOWN_FUNCTION_MACROS:
+                defn = KNOWN_FUNCTION_MACROS[macro]
+                if defn not in types_content:
+                    types_content += f"\n{defn}\n"
+                    macros_added = True
+            elif macro in KNOWN_MACROS:
+                if f"#define {macro}" not in types_content:
+                    types_content += f"\n#ifndef {macro}\n#define {macro} {KNOWN_MACROS[macro]}\n#endif\n"
+                    macros_added = True
+            else:
+                if f"#define {macro}" not in types_content:
+                    val = deterministic_macro_val(macro)
+                    types_content += f"\n#ifndef {macro}\n#define {macro} {val} /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
+                    macros_added = True
+        if macros_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    # --- IMPLICIT MATH / STRING HEADER INJECTION ---
+    if categories.get("implicit_func", []):
+        math_funcs   = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
+        string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
+        stdlib_funcs = {"stdlib.h": ["malloc", "free", "exit", "atoi", "rand", "srand"]}
+        types_content = read_file(TYPES_HEADER)
+        includes_added = False
+        for func in sorted(categories["implicit_func"]):
+            if func in math_funcs:       header = "<math.h>"
+            elif func in string_funcs:   header = "<string.h>"
+            elif func in stdlib_funcs["stdlib.h"]:   header = "<stdlib.h>"
+            else:                        continue
+            if f"#include {header}" not in types_content:
+                types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header}")
+                includes_added = True
+        if includes_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    # --- MISSING GLOBALS & STUBS ---
+    if categories.get("missing_globals", []):
+        types_content = read_file(TYPES_HEADER)
+        globals_added = False
+        for filepath, glob in sorted(categories["missing_globals"]):
+            if glob == "actor": continue
+            if f" {glob};" not in types_content and f"*{glob};" not in types_content and f" {glob}[" not in types_content:
+                decl = f"extern void* {glob};" if glob.endswith(("_ptr", "_p")) else f"extern long long int {glob};"
+                types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"
+                globals_added = True
+        if globals_added:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    if categories.get("undefined_symbols", []):
+        if not os.path.exists(STUBS_FILE):
+            os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
+            write_file(STUBS_FILE, '#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
+        existing_stubs = read_file(STUBS_FILE)
+        added = False
+        for sym in sorted(categories["undefined_symbols"]):
+            if not sym.startswith("_Z") and "vtable" not in sym and f" {sym}(" not in existing_stubs:
+                existing_stubs += f"long long int {sym}() {{ return 0; }}\n"
+                added = True
+        if added: write_file(STUBS_FILE, existing_stubs); fixes += 1
 
     return fixes, fixed_files
