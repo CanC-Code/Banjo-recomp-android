@@ -1,11 +1,13 @@
 import os
 import re
 import logging
+import subprocess
+import sys
 from collections import defaultdict
 from typing import Dict, Set, List, Tuple, Optional, Union
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger("N64_RECOMP")
+logger = logging.getLogger("N64_RECOMP_PHASE1")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -14,7 +16,7 @@ TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
 # ---------------------------------------------------------------------------
-# Constants — try to import from error_parser, fall back to self-contained
+# Constants 
 # ---------------------------------------------------------------------------
 try:
     from error_parser import (
@@ -82,7 +84,6 @@ except ImportError:
 
 # ---------------------------------------------------------------------------
 # Full N64 OS struct body definitions
-# (Updated to correctly implement transferInfo and piHandle)
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
     "Mtx": """\
@@ -247,7 +248,6 @@ typedef struct {
 } LookAt;""",
 }
 
-# Merge into N64_STRUCT_BODIES (error_parser entries take priority)
 for _k, _v in _N64_OS_STRUCT_BODIES.items():
     if _k not in N64_STRUCT_BODIES:
         N64_STRUCT_BODIES[_k] = _v
@@ -255,7 +255,6 @@ for _k, _v in _N64_OS_STRUCT_BODIES.items():
 # ---------------------------------------------------------------------------
 # N64 OS type sets
 # ---------------------------------------------------------------------------
-
 N64_PRIMITIVES = {
     "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
     "f32", "f64", "n64_bool",
@@ -308,7 +307,6 @@ typedef void* OSMesg;
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 def strip_auto_preamble(content: str) -> str:
     lines = content.split('\n')
     result = []
@@ -355,11 +353,10 @@ def _type_already_defined(tag: str, content: str) -> bool:
     return False
 
 def strip_redefinition(content: str, tag: str) -> str:
-    """Removes a C struct or typedef block that matches the given tag, perfectly balancing braces."""
     changed = True
     while changed:
         changed = False
-        
+
         # 1. Explicit tagged struct (struct TAG { ... })
         pattern1 = re.compile(rf"\bstruct\s+{re.escape(tag)}\s*\{{")
         match = pattern1.search(content)
@@ -368,7 +365,7 @@ def strip_redefinition(content: str, tag: str) -> str:
             pre = content[:start_idx].rstrip()
             if pre.endswith("typedef"):
                 start_idx = pre.rfind("typedef")
-            
+
             brace_idx = content.find('{', match.start())
             open_braces = 1
             curr_idx = brace_idx + 1
@@ -376,7 +373,7 @@ def strip_redefinition(content: str, tag: str) -> str:
                 if content[curr_idx] == '{': open_braces += 1
                 elif content[curr_idx] == '}': open_braces -= 1
                 curr_idx += 1
-                
+
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
                 content = content[:start_idx] + f"/* AUTO-STRIPPED RE-DEF: {tag} */\n" + content[semi_idx+1:]
@@ -391,33 +388,33 @@ def strip_redefinition(content: str, tag: str) -> str:
                 break
             start_idx = idx + match.start()
             brace_idx = content.find('{', start_idx)
-            
+
             open_braces = 1
             curr_idx = brace_idx + 1
             while curr_idx < len(content) and open_braces > 0:
                 if content[curr_idx] == '{': open_braces += 1
                 elif content[curr_idx] == '}': open_braces -= 1
                 curr_idx += 1
-                
+
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
                 tail = content[curr_idx:semi_idx]
                 if re.search(rf"\b{re.escape(tag)}\b", tail):
                     content = content[:start_idx] + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n" + content[semi_idx+1:]
                     changed = True
-                    break # break to restart loop
+                    break 
                 idx = semi_idx + 1
             else:
                 idx = curr_idx + 1
-                
+
         if changed: continue
-        
+
         # 3. Loose typedefs / fwd decls
         c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
         if n > 0:
             content = c_new
             changed = True
-            
+
         c_new, n = re.subn(rf"\bstruct\s+{re.escape(tag)}\s*;", f"/* STRIPPED FWD DECL: {tag} */", content)
         if n > 0:
             content = c_new
@@ -426,9 +423,8 @@ def strip_redefinition(content: str, tag: str) -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# ensure_types_header_base  —  aggressive primitive cleanup + re-inject
+# ensure_types_header_base
 # ---------------------------------------------------------------------------
-
 def clean_conflicting_typedefs():
     if not os.path.exists(TYPES_HEADER):
         return
@@ -479,9 +475,8 @@ def ensure_types_header_base() -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# Log scraper — self-healing: pulls unknown type errors from build logs
+# Log scraper
 # ---------------------------------------------------------------------------
-
 def _scrape_logs_into_categories(categories: dict) -> None:
     log_candidates = [
         "Android/failed_files.log",
@@ -547,7 +542,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
 # ---------------------------------------------------------------------------
 # Main fix dispatcher
 # ---------------------------------------------------------------------------
-
 def apply_fixes(categories: dict) -> Tuple[int, set]:
     fixes       = 0
     fixed_files = set()
@@ -557,9 +551,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base()
 
-    # ------------------------------------------------------------------
     # Macro scrubber
-    # ------------------------------------------------------------------
     known_type_tags: Set[str] = set()
     for item in categories.get("missing_types", []):
         if isinstance(item, (list, tuple)) and len(item) >= 2: known_type_tags.add(item[1])
@@ -570,7 +562,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
         if isinstance(item, (list, tuple)) and len(item) >= 2: known_type_tags.add(item[1])
     for tag in categories.get("conflict_typedef", []):
         if isinstance(tag, str): known_type_tags.add(tag)
-    
+
     known_type_tags.update(N64_OS_OPAQUE_TYPES)
     known_type_tags.update(N64_STRUCT_BODIES.keys())
 
@@ -586,9 +578,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
     if macros_cleaned:
         write_file(TYPES_HEADER, types_content)
 
-    # ------------------------------------------------------------------
     # Conflict typedef cleanup
-    # ------------------------------------------------------------------
     for type_name in sorted(categories.get("conflict_typedef", [])):
         types_content = read_file(TYPES_HEADER)
         pattern = rf"(?:typedef\s+)?(?:struct\s+)?{re.escape(type_name)}\s*\{{[^}}]*\}}\s*{re.escape(type_name)}?\s*;\n?"
@@ -603,9 +593,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             types_content = new_types
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Missing members injection
-    # ------------------------------------------------------------------
     array_names = {"id", "label", "name", "buffer", "data", "str", "string", "temp"}
     for item in sorted(categories.get("missing_members", [])):
         if not isinstance(item, (list, tuple)) or len(item) < 2:
@@ -640,9 +628,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Variable redefinitions
-    # ------------------------------------------------------------------
     for item in sorted(categories.get("redefinition", [])):
         if not isinstance(item, (list, tuple)) or len(item) < 2:
             continue
@@ -658,9 +644,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ------------------------------------------------------------------
-    # Missing types — opaque stubs, full bodies, or include injection
-    # ------------------------------------------------------------------
+    # Missing types
     for item in sorted(categories.get("missing_types", []), key=str):
         if isinstance(item, (list, tuple)) and len(item) >= 2: filepath, tag = item[0], item[1]
         elif isinstance(item, str): filepath, tag = None, item
@@ -703,9 +687,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ------------------------------------------------------------------
     # Explicit audio state category
-    # ------------------------------------------------------------------
     if categories.get("unknown_audio_state_types"):
         types_content = read_file(TYPES_HEADER)
         added = False
@@ -718,9 +700,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Extraneous brace cleanup
-    # ------------------------------------------------------------------
     if categories.get("extraneous_brace"):
         types_content = read_file(TYPES_HEADER)
         original = types_content
@@ -734,9 +714,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Conflicting implicit-type prototypes
-    # ------------------------------------------------------------------
     for item in sorted(categories.get("conflicting_types", []), key=str):
         if not isinstance(item, (list, tuple)) or len(item) < 2: continue
         filepath, func = item[0], item[1]
@@ -756,9 +734,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ------------------------------------------------------------------
     # Missing n64_types.h include
-    # ------------------------------------------------------------------
     for item in sorted(categories.get("missing_n64_types", []), key=str):
         filepath = item if isinstance(item, str) else str(item)
         if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
@@ -768,9 +744,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             fixed_files.add(filepath)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Actor pointer injection
-    # ------------------------------------------------------------------
     for item in sorted(categories.get("actor_pointer", []), key=str):
         filepath = item if isinstance(item, str) else str(item)
         if not os.path.exists(filepath): continue
@@ -782,9 +756,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             fixed_files.add(filepath)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Local struct forward declarations
-    # ------------------------------------------------------------------
     if categories.get("local_struct_fwd"):
         file_to_types: dict = defaultdict(set)
         for item in categories["local_struct_fwd"]:
@@ -804,9 +776,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ------------------------------------------------------------------
     # Typedef / struct redefinitions
-    # ------------------------------------------------------------------
     fixd_files: set = set()
     for item in categories.get("typedef_redef", []):
         if isinstance(item, (list, tuple)) and len(item) >= 1: fixd_files.add(item[0])
@@ -820,14 +790,12 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
         original = content
         content  = strip_auto_preamble(content)
 
-        # Apply robust brace-balanced redefinition stripper
         for item in categories.get("struct_redef", []):
             if not isinstance(item, (list, tuple)) or len(item) < 2: continue
             fp2, tag = item[0], item[1]
             if fp2 != filepath: continue
             content = strip_redefinition(content, tag)
 
-        # Fallback to the legacy typedef regex rename where necessary
         for item in categories.get("typedef_redef", []):
             if not isinstance(item, (list, tuple)) or len(item) < 3: continue
             fp2, type1, type2 = item[0], item[1], item[2]
@@ -837,7 +805,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             tag1 = t1_m.group(1) if t1_m else None
             tag2 = t2_m.group(1) if t2_m else None
             if not (tag1 and tag2 and tag1 != tag2): continue
-            
+
             target_tag = tag2 if tag2.endswith("_s") else (tag1 if tag1.endswith("_s") else tag2)
             alias = tag1 if target_tag == tag2 else tag2
 
@@ -858,9 +826,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             fixed_files.add(filepath)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Incomplete sizeof
-    # ------------------------------------------------------------------
     if categories.get("incomplete_sizeof"):
         types_content = read_file(TYPES_HEADER)
         types_added = False
@@ -882,9 +848,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Static / POSIX name conflicts
-    # ------------------------------------------------------------------
     seen_static: set = set()
     for cat in ["static_conflict", "posix_conflict", "posix_reserved_conflict"]:
         for item in categories.get(cat, []):
@@ -912,9 +876,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ------------------------------------------------------------------
     # Undeclared macros
-    # ------------------------------------------------------------------
     if categories.get("undeclared_macros"):
         types_content = read_file(TYPES_HEADER)
         macros_added  = False
@@ -937,9 +899,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Implicit function declarations → system headers
-    # ------------------------------------------------------------------
     if categories.get("implicit_func"):
         math_funcs   = {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round"}
         string_funcs = {"memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp"}
@@ -959,9 +919,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Undefined linker symbols → stubs
-    # ------------------------------------------------------------------
     if categories.get("undefined_symbols"):
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
@@ -985,9 +943,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(STUBS_FILE, existing_stubs)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Audio-state opaque types
-    # ------------------------------------------------------------------
     if categories.get("audio_states"):
         types_content = read_file(TYPES_HEADER)
         audio_added   = False
@@ -1000,9 +956,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Undeclared N64 platform types
-    # ------------------------------------------------------------------
     if categories.get("undeclared_n64_types"):
         types_content = read_file(TYPES_HEADER)
         k_added = False
@@ -1042,9 +996,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 write_file(STUBS_FILE, existing_stubs)
                 fixes += 1
 
-    # ------------------------------------------------------------------
     # Undeclared GBI constants
-    # ------------------------------------------------------------------
     if categories.get("undeclared_gbi"):
         types_content = read_file(TYPES_HEADER)
         gbi_added = False
@@ -1060,9 +1012,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Full struct bodies for known N64 types
-    # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
@@ -1093,9 +1043,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # ------------------------------------------------------------------
     # Local forward-only declarations
-    # ------------------------------------------------------------------
     if categories.get("local_fwd_only"):
         file_to_types2: dict = defaultdict(set)
         for item in categories["local_fwd_only"]:
@@ -1118,9 +1066,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 fixed_files.add(filepath)
                 fixes += 1
 
-    # ------------------------------------------------------------------
     # Missing global extern declarations
-    # ------------------------------------------------------------------
     if categories.get("missing_globals"):
         types_content = read_file(TYPES_HEADER)
         globals_added = False
@@ -1138,3 +1084,62 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             fixes += 1
 
     return fixes, fixed_files
+
+# ---------------------------------------------------------------------------
+# Main Execution & Phase 2 Handoff Loop
+# ---------------------------------------------------------------------------
+def run_build_loop():
+    stall_count = 0
+    max_stalls = 3
+    
+    while True:
+        logger.info("\n=== Running Ninja build (Phase 1) ===")
+        
+        # NOTE: Update this path if your Ninja executable or build directory is located elsewhere
+        ninja_cmd = [
+            "/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja", 
+            "-C", 
+            "Android/app/.cxx/Debug/m365h2q2/arm64-v8a", 
+            "bkawrapper"
+        ]
+        
+        try:
+            result = subprocess.run(ninja_cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                logger.info("Build succeeded perfectly in Phase 1!")
+                break
+                
+            # Write full log for the scraper to read
+            write_file("Android/full_build_log.txt", result.stdout + "\n" + result.stderr)
+            write_file("Android/failed_files.log", result.stdout + "\n" + result.stderr)
+            
+            logger.info("Build failed. Scraping errors and attempting Phase 1 fixes...")
+            categories = {}
+            fixes_applied, _ = apply_fixes(categories)
+            
+            if fixes_applied == 0:
+                stall_count += 1
+                logger.warning(f"No valid Phase 1 patterns matched. Stall count: {stall_count}/{max_stalls}")
+            else:
+                logger.info(f"Applied {fixes_applied} fixes. Retrying build...")
+                stall_count = 0 # Reset stall count on successful progress
+                
+            if stall_count >= max_stalls:
+                logger.warning("Phase 1 has reached its knowledge limits!")
+                logger.info("Initializing Phase 2 script (patch_engine_2.py)...")
+                
+                phase_2_script = "patch_engine_2.py"
+                if os.path.exists(phase_2_script):
+                    # Launch Phase 2 script to take over
+                    subprocess.run([sys.executable, phase_2_script])
+                else:
+                    logger.error(f"Could not find {phase_2_script} in the current directory. Please create it to proceed further.")
+                break
+                
+        except Exception as e:
+            logger.error(f"Build loop encountered a critical execution error: {e}")
+            break
+
+if __name__ == "__main__":
+    run_build_loop()
