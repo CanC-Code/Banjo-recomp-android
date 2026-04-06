@@ -1,13 +1,12 @@
 import os
 import re
 import logging
-import subprocess
 import sys
 from collections import defaultdict
 from typing import Dict, Set, List, Tuple, Optional, Union
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger("N64_RECOMP_PHASE1")
+logger = logging.getLogger("N64_RECOMP_ENGINE")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -20,7 +19,7 @@ STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 # ---------------------------------------------------------------------------
 try:
     from error_parser import (
-        BRACE_MATCH, N64_STRUCT_BODIES, KNOWN_MACROS,
+        BRACE_MATCH, N64_STRUCT_BODIES as _EP_STRUCTS, KNOWN_MACROS as _EP_MACROS,
         KNOWN_FUNCTION_MACROS, POSIX_RESERVED_NAMES,
         read_file as _ep_read, write_file as _ep_write,
     )
@@ -28,6 +27,8 @@ try:
     write_file = _ep_write
 except ImportError:
     BRACE_MATCH = r"[^{}]*"
+    _EP_STRUCTS = {}
+    _EP_MACROS = {}
 
     def read_file(filepath: str) -> str:
         try:
@@ -44,21 +45,6 @@ except ImportError:
         except Exception as e:
             logger.error(f"Failed to write {filepath}: {e}")
 
-    KNOWN_MACROS = {
-        "OS_IM_1": "0x0001", "OS_IM_2": "0x0002",
-        "OS_IM_3": "0x0004", "OS_IM_4": "0x0008",
-        "OS_IM_5": "0x0010", "OS_IM_6": "0x0020",
-        "OS_IM_7": "0x0040",
-        "DEVICE_TYPE_64DD": "0x06",
-        "LEO_CMD_TYPE_0": "0",
-        "LEO_CMD_TYPE_1": "1",
-        "LEO_CMD_TYPE_2": "2",
-        "LEO_SECTOR_MODE": "1",
-        "LEO_TRACK_MODE": "2",
-        "LEO_BM_CTL": "0x05000510",
-        "LEO_BM_CTL_RESET": "0",
-        "LEO_ERROR_29": "29",
-    }
     KNOWN_FUNCTION_MACROS = {}
     POSIX_RESERVED_NAMES = {
         "close", "open", "read", "write", "send", "recv",
@@ -80,11 +66,34 @@ except ImportError:
         "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
         "rand", "srand",
     }
-    N64_STRUCT_BODIES = {}
 
 # ---------------------------------------------------------------------------
-# Full N64 OS struct body definitions
+# Phase Definitions
 # ---------------------------------------------------------------------------
+PHASE_1_MACROS = {
+    "OS_IM_1": "0x0001", "OS_IM_2": "0x0002",
+    "OS_IM_3": "0x0004", "OS_IM_4": "0x0008",
+    "OS_IM_5": "0x0010", "OS_IM_6": "0x0020",
+    "OS_IM_7": "0x0040",
+}
+
+PHASE_2_MACROS = {
+    **PHASE_1_MACROS,
+    "DEVICE_TYPE_64DD": "0x06",
+    "LEO_CMD_TYPE_0": "0",
+    "LEO_CMD_TYPE_1": "1",
+    "LEO_CMD_TYPE_2": "2",
+    "LEO_SECTOR_MODE": "1",
+    "LEO_TRACK_MODE": "2",
+    "LEO_BM_CTL": "0x05000510",
+    "LEO_BM_CTL_RESET": "0",
+    "LEO_ERROR_29": "29",
+    "OS_READ": "0",
+    "OS_WRITE": "1",
+    "OS_MESG_NOBLOCK": "0",
+    "OS_MESG_BLOCK": "1",
+}
+
 _N64_OS_STRUCT_BODIES = {
     "Mtx": """\
 typedef union {
@@ -188,14 +197,32 @@ typedef struct OSThread_s {
     long long int      context[67];
 } OSThread;""",
 
+    "OSMesgHdr": """\
+typedef struct {
+    u16 type;
+    u8  pri;
+    struct OSMesgQueue_s *retQueue;
+} OSMesgHdr;""",
+
     "OSIoMesg": """\
 typedef struct OSIoMesg_s {
-    OSMesg      hdr;
-    OSMesg      dramAddr;
+    OSMesgHdr   hdr;
+    void        *dramAddr;
     u32         devAddr;
     u32         size;
     struct OSPiHandle_s *piHandle;
 } OSIoMesg;""",
+
+    "OSDevMgr": """\
+typedef struct OSDevMgr_s {
+    s32 active;
+    struct OSThread_s *thread;
+    struct OSMesgQueue_s *cmdQueue;
+    struct OSMesgQueue_s *evtQueue;
+    struct OSMesgQueue_s *acsQueue;
+    s32 (*dma)(s32, u32, void *, u32);
+    s32 (*edma)(struct OSPiHandle_s *, s32, u32, void *, u32);
+} OSDevMgr;""",
 
     "OSTimer": """\
 typedef struct OSTimer_s {
@@ -248,10 +275,6 @@ typedef struct {
 } LookAt;""",
 }
 
-for _k, _v in _N64_OS_STRUCT_BODIES.items():
-    if _k not in N64_STRUCT_BODIES:
-        N64_STRUCT_BODIES[_k] = _v
-
 # ---------------------------------------------------------------------------
 # N64 OS type sets
 # ---------------------------------------------------------------------------
@@ -265,8 +288,8 @@ N64_OS_OPAQUE_TYPES = {
     "OSPfs", "OSContStatus", "OSContPad", "OSPiHandle",
     "OSMesgQueue", "OSThread", "OSIoMesg", "OSTimer",
     "OSScTask", "OSTask", "OSScClient", "OSScKiller",
-    "OSViMode", "OSViContext", "OSAiStatus",
-    "OSPfsState", "OSPfsFile", "OSPfsDir",
+    "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr",
+    "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr",
     "SPTask", "GBIarg",
 }
 
@@ -540,16 +563,46 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 sr.append((filepath, tag))
 
 # ---------------------------------------------------------------------------
-# Main fix dispatcher
+# Main fix dispatcher (Now respects Intelligence Level)
 # ---------------------------------------------------------------------------
-def apply_fixes(categories: dict) -> Tuple[int, set]:
+def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set]:
     fixes       = 0
     fixed_files = set()
+
+    # Determine Active Dictionaries Based on Intelligence
+    ACTIVE_MACROS = PHASE_2_MACROS if intelligence_level >= 2 else PHASE_1_MACROS
+    ACTIVE_STRUCTS = _N64_OS_STRUCT_BODIES if intelligence_level >= 2 else {}
+    for _k, _v in _EP_STRUCTS.items():
+        ACTIVE_STRUCTS[_k] = _v
 
     _scrape_logs_into_categories(categories)
 
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base()
+
+    # ------------------------------------------------------------------
+    # Intelligence Level 2: Regret Cleanup
+    # ------------------------------------------------------------------
+    if intelligence_level >= 2:
+        original_types = types_content
+        # We now know certain globals are actually macros or structs. 
+        # Remove any blind Phase 1 "extern long long int" guesses.
+        scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable"}
+        
+        for target in scrub_targets:
+            # Match #ifndef / #define / extern / #endif blocks
+            types_content = re.sub(
+                rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", 
+                "", types_content)
+            # Match stray externs
+            types_content = re.sub(
+                rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", 
+                "", types_content)
+                
+        if types_content != original_types:
+            logger.info("🧹 Phase 2 Cleanup: Removed incorrect Phase 1 primitive guesses.")
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
 
     # Macro scrubber
     known_type_tags: Set[str] = set()
@@ -564,7 +617,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
         if isinstance(tag, str): known_type_tags.add(tag)
 
     known_type_tags.update(N64_OS_OPAQUE_TYPES)
-    known_type_tags.update(N64_STRUCT_BODIES.keys())
+    known_type_tags.update(ACTIVE_STRUCTS.keys())
 
     macros_cleaned = False
     for tag in known_type_tags:
@@ -661,7 +714,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 types_content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
                 write_file(TYPES_HEADER, types_content)
                 fixes += 1
-        elif tag in N64_STRUCT_BODIES:
+        elif tag in ACTIVE_STRUCTS:
             categories.setdefault("need_struct_body", set()).add(tag)
         elif tag in N64_OS_OPAQUE_TYPES:
             if not _type_already_defined(tag, types_content):
@@ -837,7 +890,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             if tag in seen: continue
             seen.add(tag)
             base_tag = tag[:-2] if tag.endswith("_s") else tag
-            if base_tag in N64_STRUCT_BODIES: continue
+            if base_tag in ACTIVE_STRUCTS: continue
             is_sdk = (tag.isupper()
                       or tag.startswith(("OS", "SP", "DP", "AL", "GU", "G_"))
                       or (tag.endswith("_s") and tag[:-2].isupper()))
@@ -887,9 +940,9 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 if defn not in types_content:
                     types_content += f"\n{defn}\n"
                     macros_added = True
-            elif macro in KNOWN_MACROS:
+            elif macro in ACTIVE_MACROS:
                 if f"#define {macro}" not in types_content:
-                    types_content += f"\n#ifndef {macro}\n#define {macro} {KNOWN_MACROS[macro]}\n#endif\n"
+                    types_content += f"\n#ifndef {macro}\n#define {macro} {ACTIVE_MACROS[macro]}\n#endif\n"
                     macros_added = True
             else:
                 if f"#define {macro}" not in types_content:
@@ -965,7 +1018,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
             elif isinstance(item, str): filepath, t = None, item
             else: continue
             if not isinstance(t, str) or t in N64_PRIMITIVES: continue
-            if t in N64_STRUCT_BODIES:
+            if t in ACTIVE_STRUCTS:
                 categories.setdefault("need_struct_body", set()).add(t)
             elif t in N64_OS_OPAQUE_TYPES:
                 if not _type_already_defined(t, types_content):
@@ -1002,10 +1055,10 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
         gbi_added = False
         for ident in sorted(categories["undeclared_gbi"]):
             if not isinstance(ident, str): continue
-            if ident in KNOWN_MACROS and f"#define {ident}" not in types_content:
-                types_content += f"\n#ifndef {ident}\n#define {ident} {KNOWN_MACROS[ident]}\n#endif\n"
+            if ident in ACTIVE_MACROS and f"#define {ident}" not in types_content:
+                types_content += f"\n#ifndef {ident}\n#define {ident} {ACTIVE_MACROS[ident]}\n#endif\n"
                 gbi_added = True
-            elif ident not in KNOWN_MACROS and f"#define {ident}" not in types_content:
+            elif ident not in ACTIVE_MACROS and f"#define {ident}" not in types_content:
                 types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* TODO: unknown GBI constant */\n#endif\n"
                 gbi_added = True
         if gbi_added:
@@ -1018,7 +1071,7 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
         bodies_added  = False
         for tag in sorted(categories["need_struct_body"]):
             if not isinstance(tag, str): continue
-            body = N64_STRUCT_BODIES.get(tag)
+            body = ACTIVE_STRUCTS.get(tag)
             if not body:
                 if tag in N64_OS_OPAQUE_TYPES and not _type_already_defined(tag, types_content):
                     types_content += "\n" + _opaque_stub(tag)
@@ -1085,61 +1138,3 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
 
     return fixes, fixed_files
 
-# ---------------------------------------------------------------------------
-# Main Execution & Phase 2 Handoff Loop
-# ---------------------------------------------------------------------------
-def run_build_loop():
-    stall_count = 0
-    max_stalls = 3
-    
-    while True:
-        logger.info("\n=== Running Ninja build (Phase 1) ===")
-        
-        # NOTE: Update this path if your Ninja executable or build directory is located elsewhere
-        ninja_cmd = [
-            "/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja", 
-            "-C", 
-            "Android/app/.cxx/Debug/m365h2q2/arm64-v8a", 
-            "bkawrapper"
-        ]
-        
-        try:
-            result = subprocess.run(ninja_cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                logger.info("Build succeeded perfectly in Phase 1!")
-                break
-                
-            # Write full log for the scraper to read
-            write_file("Android/full_build_log.txt", result.stdout + "\n" + result.stderr)
-            write_file("Android/failed_files.log", result.stdout + "\n" + result.stderr)
-            
-            logger.info("Build failed. Scraping errors and attempting Phase 1 fixes...")
-            categories = {}
-            fixes_applied, _ = apply_fixes(categories)
-            
-            if fixes_applied == 0:
-                stall_count += 1
-                logger.warning(f"No valid Phase 1 patterns matched. Stall count: {stall_count}/{max_stalls}")
-            else:
-                logger.info(f"Applied {fixes_applied} fixes. Retrying build...")
-                stall_count = 0 # Reset stall count on successful progress
-                
-            if stall_count >= max_stalls:
-                logger.warning("Phase 1 has reached its knowledge limits!")
-                logger.info("Initializing Phase 2 script (patch_engine_2.py)...")
-                
-                phase_2_script = "patch_engine_2.py"
-                if os.path.exists(phase_2_script):
-                    # Launch Phase 2 script to take over
-                    subprocess.run([sys.executable, phase_2_script])
-                else:
-                    logger.error(f"Could not find {phase_2_script} in the current directory. Please create it to proceed further.")
-                break
-                
-        except Exception as e:
-            logger.error(f"Build loop encountered a critical execution error: {e}")
-            break
-
-if __name__ == "__main__":
-    run_build_loop()
