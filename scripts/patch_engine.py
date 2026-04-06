@@ -465,7 +465,7 @@ def apply_fixes(categories):
         file_to_types = defaultdict(set)
         for filepath, type_name in categories["local_fwd_only"]: file_to_types[filepath].add(type_name)
 
-        for filepath, type_names in sorted(file_to_items.items()):
+        for filepath, type_names in sorted(file_to_types.items()):
             if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
             content = read_file(filepath)
             content = strip_auto_preamble(content)
