@@ -46,6 +46,14 @@ def write_file(filepath: str, content: str) -> None:
     except Exception as e:
         logger.error(f"Failed to write {filepath}: {e}")
 
+def is_type_defined(tag: str, content: str) -> bool:
+    """Check if a type is safely defined in the given C code content."""
+    if f"typedef struct {tag}_s {tag};" in content: return True
+    if f"typedef struct {tag} {tag};" in content: return True
+    if re.search(rf"\}\s*{re.escape(tag)}\s*;", content): return True
+    if re.search(rf"typedef\s+[^;]+?\b{re.escape(tag)}\s*;", content): return True
+    return False
+
 # --- Core Logic ---
 def strip_auto_preamble(content: str) -> str:
     """Strip auto-generated preamble from content."""
@@ -339,7 +347,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
             decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
             
             # Robust duplicate guard
-            if not re.search(rf"\b{re.escape(tag)}\b", types_content):
+            if not is_type_defined(tag, types_content):
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 write_file(TYPES_HEADER, types_content)
                 fixed_files.add(TYPES_HEADER)
@@ -698,7 +706,7 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {t};\n"
                 
                 # Robust duplicate guard
-                if not re.search(rf"\b{re.escape(t)}\b", types_content):
+                if not is_type_defined(t, types_content):
                     types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\n{decl}#endif\n"
                     k_added = True
 
