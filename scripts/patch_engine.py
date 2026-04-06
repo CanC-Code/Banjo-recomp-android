@@ -207,6 +207,7 @@ typedef void* OSMesg;
 # Helpers
 # ---------------------------------------------------------------------------
 def normalize_path(filepath: str) -> str:
+    """Converts absolute CI/CD paths to local relative paths."""
     markers = ["Banjo-recomp-android/", "Android/app/"]
     for marker in markers:
         if marker in filepath:
@@ -345,7 +346,7 @@ def ensure_types_header_base() -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# Log scraper
+# Log scraper (Upgraded to Catch Non-Pointers & Stub Overrides)
 # ---------------------------------------------------------------------------
 def _scrape_logs_into_categories(categories: dict) -> None:
     log_candidates = ["Android/failed_files.log", "Android/full_build_log.txt", "full_build_log.txt", "build_log.txt", "Android/build_log.txt"]
@@ -354,6 +355,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             if f.endswith((".txt", ".log")): log_candidates.append(f)
     except Exception: pass
 
+    # --- TYPE COERCION SAFETY ---
     if "missing_types" not in categories: categories["missing_types"] = []
     elif isinstance(categories["missing_types"], set): categories["missing_types"] = list(categories["missing_types"])
     mt = categories["missing_types"]
@@ -378,10 +380,16 @@ def _scrape_logs_into_categories(categories: dict) -> None:
     elif isinstance(categories["need_struct_body"], list): categories["need_struct_body"] = set(categories["need_struct_body"])
     nsb = categories["need_struct_body"]
 
+    if "not_a_pointer" not in categories: categories["not_a_pointer"] = set()
+    elif isinstance(categories["not_a_pointer"], list): categories["not_a_pointer"] = set(categories["not_a_pointer"])
+    nap = categories["not_a_pointer"]
+    # ----------------------------
+
     for log_file in set(log_candidates):
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
 
+        # Missing Types
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+unknown type name '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if (filepath, tag) not in mt and not any(isinstance(x, (list, tuple)) and len(x) >= 2 and x[1] == tag for x in mt):
@@ -392,26 +400,41 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             if not any((isinstance(x, (list, tuple)) and len(x) >= 2 and x[1] == tag) or x == tag for x in mt):
                 mt.append(tag)
 
+        # POSIX Conflicts
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+static declaration of '(\w+)' follows non-static declaration", content):
             filepath, func = normalize_path(m.group(1)), m.group(2)
             if (filepath, func) not in pc: pc.append((filepath, func))
 
+        # Struct/Typedef Redefinitions
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redefinition of '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if (filepath, tag) not in sr: sr.append((filepath, tag))
-            
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+typedef redefinition with different types .*? vs '(?:struct )?(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if (filepath, tag) not in sr: sr.append((filepath, tag))
 
+        # Undeclared identifiers
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+use of undeclared identifier '(\w+)'", content):
             ui.add(m.group(2))
             
+        # Implicit functions
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+implicit declaration of function '(\w+)'", content):
             if_stubs.add(m.group(2))
             
+        # Incomplete types / member access into incomplete type
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+member access into incomplete type '(?:struct )?(\w+)'", content):
             nsb.add(m.group(2))
+            
+        # Catch 'not a pointer' errors to dynamically re-cast dummy struct members to void*
+        for m in re.finditer(r"(?m)error:\s+member reference (?:base )?type '.*?' is not a (?:pointer|structure or union)\n([^\n]+)\n", content):
+            snippet = m.group(1)
+            # Find all words right before -> or .
+            for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', snippet):
+                nap.add(mm.group(1))
+
+        # Subscript pointer to incomplete types
+        for m in re.finditer(r"(?m)error:\s+subscript of pointer to incomplete type '(?:struct )?(\w+)'", content):
+            nsb.add(m.group(1))
 
 # ---------------------------------------------------------------------------
 # Main fix dispatcher
@@ -437,40 +460,15 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base()
 
-    # ------------------------------------------------------------------
-    # PROACTIVE REGRET CLEANUP & STRUCT INJECTION (Levels 2 & 3)
-    # ------------------------------------------------------------------
-    # If the system has leveled up, we proactively wipe any opaque stubs
-    # or corrupted definitions ("missing_members" guesses) and inject 
-    # the true struct body immediately. This prevents cascading pointer errors.
+    # Regret Cleanup (Levels 2 & 3)
     if intelligence_level >= 2:
         original_types = types_content
-        
-        # 1. Scrub bad global/primitive guesses
         scrub_targets = set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) | {"__osPiTable"}
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
             types_content = re.sub(rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", "", types_content)
-        
-        # 2. Proactively overwrite all known structs with their real bodies
-        for tag, body in ACTIVE_STRUCTS.items():
-            if body not in types_content:
-                # Wipe any previous definition completely
-                types_content = re.sub(rf"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content) if tag == "LookAt" else types_content
-                types_content = re.sub(rf"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content) if tag == "LookAt" else types_content
-                types_content = re.sub(rf"(?m)^typedef\s+union\s*\{[^}]*\}\s*__Mtx_data\s*;\n?", "", types_content) if tag == "Mtx" else types_content
-                
-                types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?", "", types_content)
-                types_content = re.sub(rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", types_content)
-                types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
-                
-                # Lay down the real definition
-                types_content += "\n" + body + "\n"
-                
         if types_content != original_types:
-            logger.info(f"🧹 Phase {intelligence_level} Proactive Cleanup & Struct Injection executed.")
+            logger.info(f"🧹 Phase {intelligence_level} Cleanup: Removed incorrect primitive guesses.")
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
@@ -499,7 +497,26 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             fixes += 1
     if macros_cleaned: write_file(TYPES_HEADER, types_content)
 
-    # Auto-Stub Implicit Functions
+    # ------------------------------------------------------------------
+    # AUTO-CORRECT: Convert bad struct stubs into generic pointers
+    # ------------------------------------------------------------------
+    if categories.get("not_a_pointer"):
+        types_content = read_file(TYPES_HEADER)
+        changed = False
+        for member in sorted(categories["not_a_pointer"]):
+            if not isinstance(member, str): continue
+            # If our earlier logic injected `long long int member;` but it was actually a pointer, rewrite it!
+            new_types, n = re.subn(rf"\blong\s+long\s+int\s+{re.escape(member)}\s*;", f"void* {member}; /* AUTO-FIX: NOT A POINTER */", types_content)
+            if n > 0:
+                types_content = new_types
+                changed = True
+        if changed:
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
+
+    # ------------------------------------------------------------------
+    # NEW INTELLIGENCE: Auto-Stub Implicit Functions
+    # ------------------------------------------------------------------
     if categories.get("implicit_func_stubs"):
         types_content = read_file(TYPES_HEADER)
         stubs_content = read_file(STUBS_FILE)
@@ -526,7 +543,9 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             write_file(STUBS_FILE, stubs_content)
             fixes += 1
 
-    # Auto-Declare Undeclared Identifiers
+    # ------------------------------------------------------------------
+    # NEW INTELLIGENCE: Auto-Declare Undeclared Identifiers
+    # ------------------------------------------------------------------
     if categories.get("undeclared_identifiers"):
         types_content = read_file(TYPES_HEADER)
         idents_added = False
@@ -561,21 +580,19 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             types_content = new_types
             fixes += 1
 
-    # Missing members injection (Upgraded Vocabulary)
+    # Missing members injection
     array_names = {"id", "label", "name", "buffer", "data", "str", "string", "temp"}
-    ptr_keywords = ["ptr", "func", "cb", "handle", "next", "prev", "queue", "msg", "list", "node", "parent", "child"]
-    
     for item in sorted(categories.get("missing_members", [])):
         if not isinstance(item, (list, tuple)) or len(item) < 2: continue
         struct_name, member_name = item[0], item[1]
         types_content = read_file(TYPES_HEADER)
         pattern = rf"(struct\s+{re.escape(struct_name)}\s*\{{)([^}}]*?)(\}})"
 
-        def inject_member(match, mn=member_name, an=array_names, p_kw=ptr_keywords):
+        def inject_member(match, mn=member_name, an=array_names):
             body = match.group(2)
             if mn not in body:
                 if mn in an: field = f"    unsigned char {mn}[128]; /* AUTO-ARRAY */\n"
-                elif any(kw in mn.lower() for kw in p_kw): field = f"    void* {mn}; /* AUTO-POINTER */\n"
+                elif "ptr" in mn.lower() or "func" in mn.lower() or "cb" in mn.lower(): field = f"    void* {mn}; /* AUTO-POINTER */\n"
                 else: field = f"    long long int {mn};\n"
                 return f"{match.group(1)}{body}{field}{match.group(3)}"
             return match.group(0)
@@ -588,7 +605,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         else:
             mn = member_name
             if mn in array_names: field = f"unsigned char {mn}[128]; /* AUTO-ARRAY */"
-            elif any(kw in mn.lower() for kw in ptr_keywords): field = f"void* {mn}; /* AUTO-POINTER */"
+            elif "ptr" in mn.lower() or "func" in mn.lower() or "cb" in mn.lower(): field = f"void* {mn}; /* AUTO-POINTER */"
             else: field = f"long long int {mn};"
             types_content += f"\nstruct {struct_name} {{\n    {field}\n    long long int force_align[64];\n}};\n"
             write_file(TYPES_HEADER, types_content)
@@ -955,7 +972,9 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
-    # Full struct bodies for known N64 types (Keep as fallback for non-ACTIVE_STRUCTS)
+    # ------------------------------------------------------------------
+    # FULL STRUCT BODY REWRITER (UPGRADED FOR AGGRESSIVE OVERRIDE)
+    # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
@@ -967,19 +986,32 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                     types_content += "\n" + _opaque_stub(tag)
                     bodies_added = True
                 continue
-            if _type_already_defined(tag, types_content): continue
+            
+            # SPACE-NORMALIZED VERIFICATION
+            # If the literal body already exists precisely, don't overwrite it to avoid infinite loops.
+            norm_body = re.sub(r'\s+', ' ', body).strip()
+            norm_types = re.sub(r'\s+', ' ', types_content)
+            if norm_body in norm_types:
+                continue
+
+            # It's either not defined, or it was defined earlier as a stub.
+            # We must aggressively rip out any old definitions before inserting the true one.
+            types_content = strip_redefinition(types_content, tag)
+            if not tag.endswith("_s"):
+                types_content = strip_redefinition(types_content, f"{tag}_s")
+            
+            # Destroy the outer macro guards just to be perfectly sure.
+            types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
+            
             if tag == "LookAt":
                 types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content)
                 types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content)
             if tag == "Mtx":
                 types_content = re.sub(r"(?m)^typedef\s+union\s*\{[^}]*\}\s*__Mtx_data\s*;\n?", "", types_content)
-            types_content = re.sub(rf"(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{re.escape(tag)}\s*)?;?\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;\n?", "", types_content)
-            types_content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;\n?", "", types_content)
-            types_content = re.sub(rf"struct\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", types_content)
-            types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
+                
             types_content += "\n" + body + "\n"
             bodies_added = True
+            
         if bodies_added:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
