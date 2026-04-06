@@ -10,6 +10,13 @@ from error_parser import (
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
+def deterministic_macro_val(macro_name):
+    """Generates a unique but consistent integer for an unknown macro to prevent duplicate switch cases."""
+    h = 0
+    for c in macro_name:
+        h = (31 * h + ord(c)) & 0xFFFFFFFF
+    return (h % 90000) + 1000 # Returns a consistent number between 1000 and 90999
+
 def strip_auto_preamble(content):
     lines = content.split('\n')
     result = []
@@ -47,14 +54,14 @@ def ensure_types_header_base():
         pattern = rf"\btypedef\s+[^;]+\b{p}\s*;"
         content = re.sub(pattern, "", content)
 
-    # 3. Actively scrub incorrect structural stubs for primitive N64 SDK aliases (Added OSMesg)
+    # 3. Actively scrub incorrect structural stubs for primitive N64 SDK aliases
     for p in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
         content = re.sub(rf"(?:typedef\s+)?struct\s+{p}(?:_s)?\s*\{{({BRACE_MATCH})\}}\s*(?:{p}\s*)?;?\n?", "", content)
         content = re.sub(rf"typedef\s+struct\s*\{{({BRACE_MATCH})\}}\s*{p}\s*;\n?", "", content)
         content = re.sub(rf"typedef\s+struct\s+{p}(?:_s)?\s+{p}\s*;\n?", "", content)
         content = re.sub(rf"struct\s+{p}(?:_s)?\s*;\n?", "", content)
 
-    # 4. Deterministically reconstruct the core primitives
+    # 4. Deterministically reconstruct the core primitives and known OS macros
     core_primitives = """
 #include <stdint.h>
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -77,6 +84,21 @@ typedef u64 OSTime;
 typedef u32 OSId;
 typedef s32 OSPri;
 typedef void* OSMesg;
+
+/* Common N64 OS Macros */
+#ifndef OS_READ
+#define OS_READ 0
+#endif
+#ifndef OS_WRITE
+#define OS_WRITE 1
+#endif
+#ifndef OS_MESG_NOBLOCK
+#define OS_MESG_NOBLOCK 0
+#endif
+#ifndef OS_MESG_BLOCK
+#define OS_MESG_BLOCK 1
+#endif
+
 #endif
 """
     content = content.replace("#pragma once", f"#pragma once\n{core_primitives}", 1)
@@ -111,9 +133,10 @@ def apply_fixes(categories):
     
     macros_cleaned = False
     for tag in known_types:
-        pattern1 = rf"(?m)^\s*#ifndef {tag}\s*\n\s*#define {tag} 0 /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n\s*#endif\s*\n?"
+        # Scrub dynamically injected macros holding digits
+        pattern1 = rf"(?m)^\s*#ifndef {re.escape(tag)}\s*\n\s*#define {re.escape(tag)} \d+ /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n\s*#endif\s*\n?"
         types_content, n1 = re.subn(pattern1, "", types_content)
-        pattern2 = rf"(?m)^\s*#define {tag} 0 /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n?"
+        pattern2 = rf"(?m)^\s*#define {re.escape(tag)} \d+ /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n?"
         types_content, n2 = re.subn(pattern2, "", types_content)
         if n1 > 0 or n2 > 0:
             macros_cleaned = True
@@ -378,7 +401,8 @@ def apply_fixes(categories):
                     macros_added = True
             else:
                 if f"#define {macro}" not in types_content:
-                    types_content += f"\n#ifndef {macro}\n#define {macro} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
+                    val = deterministic_macro_val(macro)
+                    types_content += f"\n#ifndef {macro}\n#define {macro} {val} /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
                     macros_added = True
         if macros_added:
             write_file(TYPES_HEADER, types_content)
@@ -432,7 +456,8 @@ def apply_fixes(categories):
                 gbi_added = True
             elif ident not in KNOWN_MACROS:
                 if f"#define {ident}" not in types_content:
-                    types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* TODO: unknown GBI constant */\n#endif\n"
+                    val = deterministic_macro_val(ident)
+                    types_content += f"\n#ifndef {ident}\n#define {ident} {val} /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"
                     gbi_added = True
         if gbi_added:
             write_file(TYPES_HEADER, types_content)
