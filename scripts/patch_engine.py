@@ -47,6 +47,15 @@ except ImportError:
         "OS_IM_3": "0x0004", "OS_IM_4": "0x0008",
         "OS_IM_5": "0x0010", "OS_IM_6": "0x0020",
         "OS_IM_7": "0x0040",
+        "DEVICE_TYPE_64DD": "0x06",
+        "LEO_CMD_TYPE_0": "0",
+        "LEO_CMD_TYPE_1": "1",
+        "LEO_CMD_TYPE_2": "2",
+        "LEO_SECTOR_MODE": "1",
+        "LEO_TRACK_MODE": "2",
+        "LEO_BM_CTL": "0x05000510",
+        "LEO_BM_CTL_RESET": "0",
+        "LEO_ERROR_29": "29",
     }
     KNOWN_FUNCTION_MACROS = {}
     POSIX_RESERVED_NAMES = {
@@ -73,7 +82,7 @@ except ImportError:
 
 # ---------------------------------------------------------------------------
 # Full N64 OS struct body definitions
-# (Updated to use struct XXX_s * to break cyclical/order dependencies)
+# (Updated to correctly implement transferInfo and piHandle)
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
     "Mtx": """\
@@ -84,7 +93,7 @@ typedef union {
 
     "OSPfs": """\
 typedef struct OSPfs_s {
-    OSIoMesg    ioMesgBuf;
+    struct OSIoMesg_s    ioMesgBuf;
     struct OSMesgQueue_s *queue;
     s32         channel;
     u8          activebank;
@@ -116,6 +125,32 @@ typedef struct OSContPad_s {
 } OSContPad;""",
 
     "OSPiHandle": """\
+#ifndef __OSBlockInfo_DEFINED
+#define __OSBlockInfo_DEFINED
+typedef struct {
+    u32 errStatus;
+    void *dramAddr;
+    void *C2Addr;
+    u32 sectorSize;
+    u32 C1ErrNum;
+    u32 C1ErrSector[4];
+} __OSBlockInfo;
+#endif
+
+#ifndef __OSTranxInfo_DEFINED
+#define __OSTranxInfo_DEFINED
+typedef struct {
+    u32 cmdType;
+    u16 transferMode;
+    u16 blockNum;
+    s32 sectorNum;
+    u32 devAddr;
+    u32 bmCtlShadow;
+    u32 seqCtlShadow;
+    __OSBlockInfo block[2];
+} __OSTranxInfo;
+#endif
+
 typedef struct OSPiHandle_s {
     struct OSPiHandle_s *next;
     u8      type;
@@ -126,7 +161,7 @@ typedef struct OSPiHandle_s {
     u8      domain;
     u32     baseAddress;
     u32     speed;
-    OSMesg  transferInfo[18];
+    __OSTranxInfo transferInfo;
 } OSPiHandle;""",
 
     "OSMesgQueue": """\
@@ -158,7 +193,7 @@ typedef struct OSIoMesg_s {
     OSMesg      dramAddr;
     u32         devAddr;
     u32         size;
-    struct OSPiHandle_s *hHandle;
+    struct OSPiHandle_s *piHandle;
 } OSIoMesg;""",
 
     "OSTimer": """\
