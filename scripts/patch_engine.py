@@ -355,12 +355,33 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             if f.endswith((".txt", ".log")): log_candidates.append(f)
     except Exception: pass
 
-    mt = categories.setdefault("missing_types", [])
-    pc = categories.setdefault("posix_reserved_conflict", [])
-    sr = categories.setdefault("struct_redef", [])
-    ui = categories.setdefault("undeclared_identifiers", set())
-    if_stubs = categories.setdefault("implicit_func_stubs", set())
-    nsb = categories.setdefault("need_struct_body", set())
+    # --- TYPE COERCION SAFETY ---
+    # Enforce lists for append() operations
+    if "missing_types" not in categories: categories["missing_types"] = []
+    elif isinstance(categories["missing_types"], set): categories["missing_types"] = list(categories["missing_types"])
+    mt = categories["missing_types"]
+
+    if "posix_reserved_conflict" not in categories: categories["posix_reserved_conflict"] = []
+    elif isinstance(categories["posix_reserved_conflict"], set): categories["posix_reserved_conflict"] = list(categories["posix_reserved_conflict"])
+    pc = categories["posix_reserved_conflict"]
+
+    if "struct_redef" not in categories: categories["struct_redef"] = []
+    elif isinstance(categories["struct_redef"], set): categories["struct_redef"] = list(categories["struct_redef"])
+    sr = categories["struct_redef"]
+
+    # Enforce sets for add() operations
+    if "undeclared_identifiers" not in categories: categories["undeclared_identifiers"] = set()
+    elif isinstance(categories["undeclared_identifiers"], list): categories["undeclared_identifiers"] = set(categories["undeclared_identifiers"])
+    ui = categories["undeclared_identifiers"]
+
+    if "implicit_func_stubs" not in categories: categories["implicit_func_stubs"] = set()
+    elif isinstance(categories["implicit_func_stubs"], list): categories["implicit_func_stubs"] = set(categories["implicit_func_stubs"])
+    if_stubs = categories["implicit_func_stubs"]
+
+    if "need_struct_body" not in categories: categories["need_struct_body"] = set()
+    elif isinstance(categories["need_struct_body"], list): categories["need_struct_body"] = set(categories["need_struct_body"])
+    nsb = categories["need_struct_body"]
+    # ----------------------------
 
     for log_file in set(log_candidates):
         if not os.path.exists(log_file): continue
