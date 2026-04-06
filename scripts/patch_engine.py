@@ -463,10 +463,13 @@ def apply_fixes(categories: Dict[str, List]) -> Tuple[int, Set[str]]:
                 rf'typedef\s+struct\s+{re.escape(target_tag)}\s+{re.escape(alias)}\s*;\n?',
                 '', content)
 
-            anon_pat = rf"typedef\s+struct\s*\{{[^}}]*\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
+            # --- THE CRITICAL FIX IS HERE ---
+            # Added capturing parentheses around [^}}]* inside the curly braces
+            anon_pat = rf"typedef\s+struct\s*\{{([^}}]*)\}}\s*([^;]*\b{re.escape(alias)}\b[^;]*);"
             if re.search(anon_pat, content):
                 _tt = target_tag
                 def _anon_sub(m, tt=_tt):
+                    # m.group(1) is now the struct body, and m.group(2) is the alias part
                     return f"typedef struct {tt} {{{m.group(1)}}} {m.group(2)};"
                 content, _ = re.subn(anon_pat, _anon_sub, content)
             else:
