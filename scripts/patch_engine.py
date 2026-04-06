@@ -618,9 +618,11 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 write_file(TYPES_HEADER, types_content)
                 fixes += 1
         else:
-            # Unknown type — generic opaque stub
-            struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
-            if not _type_already_defined(tag, types_content):
+            # Unknown type — generic opaque stub.
+            # Restore the old loose guard here so we don't inject dummy bodies for local types
+            # (like sChVegetable) that appear in function prototypes, avoiding redefinition conflicts.
+            if not re.search(rf"\b{re.escape(tag)}\b", types_content):
+                struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
                 decl = (
                     f"struct {struct_tag} {{ long long int force_align[64]; }};\n"
                     f"typedef struct {struct_tag} {tag};\n"
@@ -764,8 +766,9 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
         original = content
         content  = strip_auto_preamble(content)
 
+        # REVERTED regex fix to [^}]* to safely allow normal structs to match
         tagged_body_re = re.compile(
-            r'(?:typedef\s+)?struct\s+(\w+)\s*\{([^{}]*)\}\s*[^;]*;', re.DOTALL)
+            r'(?:typedef\s+)?struct\s+(\w+)\s*\{[^}]*\}\s*[^;]*;', re.DOTALL)
         tag_matches: dict = defaultdict(list)
         for m in tagged_body_re.finditer(content):
             tag_matches[m.group(1)].append(m)
@@ -993,7 +996,11 @@ def apply_fixes(categories: dict) -> Tuple[int, set]:
                 continue
             if t in N64_STRUCT_BODIES:
                 categories.setdefault("need_struct_body", set()).add(t)
-            elif not _type_already_defined(t, types_content):
+            elif t in N64_OS_OPAQUE_TYPES:
+                if not _type_already_defined(t, types_content):
+                    types_content += "\n" + _opaque_stub(t, size=64)
+                    k_added = True
+            elif not re.search(rf"\b{re.escape(t)}\b", types_content):
                 struct_tag = f"{t}_s" if not t.endswith("_s") else t
                 decl = (
                     f"struct {struct_tag} {{ long long int force_align[64]; }};\n"
