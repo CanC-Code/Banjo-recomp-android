@@ -399,4 +399,28 @@ def apply_fixes(categories):
                 types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"
                 added = True
         if added: write_file(TYPES_HEADER, types_content); fixes += 1
+    # 15. Local Forward Declarations (From Old script)
+    # Handles types used before they are defined in the same file
+    local_fwd = categories.get("local_fwd_only", [])
+    if isinstance(local_fwd, (list, set, tuple)):
+        file_to_types = defaultdict(set)
+        for item in local_fwd:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                file_to_types[item[0]].add(item[1])
+
+        for filepath, type_names in sorted(file_to_types.items()):
+            if not os.path.exists(filepath) or filepath.endswith("n64_types.h"):
+                continue
+            content = read_file(filepath) or ""
+            # Cleanup old automated declarations first
+            content = strip_auto_preamble(content)
+            changed = False
+            for t in sorted(type_names):
+                fwd = f"/* AUTO: forward decl */\ntypedef struct {t}_s {t};\n"
+                if f"typedef struct {t}_s {t};" not in content:
+                    content = fwd + content
+                    changed = True
+            if changed:
+                write_file(filepath, content)
+                fixed_files.add(filepath); fixes += 1
     return fixes, fixed_files
