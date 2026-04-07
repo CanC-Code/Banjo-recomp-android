@@ -37,6 +37,7 @@ _N64_OS_STRUCT_BODIES = {
 
 SDK_DEFINES_THESE = {"OSTask", "OSScTask"}
 
+# Canonical primitive block
 _CORE_PRIMITIVES = """
 #ifndef CORE_PRIMITIVES_DEFINED
 #define CORE_PRIMITIVES_DEFINED
@@ -72,16 +73,9 @@ def normalize_path(filepath: str) -> str:
     return filepath.lstrip("/")
 
 def prepare_categories(categories: dict):
-    """Ensures all expected keys exist in the categories dictionary."""
-    defaults = {
-        "missing_types": set(),
-        "undeclared_idents": set(),
-        "implicit_funcs": set(),
-        "need_struct_body": set()
-    }
+    defaults = {"missing_types": set(), "undeclared_idents": set(), "implicit_funcs": set(), "need_struct_body": set()}
     for key, val in defaults.items():
-        if key not in categories:
-            categories[key] = val
+        if key not in categories: categories[key] = val
 
 def repair_unterminated_conditionals(content: str) -> str:
     lines = content.split('\n')
@@ -94,23 +88,20 @@ def repair_unterminated_conditionals(content: str) -> str:
     return '\n'.join([l for i, l in enumerate(lines) if i not in remove])
 
 def ensure_types_header_base() -> str:
-    """Forces primitives to the top of the header."""
+    """Aggressively forces primitives to the absolute top of the file."""
     existing = read_file(TYPES_HEADER)
     
-    # If primitives are already there, just return the content
-    if "CORE_PRIMITIVES_DEFINED" in existing:
-        return existing
-        
-    # Build a new header starting with pragma and primitives
-    content = "#pragma once\n" + _CORE_PRIMITIVES + "\n"
+    # Remove any existing primitive blocks to ensure correct ordering
+    content = re.sub(r'#ifndef CORE_PRIMITIVES_DEFINED.*?#endif', '', existing, flags=re.DOTALL).strip()
     
-    if existing:
-        # Strip existing pragma once to avoid doubles
-        stripped_existing = existing.replace("#pragma once", "").strip()
-        content += stripped_existing
-        
-    write_file(TYPES_HEADER, content)
-    return content
+    # Clean up double pragmas
+    content = content.replace("#pragma once", "").strip()
+    
+    # Construct final file: Pragma -> Primitives -> Remaining Content
+    final_content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
+    
+    write_file(TYPES_HEADER, final_content)
+    return final_content
 
 # ---------------------------------------------------------------------------
 # Logic Engine
@@ -148,13 +139,23 @@ def apply_fixes(categories: dict, level: int) -> Tuple[int, set]:
     prepare_categories(categories)
     fixes = 0
     fixed_files = set()
+    
+    # Always ensure the header base is correct and primitives are at the top
     types_content = ensure_types_header_base()
     
     macros = PHASE_3_MACROS if level >= 3 else (PHASE_2_MACROS if level == 2 else PHASE_1_MACROS)
     structs = _N64_OS_STRUCT_BODIES if level >= 2 else {}
 
+    # Check for primitives that failed to compile (indicates they are in the wrong place)
+    for item in categories["missing_types"]:
+        tag = item[1] if isinstance(item, tuple) else item
+        if tag in N64_PRIMITIVES:
+            # Forcing a rewrite of the header triggers a fix even if patterns didn't change
+            fixes += 1 
+            fixed_files.add(TYPES_HEADER)
+
     # 1. Missing Types
-    for item in categories.get("missing_types", set()):
+    for item in categories["missing_types"]:
         tag = item[1] if isinstance(item, tuple) else item
         if tag in N64_PRIMITIVES or tag in SDK_DEFINES_THESE:
             continue
@@ -164,21 +165,21 @@ def apply_fixes(categories: dict, level: int) -> Tuple[int, set]:
             fixed_files.add(TYPES_HEADER)
 
     # 2. Undeclared Identifiers
-    for ident in categories.get("undeclared_idents", set()):
+    for ident in categories["undeclared_idents"]:
         if ident in macros and f"#define {ident}" not in types_content:
             types_content += f"\n#define {ident} {macros[ident]}"
             fixes += 1
             fixed_files.add(TYPES_HEADER)
 
     # 3. Incomplete Structs
-    for tag in categories.get("need_struct_body", set()):
+    for tag in categories["need_struct_body"]:
         if tag in structs and tag not in types_content:
             types_content += f"\n{structs[tag]}"
             fixes += 1
             fixed_files.add(TYPES_HEADER)
 
     # 4. Implicit Functions
-    if categories.get("implicit_funcs"):
+    if categories["implicit_funcs"]:
         stubs = read_file(STUBS_FILE)
         added_stub = False
         for f in categories["implicit_funcs"]:
@@ -195,14 +196,12 @@ def apply_fixes(categories: dict, level: int) -> Tuple[int, set]:
 
 def main():
     intelligence_level = 1
-    total_fixes = 0
     while intelligence_level <= 3:
         for attempt in range(5):
             if run_build(): logger.info("SUCCESS!"); sys.exit(0)
             categories = {}
             scrape_logs(categories)
             applied, files = apply_fixes(categories, intelligence_level)
-            total_fixes += applied
             if applied == 0: break
         intelligence_level += 1
 
