@@ -37,10 +37,10 @@ _N64_OS_STRUCT_BODIES = {
 
 SDK_DEFINES_THESE = {"OSTask", "OSScTask"}
 
-_CORE_PRIMITIVES = """\
-#include <stdint.h>
+_CORE_PRIMITIVES = """
 #ifndef CORE_PRIMITIVES_DEFINED
 #define CORE_PRIMITIVES_DEFINED
+#include <stdint.h>
 typedef uint8_t  u8; typedef int8_t   s8;
 typedef uint16_t u16; typedef int16_t  s16;
 typedef uint32_t u32; typedef int32_t  s32;
@@ -58,7 +58,7 @@ def read_file(filepath: str) -> str:
     if not os.path.exists(filepath): return ""
     try:
         with open(filepath, 'r', errors='replace') as f: return f.read()
-    except Exception as e: return ""
+    except: return ""
 
 def write_file(filepath: str, content: str) -> None:
     try:
@@ -71,6 +71,18 @@ def normalize_path(filepath: str) -> str:
         if marker in filepath: return filepath.split(marker)[-1]
     return filepath.lstrip("/")
 
+def prepare_categories(categories: dict):
+    """Ensures all expected keys exist in the categories dictionary."""
+    defaults = {
+        "missing_types": set(),
+        "undeclared_idents": set(),
+        "implicit_funcs": set(),
+        "need_struct_body": set()
+    }
+    for key, val in defaults.items():
+        if key not in categories:
+            categories[key] = val
+
 def repair_unterminated_conditionals(content: str) -> str:
     lines = content.split('\n')
     stack, remove = [], set()
@@ -82,12 +94,21 @@ def repair_unterminated_conditionals(content: str) -> str:
     return '\n'.join([l for i, l in enumerate(lines) if i not in remove])
 
 def ensure_types_header_base() -> str:
-    # Always ensure primitives are at the top
-    content = "#pragma once\n" + _CORE_PRIMITIVES
-    if os.path.exists(TYPES_HEADER):
-        existing = read_file(TYPES_HEADER)
-        if "CORE_PRIMITIVES_DEFINED" in existing:
-            return existing
+    """Forces primitives to the top of the header."""
+    existing = read_file(TYPES_HEADER)
+    
+    # If primitives are already there, just return the content
+    if "CORE_PRIMITIVES_DEFINED" in existing:
+        return existing
+        
+    # Build a new header starting with pragma and primitives
+    content = "#pragma once\n" + _CORE_PRIMITIVES + "\n"
+    
+    if existing:
+        # Strip existing pragma once to avoid doubles
+        stripped_existing = existing.replace("#pragma once", "").strip()
+        content += stripped_existing
+        
     write_file(TYPES_HEADER, content)
     return content
 
@@ -100,18 +121,17 @@ def run_build() -> bool:
         result = subprocess.run(BUILD_CMD, capture_output=True, text=True)
         write_file(BUILD_LOG, result.stdout + "\n" + result.stderr)
         return result.returncode == 0
-    except Exception as e:
-        logger.error(f"Build failed: {e}"); return False
+    except: return False
 
 def scrape_logs(categories: dict):
+    prepare_categories(categories)
     if not os.path.exists(BUILD_LOG): return
     content = read_file(BUILD_LOG)
     
-    # 1. Unknown type names (Captures both file and tag)
+    # Extract errors
     for m in re.finditer(r"(?m)^(/[^\s:]+\.(?:c|cpp|h)[^:]*):(?:\d+):(?:\d+):\s+error:\s+unknown type name '(\w+)'", content):
         categories["missing_types"].add((normalize_path(m.group(1)), m.group(2)))
     
-    # Generic fallback for unknown types
     for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
         tag = m.group(1)
         if not any(isinstance(x, tuple) and x[1] == tag for x in categories["missing_types"]):
@@ -124,84 +144,67 @@ def scrape_logs(categories: dict):
     for m in re.finditer(r"error:\s+member access into incomplete type '(?:struct )?(\w+)'", content):
         categories["need_struct_body"].add(m.group(1))
 
-def apply_fixes(categories: dict, level: int) -> int:
+def apply_fixes(categories: dict, level: int) -> Tuple[int, set]:
+    prepare_categories(categories)
     fixes = 0
+    fixed_files = set()
     types_content = ensure_types_header_base()
     
     macros = PHASE_3_MACROS if level >= 3 else (PHASE_2_MACROS if level == 2 else PHASE_1_MACROS)
     structs = _N64_OS_STRUCT_BODIES if level >= 2 else {}
 
-    # 1. Fix Missing Types (Fixes the TypeError)
-    for item in categories["missing_types"]:
-        # Unpack if tuple, else use as tag
+    # 1. Missing Types
+    for item in categories.get("missing_types", set()):
         tag = item[1] if isinstance(item, tuple) else item
-        
-        # NEVER turn N64 primitives into opaque structs
         if tag in N64_PRIMITIVES or tag in SDK_DEFINES_THESE:
             continue
-            
         if tag not in types_content:
             types_content += f"\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};"
             fixes += 1
+            fixed_files.add(TYPES_HEADER)
 
-    # 2. Fix Undeclared Identifiers
-    for ident in categories["undeclared_idents"]:
+    # 2. Undeclared Identifiers
+    for ident in categories.get("undeclared_idents", set()):
         if ident in macros and f"#define {ident}" not in types_content:
             types_content += f"\n#define {ident} {macros[ident]}"
             fixes += 1
+            fixed_files.add(TYPES_HEADER)
 
-    # 3. Fix Incomplete Structs
-    for tag in categories["need_struct_body"]:
+    # 3. Incomplete Structs
+    for tag in categories.get("need_struct_body", set()):
         if tag in structs and tag not in types_content:
             types_content += f"\n{structs[tag]}"
             fixes += 1
+            fixed_files.add(TYPES_HEADER)
 
-    # 4. Fix Implicit Functions
-    if categories["implicit_funcs"]:
+    # 4. Implicit Functions
+    if categories.get("implicit_funcs"):
         stubs = read_file(STUBS_FILE)
+        added_stub = False
         for f in categories["implicit_funcs"]:
             if f"{f}()" not in stubs:
                 stubs += f"\nlong long int {f}() {{ return 0; }}"
                 fixes += 1
-        write_file(STUBS_FILE, stubs)
+                added_stub = True
+        if added_stub:
+            write_file(STUBS_FILE, stubs)
+            fixed_files.add(STUBS_FILE)
 
     write_file(TYPES_HEADER, repair_unterminated_conditionals(types_content))
-    return fixes
+    return fixes, fixed_files
 
-# ---------------------------------------------------------------------------
-# Main Loop
-# ---------------------------------------------------------------------------
 def main():
     intelligence_level = 1
     total_fixes = 0
-    
     while intelligence_level <= 3:
-        logger.info(f"\n[PHASE {intelligence_level}] Starting build cycle...")
-        
-        for attempt in range(5): # Increased attempts for complex fixes
-            if run_build():
-                logger.info("BUILD SUCCESSFUL!"); sys.exit(0)
-
-            categories = {"missing_types": set(), "undeclared_idents": set(), 
-                          "implicit_funcs": set(), "need_struct_body": set()}
+        for attempt in range(5):
+            if run_build(): logger.info("SUCCESS!"); sys.exit(0)
+            categories = {}
             scrape_logs(categories)
-            
-            error_total = sum(len(v) for v in categories.values())
-            if error_total == 0: 
-                logger.warning("Build failed but no errors scraped. Advancing level...")
-                break 
-            
-            applied = apply_fixes(categories, intelligence_level)
+            applied, files = apply_fixes(categories, intelligence_level)
             total_fixes += applied
-            if applied == 0: 
-                logger.warning("No new fixes applied this cycle. Advancing level...")
-                break
-            
-            logger.info(f"Cycle {attempt+1}: Applied {applied} fixes.")
-
+            if applied == 0: break
         intelligence_level += 1
-
-    logger.error("Could not resolve all build errors. Check Android/build_log.txt.")
 
 if __name__ == "__main__":
     main()
