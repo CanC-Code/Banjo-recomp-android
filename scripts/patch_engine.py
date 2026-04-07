@@ -133,10 +133,6 @@ PHASE_3_MACROS = {
 # N64 struct bodies — TOPOLOGICALLY SORTED (dependencies before dependents)
 # NOTE: OSTask and OSScTask are intentionally OMITTED because the SDK headers
 # define them as unions — injecting struct versions causes redefinition errors.
-#
-# FIX: OSThread's 'context' field is now a proper __OSThreadContext struct
-# with a 'status' member, matching the N64 SDK __OSThreadContext layout.
-# exceptasm.cpp accesses __osRunningThread->context.status which requires this.
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
     "Mtx": """\
@@ -147,37 +143,7 @@ typedef union {
     "OSContStatus": "typedef struct OSContStatus_s { u16 type; u8 status; u8 errno; } OSContStatus;",
     "OSContPad":    "typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errno; } OSContPad;",
     "OSMesgQueue":  "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;",
-    # FIX: OSThread.context is now __OSThreadContext (a struct with status/cause/epc/badvaddr
-    # and the full register file) instead of a raw long long array.  exceptasm.cpp
-    # accesses __osRunningThread->context.status so the field must exist.
-    "OSThread": """\
-#ifndef __OSThreadContext_DEFINED
-#define __OSThreadContext_DEFINED
-typedef struct __OSThreadContext_s {
-    u64 at, v0, v1, a0, a1, a2, a3;
-    u64 t0, t1, t2, t3, t4, t5, t6, t7;
-    u64 s0, s1, s2, s3, s4, s5, s6, s7;
-    u64 t8, t9, gp, sp, s8, ra;
-    u64 lo, hi;
-    u32 sr, pc, cause, badvaddr;
-    u32 rcp;
-    u32 fpcsr;
-    u32 status;  /* SR at exception time — used by exceptasm.cpp */
-    f64 fp0,  fp2,  fp4,  fp6,  fp8,  fp10, fp12, fp14;
-    f64 fp16, fp18, fp20, fp22, fp24, fp26, fp28, fp30;
-} __OSThreadContext;
-#endif
-typedef struct OSThread_s {
-    struct OSThread_s  *next;
-    OSPri               priority;
-    struct OSThread_s **queue;
-    struct OSThread_s  *tlnext;
-    u16                 state;
-    u16                 flags;
-    OSId                id;
-    int                 fp;
-    __OSThreadContext   context;
-} OSThread;""",
+    "OSThread":     "typedef struct OSThread_s { struct OSThread_s *next; OSPri priority; struct OSThread_s **queue; struct OSThread_s *tlnext; u16 state; u16 flags; OSId id; int fp; long long int context[67]; } OSThread;",
     "OSMesgHdr":    "typedef struct { u16 type; u8 pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
     "OSPiHandle": """\
 #ifndef __OSBlockInfo_DEFINED
@@ -246,27 +212,15 @@ N64_AUDIO_STATE_TYPES = {
     "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE",
 }
 
-# Known global variables with their correct types.
-# FIX: __osRunningThread added — exceptasm.cpp accesses it.
+# Known global variables with their correct types
+# (avoids the undeclared_identifiers handler guessing wrong)
 N64_KNOWN_GLOBALS = {
-    "__osPiTable":        "struct OSPiHandle_s *__osPiTable;",
-    "__osFlashHandle":    "struct OSPiHandle_s *__osFlashHandle;",
-    "__osSfHandle":       "struct OSPiHandle_s *__osSfHandle;",
-    "__osCurrentThread":  "struct OSThread_s *__osCurrentThread;",
-    "__osRunQueue":       "struct OSThread_s *__osRunQueue;",
-    "__osFaultedThread":  "struct OSThread_s *__osFaultedThread;",
-    "__osRunningThread":  "struct OSThread_s *__osRunningThread;",
-}
-
-# ---------------------------------------------------------------------------
-# Globals that MUST have C linkage when compiled as C++.
-# exceptasm.cpp is a .cpp TU that defines these as plain C++ variables, so
-# the extern declarations in n64_types.h must agree on linkage.
-# ---------------------------------------------------------------------------
-_CPP_LINKAGE_GLOBALS = {
-    "__osPiTable", "__osFlashHandle", "__osSfHandle",
-    "__osCurrentThread", "__osRunQueue", "__osFaultedThread",
-    "__osRunningThread",
+    "__osPiTable":       "struct OSPiHandle_s *__osPiTable;",
+    "__osFlashHandle":   "struct OSPiHandle_s *__osFlashHandle;",
+    "__osSfHandle":      "struct OSPiHandle_s *__osSfHandle;",
+    "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
+    "__osRunQueue":      "struct OSThread_s *__osRunQueue;",
+    "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
 }
 
 # ---------------------------------------------------------------------------
@@ -481,58 +435,6 @@ def ensure_types_header_base() -> str:
     return content
 
 # ---------------------------------------------------------------------------
-# C++ linkage wrapper helpers
-# ---------------------------------------------------------------------------
-_EXTERN_C_OPEN  = '\n#ifdef __cplusplus\nextern "C" {\n#endif\n'
-_EXTERN_C_CLOSE = '\n#ifdef __cplusplus\n}\n#endif\n'
-
-def _wrap_extern_c_in_header(glob_name: str, types_content: str) -> Tuple[str, bool]:
-    """
-    Find the bare 'extern struct ... *glob_name;' line in types_content
-    (possibly inside a #ifndef guard block) and wrap it with extern "C".
-    Returns (new_content, changed).
-    """
-    # Pattern: the extern declaration line for this global, NOT already wrapped
-    decl_pat = re.compile(
-        rf"(#ifndef {re.escape(glob_name)}_DEFINED\n"
-        rf"#define {re.escape(glob_name)}_DEFINED\n)"
-        rf"(extern\s+[^\n]+\b{re.escape(glob_name)}\b[^\n]*\n)"
-        rf"(#endif\n?)",
-        re.MULTILINE,
-    )
-    m = decl_pat.search(types_content)
-    if m:
-        guard_open, decl_line, guard_close = m.group(1), m.group(2), m.group(3)
-        already_wrapped = _EXTERN_C_OPEN in types_content[max(0, m.start()-80):m.end()+80]
-        if already_wrapped:
-            return types_content, False
-        replacement = (
-            guard_open +
-            _EXTERN_C_OPEN +
-            decl_line +
-            _EXTERN_C_CLOSE +
-            guard_close
-        )
-        new_content = types_content[:m.start()] + replacement + types_content[m.end():]
-        return new_content, True
-
-    # Fallback: bare extern line without guard
-    bare_pat = re.compile(
-        rf"^(extern\s+[^\n]+\b{re.escape(glob_name)}\b[^\n]*\n)",
-        re.MULTILINE,
-    )
-    m = bare_pat.search(types_content)
-    if m:
-        already_wrapped = _EXTERN_C_OPEN in types_content[max(0, m.start()-80):m.end()+80]
-        if already_wrapped:
-            return types_content, False
-        replacement = _EXTERN_C_OPEN + m.group(1) + _EXTERN_C_CLOSE
-        new_content = types_content[:m.start()] + replacement + types_content[m.end():]
-        return new_content, True
-
-    return types_content, False
-
-# ---------------------------------------------------------------------------
 # Log scraper — self-healing
 # ---------------------------------------------------------------------------
 def _scrape_logs_into_categories(categories: dict) -> None:
@@ -554,13 +456,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         categories.setdefault(key, set())
         if isinstance(categories[key], list): categories[key] = set(categories[key])
 
-    # FIX: new category for C++ language-linkage mismatches
-    categories.setdefault("cpp_linkage_extern", set())
-
-    # FIX: new category for structs whose fields can be synthesised from error snippets.
-    # Maps type_name -> set of field names observed in member-reference errors.
-    categories.setdefault("synthesized_struct_bodies", {})
-
     mt  = categories["missing_types"]
     pc  = categories["posix_reserved_conflict"]
     sr  = categories["struct_redef"]
@@ -568,14 +463,14 @@ def _scrape_logs_into_categories(categories: dict) -> None:
     ifs = categories["implicit_func_stubs"]
     nsb = categories["need_struct_body"]
     nap = categories["not_a_pointer"]
-    cle = categories["cpp_linkage_extern"]
 
     for log_file in set(log_candidates):
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
 
+        # UPDATED: More robust regex that matches absolute, relative paths, and handles leading spaces in CI logs.
         # Unknown type names
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.(?:c|cpp)[^:]*):(?:\d+):(?:\d+):\s+error:\s+unknown type name '(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+unknown type name '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
             if not any(isinstance(x,(list,tuple)) and len(x)>=2 and x[1]==tag for x in mt):
                 mt.append((filepath, tag))
@@ -585,15 +480,15 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 mt.append(tag)
 
         # POSIX static conflicts
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+static declaration of '(\w+)' follows non-static declaration", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+static declaration of '(\w+)' follows non-static declaration", content):
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in pc: pc.append(entry)
 
         # Struct / typedef redefinitions in source files
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redefinition of '(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redefinition of '(\w+)'", content):
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in sr: sr.append(entry)
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+typedef redefinition.*?vs '(?:struct )?(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+typedef redefinition.*?vs '(?:struct )?(\w+)'", content):
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in sr: sr.append(entry)
 
@@ -602,15 +497,15 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             nsb.add(m.group(1))
 
         # Undeclared identifiers
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+use of undeclared identifier '(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+use of undeclared identifier '(\w+)'", content):
             ui.add(m.group(2))
 
         # Implicit functions
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+implicit declaration of function '(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+implicit declaration of function '(\w+)'", content):
             ifs.add(m.group(2))
 
         # Incomplete type member access
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+member access into incomplete type '(?:struct )?(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+member access into incomplete type '(?:struct )?(\w+)'", content):
             nsb.add(m.group(2))
 
         # Member reference not a pointer
@@ -623,104 +518,13 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         for m in re.finditer(r"error:\s+subscript of pointer to incomplete type '(?:struct )?(\w+)'", content):
             nsb.add(m.group(1))
 
-        # FIX: Cross-correlate 'unknown type name' with 'member reference base type void'
-        # to synthesise real struct bodies from field names seen in error snippets.
-        # Strategy: collect every field name accessed via -> or . on variables whose
-        # declared type is the unknown type, keyed by type name.
-        ssb = categories["synthesized_struct_bodies"]
-        # Collect unknown type names from this log
-        _unk_types_in_log: set = set()
-        for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
-            _unk_types_in_log.add(m.group(1))
-        # For each 'member reference base type void' snippet, extract field names
-        # and attribute them to the unknown type(s) that appear in surrounding context
-        for m in re.finditer(
-            r"error:\s+member reference (?:base )?type '(?:void|long long\[?\d*\]?)' is not a (?:pointer|structure or union)\n([^\n]+)\n",
-            content,
-        ):
-            snippet = m.group(1)
-            # Extract all field names (after -> or .)
-            for fm in re.finditer(r'(?:->|\.)(\w+)', snippet):
-                field = fm.group(1)
-                # Try to find the type of the variable being dereferenced
-                # from the variable name in the snippet (before -> or .)
-                for vm in re.finditer(r'([A-Za-z_]\w*)(?:->|\.)', snippet):
-                    var = vm.group(1)
-                    # If this variable is declared as one of the unknown types,
-                    # attribute the field to that type
-                    for unk in _unk_types_in_log:
-                        # Check that the log mentions "unk *var" or "unk var" near this error
-                        if re.search(
-                            rf"\b{re.escape(unk)}\s*\*?\s*{re.escape(var)}\b",
-                            content,
-                        ):
-                            if unk not in ssb:
-                                ssb[unk] = set()
-                            ssb[unk].add(field)
-        # Also extract fields from "expected expression" lines that follow cast failures
-        # Pattern: LetterFloorTile *ptr = (LetterFloorTile *)arg3;
-        # The type name appears in both the unknown-type error and the cast line.
-        for unk in _unk_types_in_log:
-            # Look for all -> / . accesses on any pointer of this type
-            for m in re.finditer(
-                rf"\b{re.escape(unk)}\s*\*\s*\w+\s*[;=]",
-                content,
-            ):
-                pass  # variable declarations — we care about accesses
-            for m in re.finditer(
-                rf"(?:->|\.)(\w+)(?:\s*[=<>!+\-*/]|\s*!=|\s*==)",
-                content,
-            ):
-                field = m.group(1)
-                # Confirm this access appears in a block that also mentions unk
-                start = max(0, m.start() - 300)
-                end   = min(len(content), m.end() + 300)
-                ctx = content[start:end]
-                if re.search(rf"\b{re.escape(unk)}\b", ctx):
-                    if unk not in ssb:
-                        ssb[unk] = set()
-                    ssb[unk].add(field)
-
         # Redeclaration with different type (e.g. __osPiTable)
-        for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redeclaration of '(\w+)' with a different type", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redeclaration of '(\w+)' with a different type", content):
             filepath, var = normalize_path(m.group(1)), m.group(2)
+            # Schedule removal of wrong extern and re-injection of correct one
             categories.setdefault("type_mismatch_globals", [])
             if (filepath, var) not in categories["type_mismatch_globals"]:
                 categories["type_mismatch_globals"].append((filepath, var))
-
-        # FIX: C++ language linkage mismatch
-        # Pattern: error: declaration of 'SYMBOL' has a different language linkage
-        # Covers both .c and .cpp files — only .cpp files actually cause this.
-        for m in re.finditer(
-            r"(?m)^(/[^\s:]+\.(?:c|cpp)[^:]*):(?:\d+):(?:\d+):\s+error:\s+declaration of '(\w+)' has a different language linkage",
-            content,
-        ):
-            cle.add(m.group(2))
-
-        # Also catch the condensed summary line variant (no file prefix)
-        for m in re.finditer(r"declaration of '(\w+)' has a different language linkage", content):
-            cle.add(m.group(1))
-
-        # FIX: member reference base type 'long long[N]' is not a structure — schedules
-        # the owning struct for full-body re-injection (not just opaque stub).
-        # This catches __osRunningThread->context.status where context was long long[67].
-        for m in re.finditer(
-            r"error:\s+member reference base type '.*?' is not a structure or union\n([^\n]+)\n",
-            content,
-        ):
-            snippet = m.group(1)
-            # Extract the object before -> or .
-            for mm in re.finditer(r'([A-Za-z_]\w*)(?:->|\.)', snippet):
-                var = mm.group(1)
-                # If this is a known global pointing at a known struct, schedule struct re-injection
-                if var in N64_KNOWN_GLOBALS:
-                    decl = N64_KNOWN_GLOBALS[var]
-                    type_match = re.search(r'struct\s+(\w+)\s*\*', decl)
-                    if type_match:
-                        struct_name = type_match.group(1).rstrip('_s')
-                        # strip trailing _s to get the typedef name
-                        typedef_name = struct_name if not struct_name.endswith('_s') else struct_name[:-2]
-                        nsb.add(typedef_name)
 
 # ---------------------------------------------------------------------------
 # Main fix dispatcher
@@ -760,15 +564,14 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         scrub_targets = (set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES
                          | set(ACTIVE_MACROS.keys())
                          | {"__osPiTable","__OSBlockInfo","__OSTranxInfo",
-                            "__osCurrentThread","__osRunQueue","__osFaultedThread",
-                            "__osRunningThread"})
+                            "__osCurrentThread","__osRunQueue","__osFaultedThread"})
         for target in scrub_targets:
             # Remove wrong extern long long or void* declarations
             types_content = re.sub(
-                rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?\s*;\n#endif\n?",
+                rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?",
                 "", types_content)
             types_content = re.sub(
-                rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?\s*;\n?",
+                rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?",
                 "", types_content)
         if types_content != original_types:
             write_file(TYPES_HEADER, types_content)
@@ -782,26 +585,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {decl}\n#endif\n"
                 globals_added = True
         if globals_added:
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
-
-    # ------------------------------------------------------------------
-    # FIX: C++ language linkage — wrap offending externs in extern "C"
-    # ------------------------------------------------------------------
-    if categories.get("cpp_linkage_extern"):
-        types_content = read_file(TYPES_HEADER)
-        linkage_fixed = False
-        for glob in sorted(categories["cpp_linkage_extern"]):
-            if not isinstance(glob, str): continue
-            # Only wrap globals we know need it (those declared in .cpp TUs as C++ vars)
-            if glob not in _CPP_LINKAGE_GLOBALS and glob not in N64_KNOWN_GLOBALS:
-                continue
-            new_types, changed = _wrap_extern_c_in_header(glob, types_content)
-            if changed:
-                types_content = new_types
-                linkage_fixed = True
-                logger.info(f"  [linkage] Wrapped extern \"{glob}\" in extern \"C\"")
-        if linkage_fixed:
             write_file(TYPES_HEADER, types_content)
             fixes += 1
 
@@ -1025,78 +808,12 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 write_file(TYPES_HEADER, types_content)
                 fixed_files.add(TYPES_HEADER); fixes += 1
 
+        # Use robust file path existence check to inject n64_types.h appropriately
         if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
             c = read_file(filepath)
             if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
                 write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                 fixed_files.add(filepath); fixes += 1
-
-    # ------------------------------------------------------------------
-    # FIX: Synthesized struct bodies — build real structs from observed fields.
-    # This handles cases like LetterFloorTile where the type is unknown AND its
-    # members are accessed in the same TU.  An opaque stub is insufficient because
-    # the code does ptr->meshId, ptr->state, ptr->timeDeltaSum, etc.
-    # We infer reasonable field types from naming conventions and inject a complete
-    # struct definition into n64_types.h, replacing any prior opaque stub.
-    # ------------------------------------------------------------------
-    if categories.get("synthesized_struct_bodies"):
-        types_content = read_file(TYPES_HEADER)
-        synth_added = False
-
-        def _infer_field_type(field: str) -> str:
-            fl = field.lower()
-            if any(x in fl for x in ["time", "delta", "sum", "ratio", "scale", "speed",
-                                       "angle", "dist", "frac", "f_", "float"]):
-                return "f32"
-            if any(x in fl for x in ["ptr", "next", "prev", "parent", "child",
-                                       "func", "cb", "handler", "addr"]):
-                return "void*"
-            if any(x in fl for x in ["mesh", "meshid", "state", "status", "mode",
-                                       "type", "index", "count", "id", "num", "flag"]):
-                return "s32"
-            return "s32"
-
-        for type_name, fields in sorted(categories["synthesized_struct_bodies"].items()):
-            if not fields:
-                continue
-            if type_name in SDK_DEFINES_THESE:
-                continue
-            existing = _type_already_defined(type_name, types_content)
-            is_opaque = existing and re.search(
-                rf"struct\s+{re.escape(type_name)}(?:_s)?\s*\{{\s*long\s+long\s+int\s+force_align",
-                types_content,
-            )
-            if existing and not is_opaque:
-                continue  # already has a real body
-
-            if is_opaque:
-                types_content = strip_redefinition(types_content, type_name)
-                types_content = strip_redefinition(types_content, f"{type_name}_s")
-                types_content = re.sub(
-                    rf"#ifndef {re.escape(type_name)}_DEFINED[\s\S]*?#endif\n?",
-                    "", types_content,
-                )
-
-            field_lines = [f"    {_infer_field_type(f)} {f};" for f in sorted(fields)]
-            struct_tag  = f"{type_name}_s"
-            fields_str  = "\n".join(field_lines)
-            struct_body = (
-                f"/* AUTO-SYNTHESIZED from member-access errors */\n"
-                f"#ifndef {type_name}_DEFINED\n"
-                f"#define {type_name}_DEFINED\n"
-                f"typedef struct {struct_tag} {{\n"
-                f"{fields_str}\n"
-                f"}} {type_name};\n"
-                f"#endif\n"
-            )
-            types_content += "\n" + struct_body
-            synth_added = True
-            logger.info(f"  [synth-struct] Synthesised {type_name} with fields: {sorted(fields)}")
-
-        if synth_added:
-            types_content = repair_unterminated_conditionals(types_content)
-            write_file(TYPES_HEADER, types_content)
-            fixes += 1
 
     # ------------------------------------------------------------------
     # Audio state types
@@ -1446,10 +1163,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             if tag == "OSPiHandle":
                 types_content = strip_redefinition(types_content, "__OSBlockInfo")
                 types_content = strip_redefinition(types_content, "__OSTranxInfo")
-            # FIX: when re-injecting OSThread, also strip the old __OSThreadContext if present
-            if tag == "OSThread":
-                types_content = strip_redefinition(types_content, "__OSThreadContext")
-                types_content = re.sub(r"#ifndef __OSThreadContext_DEFINED[\s\S]*?#endif\n?", "", types_content)
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
             if tag == "LookAt":
                 types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content)
@@ -1495,7 +1208,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     if categories.get("missing_globals"):
         types_content = read_file(TYPES_HEADER)
         globals_added = False
-        for item in sorted(categories.get("missing_globals", []), key=str):
+        for item in sorted(categories["missing_globals"], key=str):
             if isinstance(item,(list,tuple)) and len(item)>=2: _, glob = item[0], item[1]
             elif isinstance(item, str): glob = item
             else: continue
