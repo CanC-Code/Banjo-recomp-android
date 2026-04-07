@@ -557,6 +557,10 @@ def _scrape_logs_into_categories(categories: dict) -> None:
     # FIX: new category for C++ language-linkage mismatches
     categories.setdefault("cpp_linkage_extern", set())
 
+    # FIX: new category for structs whose fields can be synthesised from error snippets.
+    # Maps type_name -> set of field names observed in member-reference errors.
+    categories.setdefault("synthesized_struct_bodies", {})
+
     mt  = categories["missing_types"]
     pc  = categories["posix_reserved_conflict"]
     sr  = categories["struct_redef"]
@@ -618,6 +622,64 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         # Subscript of incomplete type
         for m in re.finditer(r"error:\s+subscript of pointer to incomplete type '(?:struct )?(\w+)'", content):
             nsb.add(m.group(1))
+
+        # FIX: Cross-correlate 'unknown type name' with 'member reference base type void'
+        # to synthesise real struct bodies from field names seen in error snippets.
+        # Strategy: collect every field name accessed via -> or . on variables whose
+        # declared type is the unknown type, keyed by type name.
+        ssb = categories["synthesized_struct_bodies"]
+        # Collect unknown type names from this log
+        _unk_types_in_log: set = set()
+        for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
+            _unk_types_in_log.add(m.group(1))
+        # For each 'member reference base type void' snippet, extract field names
+        # and attribute them to the unknown type(s) that appear in surrounding context
+        for m in re.finditer(
+            r"error:\s+member reference (?:base )?type '(?:void|long long\[?\d*\]?)' is not a (?:pointer|structure or union)\n([^\n]+)\n",
+            content,
+        ):
+            snippet = m.group(1)
+            # Extract all field names (after -> or .)
+            for fm in re.finditer(r'(?:->|\.)(\w+)', snippet):
+                field = fm.group(1)
+                # Try to find the type of the variable being dereferenced
+                # from the variable name in the snippet (before -> or .)
+                for vm in re.finditer(r'([A-Za-z_]\w*)(?:->|\.)', snippet):
+                    var = vm.group(1)
+                    # If this variable is declared as one of the unknown types,
+                    # attribute the field to that type
+                    for unk in _unk_types_in_log:
+                        # Check that the log mentions "unk *var" or "unk var" near this error
+                        if re.search(
+                            rf"\b{re.escape(unk)}\s*\*?\s*{re.escape(var)}\b",
+                            content,
+                        ):
+                            if unk not in ssb:
+                                ssb[unk] = set()
+                            ssb[unk].add(field)
+        # Also extract fields from "expected expression" lines that follow cast failures
+        # Pattern: LetterFloorTile *ptr = (LetterFloorTile *)arg3;
+        # The type name appears in both the unknown-type error and the cast line.
+        for unk in _unk_types_in_log:
+            # Look for all -> / . accesses on any pointer of this type
+            for m in re.finditer(
+                rf"\b{re.escape(unk)}\s*\*\s*\w+\s*[;=]",
+                content,
+            ):
+                pass  # variable declarations — we care about accesses
+            for m in re.finditer(
+                rf"(?:->|\.)(\w+)(?:\s*[=<>!+\-*/]|\s*!=|\s*==)",
+                content,
+            ):
+                field = m.group(1)
+                # Confirm this access appears in a block that also mentions unk
+                start = max(0, m.start() - 300)
+                end   = min(len(content), m.end() + 300)
+                ctx = content[start:end]
+                if re.search(rf"\b{re.escape(unk)}\b", ctx):
+                    if unk not in ssb:
+                        ssb[unk] = set()
+                    ssb[unk].add(field)
 
         # Redeclaration with different type (e.g. __osPiTable)
         for m in re.finditer(r"(?m)^(/[^\s:]+\.c[^:]*):(?:\d+):(?:\d+):\s+error:\s+redeclaration of '(\w+)' with a different type", content):
@@ -968,6 +1030,73 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
                 write_file(filepath, '#include "ultra/n64_types.h"\n' + c)
                 fixed_files.add(filepath); fixes += 1
+
+    # ------------------------------------------------------------------
+    # FIX: Synthesized struct bodies — build real structs from observed fields.
+    # This handles cases like LetterFloorTile where the type is unknown AND its
+    # members are accessed in the same TU.  An opaque stub is insufficient because
+    # the code does ptr->meshId, ptr->state, ptr->timeDeltaSum, etc.
+    # We infer reasonable field types from naming conventions and inject a complete
+    # struct definition into n64_types.h, replacing any prior opaque stub.
+    # ------------------------------------------------------------------
+    if categories.get("synthesized_struct_bodies"):
+        types_content = read_file(TYPES_HEADER)
+        synth_added = False
+
+        def _infer_field_type(field: str) -> str:
+            fl = field.lower()
+            if any(x in fl for x in ["time", "delta", "sum", "ratio", "scale", "speed",
+                                       "angle", "dist", "frac", "f_", "float"]):
+                return "f32"
+            if any(x in fl for x in ["ptr", "next", "prev", "parent", "child",
+                                       "func", "cb", "handler", "addr"]):
+                return "void*"
+            if any(x in fl for x in ["mesh", "meshid", "state", "status", "mode",
+                                       "type", "index", "count", "id", "num", "flag"]):
+                return "s32"
+            return "s32"
+
+        for type_name, fields in sorted(categories["synthesized_struct_bodies"].items()):
+            if not fields:
+                continue
+            if type_name in SDK_DEFINES_THESE:
+                continue
+            existing = _type_already_defined(type_name, types_content)
+            is_opaque = existing and re.search(
+                rf"struct\s+{re.escape(type_name)}(?:_s)?\s*\{{\s*long\s+long\s+int\s+force_align",
+                types_content,
+            )
+            if existing and not is_opaque:
+                continue  # already has a real body
+
+            if is_opaque:
+                types_content = strip_redefinition(types_content, type_name)
+                types_content = strip_redefinition(types_content, f"{type_name}_s")
+                types_content = re.sub(
+                    rf"#ifndef {re.escape(type_name)}_DEFINED[\s\S]*?#endif\n?",
+                    "", types_content,
+                )
+
+            field_lines = [f"    {_infer_field_type(f)} {f};" for f in sorted(fields)]
+            struct_tag  = f"{type_name}_s"
+            fields_str  = "\n".join(field_lines)
+            struct_body = (
+                f"/* AUTO-SYNTHESIZED from member-access errors */\n"
+                f"#ifndef {type_name}_DEFINED\n"
+                f"#define {type_name}_DEFINED\n"
+                f"typedef struct {struct_tag} {{\n"
+                f"{fields_str}\n"
+                f"}} {type_name};\n"
+                f"#endif\n"
+            )
+            types_content += "\n" + struct_body
+            synth_added = True
+            logger.info(f"  [synth-struct] Synthesised {type_name} with fields: {sorted(fields)}")
+
+        if synth_added:
+            types_content = repair_unterminated_conditionals(types_content)
+            write_file(TYPES_HEADER, types_content)
+            fixes += 1
 
     # ------------------------------------------------------------------
     # Audio state types
