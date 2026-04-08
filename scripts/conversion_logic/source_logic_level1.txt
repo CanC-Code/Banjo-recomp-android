@@ -30,55 +30,55 @@ HEADER_INJECT:::Inject_StdIO:::implicit declaration of function '(printf|fprintf
 # ════════════════════════════════════════════════════════════════
 # SECTION 3 — POSIX / Static Linkage Conflicts
 # ════════════════════════════════════════════════════════════════
-POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static:::n64_renamed
+POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 4 — Game-Specific Struct Forward Declarations
 # ════════════════════════════════════════════════════════════════
-# 4a. Dynamically convert all anonymous structs to named structs in the .c files 
+# 4a. Dynamically convert all anonymous AND named structs to cleanly named structs in the .c files 
 # (Uses a negative lookahead to safely parse multi-line structs without overflowing)
-REGEX:::Name_Anonymous_Structs:::typedef\s+struct\s*\{((?:(?!typedef\s+struct)[\s\S])*?)\}\s*([A-Za-z_]\w*)\s*;:::typedef struct \2 {\1} \2;
+REGEX:::Name_Anonymous_Structs:::typedef\s+struct\s*(?:\w+\s*)?\{((?:(?!typedef\s+struct)[\s\S])*?)\}\s*([A-Za-z_]\w*)\s*;:::typedef struct \2 {\1} \2;
 
 # 4b. Injects the forward declarations into n64_types.h for local structs
-GLOBAL_INJECT:::Inject_sChVegetable:::'sChVegetable':::typedef struct sChVegetable sChVegetable;
-GLOBAL_INJECT:::Inject_LetterFloorTile:::'LetterFloorTile':::typedef struct LetterFloorTile LetterFloorTile;
+GLOBAL_INJECT:::Inject_sChVegetable:::incomplete definition of type 'struct sChVegetable':::typedef struct sChVegetable sChVegetable;
+GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile LetterFloorTile;
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 5 — Global Type & Struct Injections → n64_types.h
 # ════════════════════════════════════════════════════════════════
 
 # ── 5a. Core Geometry / GBI Types ──────────────────────────────
-GLOBAL_INJECT:::Inject_Mtx:::'Mtx':::typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
-GLOBAL_INJECT:::Inject_Gfx:::'Gfx':::typedef struct { uint32_t words[2]; } Gfx;
-GLOBAL_INJECT:::Inject_Acmd:::'Acmd':::typedef struct { uint32_t words[2]; } Acmd;
-GLOBAL_INJECT:::Inject_Vtx:::'Vtx':::typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align; } Vtx;
-GLOBAL_INJECT:::Inject_LookAt:::'LookAt':::typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
+GLOBAL_INJECT:::Inject_Mtx:::unknown type name 'Mtx':::typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
+GLOBAL_INJECT:::Inject_Gfx:::unknown type name 'Gfx':::typedef struct { uint32_t words[2]; } Gfx;
+GLOBAL_INJECT:::Inject_Acmd:::unknown type name 'Acmd':::typedef struct { uint32_t words[2]; } Acmd;
+GLOBAL_INJECT:::Inject_Vtx:::unknown type name 'Vtx':::typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align; } Vtx;
+GLOBAL_INJECT:::Inject_LookAt:::unknown type name 'LookAt':::typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
 
 # ── 5b. OS Handle & Thread Types ───────────────────────────────
-GLOBAL_INJECT:::Inject_OSPfs:::'OSPfs':::typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
-GLOBAL_INJECT:::Inject_OSContPad:::'OSContPad':::typedef struct { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; } OSContPad;
-GLOBAL_INJECT:::Inject_OSContStatus:::'OSContStatus':::typedef struct { uint16_t type; uint8_t status; uint8_t errno_val; } OSContStatus;
-GLOBAL_INJECT:::Inject_OSPiHandle:::'OSPiHandle':::typedef struct OSPiHandle { uint32_t pageSize; int dummy_data[128]; } OSPiHandle;
-GLOBAL_INJECT:::Inject_OSMesgQueue:::'OSMesgQueue':::typedef struct OSMesgQueue { int dummy_data[128]; } OSMesgQueue;
-GLOBAL_INJECT:::Inject_OSMesg:::'OSMesg':::typedef void* OSMesg;
-GLOBAL_INJECT:::Inject_OSThread:::'OSThread':::typedef struct OSThread { int dummy_data[128]; } OSThread;
-GLOBAL_INJECT:::Inject_OSTimer:::'OSTimer':::typedef struct OSTimer { int dummy_data[128]; } OSTimer;
-GLOBAL_INJECT:::Inject_OSTime:::'OSTime':::typedef uint64_t OSTime;
-GLOBAL_INJECT:::Inject_OSEvent:::'OSEvent':::typedef struct OSEvent { int dummy_data[128]; } OSEvent;
-GLOBAL_INJECT:::Inject_OSPri:::'OSPri':::typedef int OSPri;
-GLOBAL_INJECT:::Inject_OSId:::'OSId':::typedef int OSId;
-GLOBAL_INJECT:::Inject_OSTask:::'OSTask':::typedef struct OSTask { int dummy_data[128]; } OSTask;
-GLOBAL_INJECT:::Inject_OSTask_t:::'OSTask_t':::typedef struct OSTask_t { int dummy_data[128]; } OSTask_t;
-GLOBAL_INJECT:::Inject_CPUState:::'CPUState':::typedef struct CPUState { int dummy_data[128]; } CPUState;
-GLOBAL_INJECT:::Inject_OSIntMask:::'OSIntMask':::typedef uint32_t OSIntMask;
+GLOBAL_INJECT:::Inject_OSPfs:::unknown type name 'OSPfs':::typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
+GLOBAL_INJECT:::Inject_OSContPad:::unknown type name 'OSContPad':::typedef struct { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; } OSContPad;
+GLOBAL_INJECT:::Inject_OSContStatus:::unknown type name 'OSContStatus':::typedef struct { uint16_t type; uint8_t status; uint8_t errno_val; } OSContStatus;
+GLOBAL_INJECT:::Inject_OSPiHandle:::unknown type name 'OSPiHandle':::typedef struct OSPiHandle { uint32_t pageSize; int dummy_data[128]; } OSPiHandle;
+GLOBAL_INJECT:::Inject_OSMesgQueue:::unknown type name 'OSMesgQueue':::typedef struct OSMesgQueue { int dummy_data[128]; } OSMesgQueue;
+GLOBAL_INJECT:::Inject_OSMesg:::unknown type name 'OSMesg':::typedef void* OSMesg;
+GLOBAL_INJECT:::Inject_OSThread:::unknown type name 'OSThread':::typedef struct OSThread { int dummy_data[128]; } OSThread;
+GLOBAL_INJECT:::Inject_OSTimer:::unknown type name 'OSTimer':::typedef struct OSTimer { int dummy_data[128]; } OSTimer;
+GLOBAL_INJECT:::Inject_OSTime:::unknown type name 'OSTime':::typedef uint64_t OSTime;
+GLOBAL_INJECT:::Inject_OSEvent:::unknown type name 'OSEvent':::typedef struct OSEvent { int dummy_data[128]; } OSEvent;
+GLOBAL_INJECT:::Inject_OSPri:::unknown type name 'OSPri':::typedef int OSPri;
+GLOBAL_INJECT:::Inject_OSId:::unknown type name 'OSId':::typedef int OSId;
+GLOBAL_INJECT:::Inject_OSTask:::unknown type name 'OSTask':::typedef struct OSTask { int dummy_data[128]; } OSTask;
+GLOBAL_INJECT:::Inject_OSTask_t:::unknown type name 'OSTask_t':::typedef struct OSTask_t { int dummy_data[128]; } OSTask_t;
+GLOBAL_INJECT:::Inject_CPUState:::unknown type name 'CPUState':::typedef struct CPUState { int dummy_data[128]; } CPUState;
+GLOBAL_INJECT:::Inject_OSIntMask:::use of undeclared identifier 'OSIntMask':::typedef uint32_t OSIntMask;
 
 # ── 5c. Audio DSP State Types ──────────────────────────────────
-GLOBAL_INJECT:::Inject_Audio_RESAMPLE:::'RESAMPLE_STATE':::typedef struct RESAMPLE_STATE { long long int force_align[64]; } RESAMPLE_STATE;
-GLOBAL_INJECT:::Inject_Audio_POLEF:::'POLEF_STATE':::typedef struct POLEF_STATE { long long int force_align[64]; } POLEF_STATE;
-GLOBAL_INJECT:::Inject_Audio_ENVMIX:::'ENVMIX_STATE':::typedef struct ENVMIX_STATE { long long int force_align[64]; } ENVMIX_STATE;
-GLOBAL_INJECT:::Inject_Audio_ALVoice:::'ALVoiceState':::typedef struct ALVoiceState { long long int force_align[64]; } ALVoiceState;
-GLOBAL_INJECT:::Inject_Audio_ADPCM:::'ADPCM_STATE':::typedef struct ADPCM_STATE { long long int force_align[64]; } ADPCM_STATE;
-GLOBAL_INJECT:::Inject_Audio_INTERLEAVE:::'INTERLEAVE_STATE':::typedef struct INTERLEAVE_STATE { long long int force_align[64]; } INTERLEAVE_STATE;
+GLOBAL_INJECT:::Inject_Audio_RESAMPLE:::unknown type name 'RESAMPLE_STATE':::typedef struct RESAMPLE_STATE { long long int force_align[64]; } RESAMPLE_STATE;
+GLOBAL_INJECT:::Inject_Audio_POLEF:::unknown type name 'POLEF_STATE':::typedef struct POLEF_STATE { long long int force_align[64]; } POLEF_STATE;
+GLOBAL_INJECT:::Inject_Audio_ENVMIX:::unknown type name 'ENVMIX_STATE':::typedef struct ENVMIX_STATE { long long int force_align[64]; } ENVMIX_STATE;
+GLOBAL_INJECT:::Inject_Audio_ALVoice:::unknown type name 'ALVoiceState':::typedef struct ALVoiceState { long long int force_align[64]; } ALVoiceState;
+GLOBAL_INJECT:::Inject_Audio_ADPCM:::unknown type name 'ADPCM_STATE':::typedef struct ADPCM_STATE { long long int force_align[64]; } ADPCM_STATE;
+GLOBAL_INJECT:::Inject_Audio_INTERLEAVE:::unknown type name 'INTERLEAVE_STATE':::typedef struct INTERLEAVE_STATE { long long int force_align[64]; } INTERLEAVE_STATE;
 
 # ── 5d. Audio DSP forward-declare guard in synthInternals.h ────
 HEADER_INJECT:::Inject_SynthInternals_Guard:::unknown type name '(RESAMPLE_STATE|POLEF_STATE|ENVMIX_STATE|ALVoiceState|ADPCM_STATE|INTERLEAVE_STATE)':::#include "ultra/n64_types.h"
@@ -86,54 +86,54 @@ HEADER_INJECT:::Inject_SynthInternals_Guard:::unknown type name '(RESAMPLE_STATE
 # ════════════════════════════════════════════════════════════════
 # SECTION 6 — Macro / GBI Injections → n64_types.h
 # ════════════════════════════════════════════════════════════════
-GLOBAL_INJECT:::Macro_PHYSICAL:::'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
-GLOBAL_INJECT:::Macro_PHYSICAL_K1:::'OS_PHYSICAL_TO_K1':::#define OS_PHYSICAL_TO_K1(x) ((void *)((uint32_t)(x) | 0xA0000000))
-GLOBAL_INJECT:::Macro_FTOFRAC:::'FTOFRAC8':::#define FTOFRAC8(x) ((int32_t)((x) * 127.0f) & 0xFF)
+GLOBAL_INJECT:::Macro_PHYSICAL:::use of undeclared identifier 'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
+GLOBAL_INJECT:::Macro_PHYSICAL_K1:::use of undeclared identifier 'OS_PHYSICAL_TO_K1':::#define OS_PHYSICAL_TO_K1(x) ((void *)((uint32_t)(x) | 0xA0000000))
+GLOBAL_INJECT:::Macro_FTOFRAC:::use of undeclared identifier 'FTOFRAC8':::#define FTOFRAC8(x) ((int32_t)((x) * 127.0f) & 0xFF)
 
 # Audio Constants
-GLOBAL_INJECT:::Macro_ADPCMFSIZE:::'ADPCMFSIZE':::#define ADPCMFSIZE 9
-GLOBAL_INJECT:::Macro_ADPCMVSIZE:::'ADPCMVSIZE':::#define ADPCMVSIZE 8
+GLOBAL_INJECT:::Macro_ADPCMFSIZE:::use of undeclared identifier 'ADPCMFSIZE':::#define ADPCMFSIZE 9
+GLOBAL_INJECT:::Macro_ADPCMVSIZE:::use of undeclared identifier 'ADPCMVSIZE':::#define ADPCMVSIZE 8
 
-GLOBAL_INJECT:::Macro_G_ZBUFFER:::'G_ZBUFFER':::#define G_ZBUFFER 0x00000001
-GLOBAL_INJECT:::Macro_G_SHADE:::'G_SHADE':::#define G_SHADE 0x00000004
-GLOBAL_INJECT:::Macro_G_CULL_FRONT:::'G_CULL_FRONT':::#define G_CULL_FRONT 0x00000200
-GLOBAL_INJECT:::Macro_G_CULL_BACK:::'G_CULL_BACK':::#define G_CULL_BACK 0x00000400
-GLOBAL_INJECT:::Macro_G_CULL_BOTH:::'G_CULL_BOTH':::#define G_CULL_BOTH 0x00000600
+GLOBAL_INJECT:::Macro_G_ZBUFFER:::use of undeclared identifier 'G_ZBUFFER':::#define G_ZBUFFER 0x00000001
+GLOBAL_INJECT:::Macro_G_SHADE:::use of undeclared identifier 'G_SHADE':::#define G_SHADE 0x00000004
+GLOBAL_INJECT:::Macro_G_CULL_FRONT:::use of undeclared identifier 'G_CULL_FRONT':::#define G_CULL_FRONT 0x00000200
+GLOBAL_INJECT:::Macro_G_CULL_BACK:::use of undeclared identifier 'G_CULL_BACK':::#define G_CULL_BACK 0x00000400
+GLOBAL_INJECT:::Macro_G_CULL_BOTH:::use of undeclared identifier 'G_CULL_BOTH':::#define G_CULL_BOTH 0x00000600
 
-GLOBAL_INJECT:::Macro_OS_IM_ALL:::'OS_IM_ALL':::#define OS_IM_ALL 0xFF01
-GLOBAL_INJECT:::Macro_OS_IM_NONE:::'OS_IM_NONE':::#define OS_IM_NONE 0x0001
-GLOBAL_INJECT:::Macro_OS_IM_CPU:::'OS_IM_CPU':::#define OS_IM_CPU 0x0201
+GLOBAL_INJECT:::Macro_OS_IM_ALL:::use of undeclared identifier 'OS_IM_ALL':::#define OS_IM_ALL 0xFF01
+GLOBAL_INJECT:::Macro_OS_IM_NONE:::use of undeclared identifier 'OS_IM_NONE':::#define OS_IM_NONE 0x0001
+GLOBAL_INJECT:::Macro_OS_IM_CPU:::use of undeclared identifier 'OS_IM_CPU':::#define OS_IM_CPU 0x0201
 
-GLOBAL_INJECT:::Macro_OS_TV_NTSC:::'OS_TV_NTSC':::#define OS_TV_NTSC 0
-GLOBAL_INJECT:::Macro_OS_TV_PAL:::'OS_TV_PAL':::#define OS_TV_PAL 1
+GLOBAL_INJECT:::Macro_OS_TV_NTSC:::use of undeclared identifier 'OS_TV_NTSC':::#define OS_TV_NTSC 0
+GLOBAL_INJECT:::Macro_OS_TV_PAL:::use of undeclared identifier 'OS_TV_PAL':::#define OS_TV_PAL 1
 
-GLOBAL_INJECT:::Macro_G_CYC_1CYCLE:::'G_CYC_1CYCLE':::#define G_CYC_1CYCLE (0<<20)
-GLOBAL_INJECT:::Macro_G_CYC_2CYCLE:::'G_CYC_2CYCLE':::#define G_CYC_2CYCLE (1<<20)
-GLOBAL_INJECT:::Macro_G_CYC_COPY:::'G_CYC_COPY':::#define G_CYC_COPY (2<<20)
-GLOBAL_INJECT:::Macro_G_CYC_FILL:::'G_CYC_FILL':::#define G_CYC_FILL (3<<20)
+GLOBAL_INJECT:::Macro_G_CYC_1CYCLE:::use of undeclared identifier 'G_CYC_1CYCLE':::#define G_CYC_1CYCLE (0<<20)
+GLOBAL_INJECT:::Macro_G_CYC_2CYCLE:::use of undeclared identifier 'G_CYC_2CYCLE':::#define G_CYC_2CYCLE (1<<20)
+GLOBAL_INJECT:::Macro_G_CYC_COPY:::use of undeclared identifier 'G_CYC_COPY':::#define G_CYC_COPY (2<<20)
+GLOBAL_INJECT:::Macro_G_CYC_FILL:::use of undeclared identifier 'G_CYC_FILL':::#define G_CYC_FILL (3<<20)
 
-GLOBAL_INJECT:::Macro_G_PM_NPRIMITIVE:::'G_PM_NPRIMITIVE':::#define G_PM_NPRIMITIVE (0<<23)
-GLOBAL_INJECT:::Macro_G_PM_1PRIMITIVE:::'G_PM_1PRIMITIVE':::#define G_PM_1PRIMITIVE (1<<23)
+GLOBAL_INJECT:::Macro_G_PM_NPRIMITIVE:::use of undeclared identifier 'G_PM_NPRIMITIVE':::#define G_PM_NPRIMITIVE (0<<23)
+GLOBAL_INJECT:::Macro_G_PM_1PRIMITIVE:::use of undeclared identifier 'G_PM_1PRIMITIVE':::#define G_PM_1PRIMITIVE (1<<23)
 
-GLOBAL_INJECT:::Macro_G_AC_NONE:::'G_AC_NONE':::#define G_AC_NONE (0<<0)
-GLOBAL_INJECT:::Macro_G_AC_THRESHOLD:::'G_AC_THRESHOLD':::#define G_AC_THRESHOLD (1<<0)
-GLOBAL_INJECT:::Macro_G_AC_DITHER:::'G_AC_DITHER':::#define G_AC_DITHER (3<<0)
+GLOBAL_INJECT:::Macro_G_AC_NONE:::use of undeclared identifier 'G_AC_NONE':::#define G_AC_NONE (0<<0)
+GLOBAL_INJECT:::Macro_G_AC_THRESHOLD:::use of undeclared identifier 'G_AC_THRESHOLD':::#define G_AC_THRESHOLD (1<<0)
+GLOBAL_INJECT:::Macro_G_AC_DITHER:::use of undeclared identifier 'G_AC_DITHER':::#define G_AC_DITHER (3<<0)
 
-GLOBAL_INJECT:::Macro_G_RM_NOOP:::'G_RM_NOOP':::#define G_RM_NOOP 0
-GLOBAL_INJECT:::Macro_G_RM_NOOP2:::'G_RM_NOOP2':::#define G_RM_NOOP2 0
-GLOBAL_INJECT:::Macro_G_RM_OPA_SURF:::'G_RM_OPA_SURF':::#define G_RM_OPA_SURF 0x0f0a4000
-GLOBAL_INJECT:::Macro_G_RM_AA_OPA_SURF:::'G_RM_AA_OPA_SURF':::#define G_RM_AA_OPA_SURF 0x0f184000
-GLOBAL_INJECT:::Macro_G_RM_AA_XLU_SURF:::'G_RM_AA_XLU_SURF':::#define G_RM_AA_XLU_SURF 0x00194248
+GLOBAL_INJECT:::Macro_G_RM_NOOP:::use of undeclared identifier 'G_RM_NOOP':::#define G_RM_NOOP 0
+GLOBAL_INJECT:::Macro_G_RM_NOOP2:::use of undeclared identifier 'G_RM_NOOP2':::#define G_RM_NOOP2 0
+GLOBAL_INJECT:::Macro_G_RM_OPA_SURF:::use of undeclared identifier 'G_RM_OPA_SURF':::#define G_RM_OPA_SURF 0x0f0a4000
+GLOBAL_INJECT:::Macro_G_RM_AA_OPA_SURF:::use of undeclared identifier 'G_RM_AA_OPA_SURF':::#define G_RM_AA_OPA_SURF 0x0f184000
+GLOBAL_INJECT:::Macro_G_RM_AA_XLU_SURF:::use of undeclared identifier 'G_RM_AA_XLU_SURF':::#define G_RM_AA_XLU_SURF 0x00194248
 
-GLOBAL_INJECT:::Macro_G_IM_FMT_RGBA:::'G_IM_FMT_RGBA':::#define G_IM_FMT_RGBA 0
-GLOBAL_INJECT:::Macro_G_IM_FMT_YUV:::'G_IM_FMT_YUV':::#define G_IM_FMT_YUV 1
-GLOBAL_INJECT:::Macro_G_IM_FMT_CI:::'G_IM_FMT_CI':::#define G_IM_FMT_CI 2
-GLOBAL_INJECT:::Macro_G_IM_FMT_IA:::'G_IM_FMT_IA':::#define G_IM_FMT_IA 3
-GLOBAL_INJECT:::Macro_G_IM_FMT_I:::'G_IM_FMT_I':::#define G_IM_FMT_I 4
-GLOBAL_INJECT:::Macro_G_IM_SIZ_4b:::'G_IM_SIZ_4b':::#define G_IM_SIZ_4b 0
-GLOBAL_INJECT:::Macro_G_IM_SIZ_8b:::'G_IM_SIZ_8b':::#define G_IM_SIZ_8b 1
-GLOBAL_INJECT:::Macro_G_IM_SIZ_16b:::'G_IM_SIZ_16b':::#define G_IM_SIZ_16b 2
-GLOBAL_INJECT:::Macro_G_IM_SIZ_32b:::'G_IM_SIZ_32b':::#define G_IM_SIZ_32b 3
+GLOBAL_INJECT:::Macro_G_IM_FMT_RGBA:::use of undeclared identifier 'G_IM_FMT_RGBA':::#define G_IM_FMT_RGBA 0
+GLOBAL_INJECT:::Macro_G_IM_FMT_YUV:::use of undeclared identifier 'G_IM_FMT_YUV':::#define G_IM_FMT_YUV 1
+GLOBAL_INJECT:::Macro_G_IM_FMT_CI:::use of undeclared identifier 'G_IM_FMT_CI':::#define G_IM_FMT_CI 2
+GLOBAL_INJECT:::Macro_G_IM_FMT_IA:::use of undeclared identifier 'G_IM_FMT_IA':::#define G_IM_FMT_IA 3
+GLOBAL_INJECT:::Macro_G_IM_FMT_I:::use of undeclared identifier 'G_IM_FMT_I':::#define G_IM_FMT_I 4
+GLOBAL_INJECT:::Macro_G_IM_SIZ_4b:::use of undeclared identifier 'G_IM_SIZ_4b':::#define G_IM_SIZ_4b 0
+GLOBAL_INJECT:::Macro_G_IM_SIZ_8b:::use of undeclared identifier 'G_IM_SIZ_8b':::#define G_IM_SIZ_8b 1
+GLOBAL_INJECT:::Macro_G_IM_SIZ_16b:::use of undeclared identifier 'G_IM_SIZ_16b':::#define G_IM_SIZ_16b 2
+GLOBAL_INJECT:::Macro_G_IM_SIZ_32b:::use of undeclared identifier 'G_IM_SIZ_32b':::#define G_IM_SIZ_32b 3
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 7 — Undefined Symbol Stubs → n64_stubs.c
