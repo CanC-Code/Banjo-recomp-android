@@ -35,8 +35,11 @@ POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows n
 # ════════════════════════════════════════════════════════════════
 # SECTION 4 — Game-Specific Struct Forward Declarations
 # ════════════════════════════════════════════════════════════════
-# Injects forward declarations into n64_types.h for local structs
-# used before they are defined in the .c file.
+# 4a. Dynamically convert all anonymous structs to named structs in the .c files 
+# (Uses a negative lookahead to safely parse multi-line structs without overflowing)
+REGEX:::Name_Anonymous_Structs:::typedef\s+struct\s*\{((?:(?!typedef\s+struct)[\s\S])*?)\}\s*([A-Za-z_]\w*)\s*;:::typedef struct \2 {\1} \2;
+
+# 4b. Injects the forward declarations into n64_types.h for local structs
 GLOBAL_INJECT:::Inject_sChVegetable:::'sChVegetable':::typedef struct sChVegetable sChVegetable;
 GLOBAL_INJECT:::Inject_LetterFloorTile:::'LetterFloorTile':::typedef struct LetterFloorTile LetterFloorTile;
 
