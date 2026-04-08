@@ -1,46 +1,47 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
-# ─── 1. N64 Primitives & Types (Source Files) ───
-HEADER_INJECT:::Inject_N64_Types:::unknown type name '(Mtx|LookAt|OSPfs|OSIntMask)':::#include "ultra/n64_types.h"
-HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs)':::#include <math.h>
-HEADER_INJECT:::Inject_String:::implicit declaration of function '(memcpy|memset|strlen|strcpy)':::#include <string.h>
-
-# Ensure stdint.h is present if POSIX standard int types are missing
-HEADER_INJECT:::Inject_StdInt:::unknown type name '(int32_t|uint32_t|int16_t|uint16_t|int8_t|uint8_t|int64_t|uint64_t)':::#include <stdint.h>
-
-# Direct regex replacements for primitive types to avoid circular header dependencies!
-REGEX:::Replace_u32:::\bu32\b:::uint32_t
-REGEX:::Replace_s32:::\bs32\b:::int32_t
-REGEX:::Replace_f32:::\bf32\b:::float
-REGEX:::Replace_u16:::\bu16\b:::uint16_t
-REGEX:::Replace_s16:::\bs16\b:::int16_t
-REGEX:::Replace_u8:::\bu8\b:::uint8_t
-REGEX:::Replace_s8:::\bs8\b:::int8_t
-REGEX:::Replace_u64:::\bu64\b:::uint64_t
+# ─── 1. Core Primitives (Direct Inline Fix) ───
+# Replaces N64 types directly in source to bypass circular header issues
+REGEX:::Fix_u32:::\bu32\b:::uint32_t
+REGEX:::Fix_s32:::\bs32\b:::int32_t
+REGEX:::Fix_f32:::\bf32\b:::float
+REGEX:::Fix_u16:::\bu16\b:::uint16_t
+REGEX:::Fix_s16:::\bs16\b:::int16_t
+REGEX:::Fix_u8:::\bu8\b:::uint8_t
+REGEX:::Fix_s8:::\bs8\b:::int8_t
+REGEX:::Fix_u64:::\bu64\b:::uint64_t
 REGEX:::Replace_s64:::\bs64\b:::int64_t
 
-# Fixes C++ "this" pointers trying to act as Actor pointers
-REGEX:::Actor_Pointer_Fix:::\)\s*\{:::){ \n    Actor *actor = (Actor *)this;
+# ─── 2. Header Injections (Conditional) ───
+# Inject <stdint.h> if standard POSIX types are unknown
+HEADER_INJECT:::Inject_StdInt:::unknown type name '(uint32_t|int32_t|uint16_t|int16_t|uint8_t|int8_t|uint64_t|int64_t)':::#include <stdint.h>
 
-# ─── 2. POSIX Conflicts ───
+# Inject N64 specific headers for complex structures only
+HEADER_INJECT:::Inject_N64_Types:::unknown type name '(Mtx|LookAt|OSPfs|OSIntMask|OSMesgQueue|OSMesg|OSThread|OSTimer|OSTime|OSEvent|OSPri|OSId|OSTask|OSTask_t|CPUState)':::#include "ultra/n64_types.h"
+
+# Standard System libraries
+HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs|pow|floor|ceil|round)':::#include <math.h>
+HEADER_INJECT:::Inject_String:::implicit declaration of function '(memcpy|memset|strlen|strcpy|strncpy|strcmp|memcmp)':::#include <string.h>
+HEADER_INJECT:::Inject_StdLib:::implicit declaration of function '(malloc|free|exit|atoi|rand|srand)':::#include <stdlib.h>
+
+# ─── 3. Actor/Pointer Fix (Safety Improved) ───
+# Use a negative lookahead (?!\s*Actor\s*\*actor) to prevent re-patching already fixed functions
+REGEX:::Actor_Pointer_Fix:::(\)\s*\{)(?!\s*Actor\s*\*actor):::\1\n    Actor *actor = (Actor *)this;
+
+# ─── 4. POSIX & Static Conflicts ───
+# Fixes name collisions with built-in libc functions (read, write, etc.)
 POSIX_RENAME:::Rename_POSIX_Static:::static declaration of '([^']+)' follows non-static:::n64_renamed
 
-# ─── 3. Global Struct Injections (n64_types.h) ───
-GLOBAL_INJECT:::Inject_Mtx:::no member named '.*' in 'Mtx':::typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
-GLOBAL_INJECT:::Inject_LookAt:::incomplete type 'LookAt':::typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
-GLOBAL_INJECT:::Inject_OSPfs:::incomplete type 'OSPfs':::typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
+# ─── 5. Global Type Injections (Targets n64_types.h) ───
+GLOBAL_INJECT:::Inject_Mtx:::no member named '.*' in '(struct )?Mtx':::typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
+GLOBAL_INJECT:::Inject_LookAt:::incomplete definition of type '(struct )?LookAt':::typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
+GLOBAL_INJECT:::Inject_OSPfs:::incomplete definition of type '(struct )?OSPfs':::typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
+GLOBAL_INJECT:::Inject_Audio_States:::unknown type name '(RESAMPLE_STATE|POLEF_STATE|ENVMIX_STATE|ALVoiceState)':::typedef struct \1 { long long int force_align[64]; } \1;
 
-# ─── 4. Global Macro Injections (n64_types.h) ───
-GLOBAL_INJECT:::Macro_FTOFRAC:::use of undeclared identifier 'FTOFRAC8':::#define FTOFRAC8(x) ((int32_t)((x) * 127.0f) & 0xFF)
-GLOBAL_INJECT:::Macro_PHYSICAL_K0:::use of undeclared identifier 'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
-GLOBAL_INJECT:::Macro_IM_NONE:::use of undeclared identifier 'OS_IM_NONE':::#define OS_IM_NONE 0x0001
-GLOBAL_INJECT:::Macro_IM_ALL:::use of undeclared identifier 'OS_IM_ALL':::#define OS_IM_ALL 0xFF01
+# ─── 6. Macro/GBI Injections (Targets n64_types.h) ───
 GLOBAL_INJECT:::Macro_G_ZBUFFER:::use of undeclared identifier 'G_ZBUFFER':::#define G_ZBUFFER 0x00000001
 GLOBAL_INJECT:::Macro_G_SHADE:::use of undeclared identifier 'G_SHADE':::#define G_SHADE 0x00000004
+GLOBAL_INJECT:::Macro_PHYSICAL:::use of undeclared identifier 'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
 
-# ─── 5. Audio States (n64_types.h) ───
-GLOBAL_INJECT:::Audio_RESAMPLE:::unknown type name 'RESAMPLE_STATE':::typedef struct RESAMPLE_STATE { long long int force_align[64]; } RESAMPLE_STATE;
-GLOBAL_INJECT:::Audio_ENVMIX:::unknown type name 'ENVMIX_STATE':::typedef struct ENVMIX_STATE { long long int force_align[64]; } ENVMIX_STATE;
-
-# ─── 6. Stubs Generation (n64_stubs.c) ───
+# ─── 7. Undefined Symbols (Stubs) ───
 STUB_INJECT:::Create_Stub:::undefined reference to `([^']+)':::long long int \1() { return 0; }
