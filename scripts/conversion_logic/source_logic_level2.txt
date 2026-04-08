@@ -9,9 +9,8 @@
 # Forward declare the main Actor struct used by the BK engine
 GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
-# Resolves: "unknown type name 'sChVegetable'" in vegetables.c
-# Updated to include the vegetable_type field as required by the manager logic.
-GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t vegetable_type; int32_t dummy[127]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
+# Resolves: "unknown type name 'sChVegetable'" and missing members.
+GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable'|no member named 'vegetable_type' in 'struct sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t vegetable_type; int32_t dummy[127]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
 
 # Resolves: "unknown type name 'LetterFloorTile'" in SM files
 GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile { int32_t dummy[16]; } LetterFloorTile;
@@ -21,7 +20,7 @@ GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::t
 # ════════════════════════════════════════════════════════════════
 
 # Resolves: "incomplete definition of type 'struct PVoice_s'" in env.c
-# The code accesses pvoice->offset, so we must provide a struct with that member.
+# Providing the 'offset' member required by the code.
 GLOBAL_INJECT:::Inject_PVoice_Definition:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; int32_t dummy_padding[64]; } PVoice;\n#define PVOICE_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
