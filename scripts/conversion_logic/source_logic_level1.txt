@@ -1,0 +1,3 @@
+# Name|Regex|Replacement
+Cleanup_Includes|#include "PR/|#include <ultra64/
+Fix_Boolean|u8  is_active|bool is_active
