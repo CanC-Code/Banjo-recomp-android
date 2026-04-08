@@ -5,13 +5,13 @@ HEADER_INJECT|Inject_N64_Types|unknown type name '(Mtx|LookAt|OSPfs|OSIntMask|u3
 HEADER_INJECT|Inject_Math|implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs)'|#include <math.h>
 HEADER_INJECT|Inject_String|implicit declaration of function '(memcpy|memset|strlen|strcpy)'|#include <string.h>
 
+# Ensure the Regexes don't cause unterminated subpatterns
 REGEX|Actor_Pointer_Fix|\)\s*\{|){\n    Actor *actor = (Actor *)this;
 REGEX|Fix_u32_Returns|\bu32\s+([a-zA-Z0-9_]+)\(|uint32_t \1(
 REGEX|Fix_s32_Returns|\bs32\s+([a-zA-Z0-9_]+)\(|int32_t \1(
 REGEX|Fix_f32_Returns|\bf32\s+([a-zA-Z0-9_]+)\(|float \1(
 
 # ─── 2. POSIX Conflicts ───
-# If the compiler complains about a static declaration of 'read', 'write', 'close', etc.
 POSIX_RENAME|Rename_POSIX_Static|static declaration of '([^']+)' follows non-static|n64_renamed
 
 # ─── 3. Global Struct Injections (n64_types.h) ───
@@ -33,3 +33,7 @@ GLOBAL_INJECT|Audio_ENVMIX|unknown type name 'ENVMIX_STATE'|typedef struct ENVMI
 
 # ─── 6. Stubs Generation (n64_stubs.c) ───
 STUB_INJECT|Create_Stub|undefined reference to `([^']+)'|long long int \1() { return 0; }
+
+# ─── SPECIFIC FILE 319 FIX (include/time.h) ───
+# If the compiler errors on s32 or f32 without being part of a function definition
+HEADER_INJECT|Inject_StdInt_Time|include/time.h.*unknown type name '(s32|f32)'|#include <stdint.h>\ntypedef int32_t s32;\ntypedef float f32;
