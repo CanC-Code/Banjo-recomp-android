@@ -1,0 +1,25 @@
+# ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
+# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
+# Delimiter is ::: to avoid collisions with regex pipe | characters.
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 1 — Audio System Injections (Level 2)
+# ════════════════════════════════════════════════════════════════
+
+# ── 1a. ALMicroTime Typedef ────────────────────────────────────
+# ALFilter relies on ALMicroTime for its setParam function pointer.
+GLOBAL_INJECT:::Inject_ALMicroTime:::unknown type name 'ALMicroTime':::typedef int32_t ALMicroTime;
+
+# ── 1b. ALFilter_s / ALFilter Struct ───────────────────────────
+# Injects the standard libultra audio filter struct.
+GLOBAL_INJECT:::Inject_ALFilter:::incomplete type 'struct ALFilter_s'|incomplete definition of type 'struct ALFilter_s':::typedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(struct ALFilter_s *); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;
+
+# ── 1c. Catch-all for ALFilter_s field definitions ─────────────
+GLOBAL_INJECT:::Inject_ALFilter_Field:::field has incomplete type 'struct ALFilter_s':::typedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(struct ALFilter_s *); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 2 — Additional Missing Types (Caught in Level 2)
+# ════════════════════════════════════════════════════════════════
+
+# If there are any residual audio types failing around ALFilter, we stub them dynamically here.
+STUB_INJECT:::Create_Audio_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
