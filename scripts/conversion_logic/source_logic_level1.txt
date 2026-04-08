@@ -35,26 +35,20 @@ POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows n
 # ════════════════════════════════════════════════════════════════
 # SECTION 4 — Game-Specific Struct Forward Declarations
 # ════════════════════════════════════════════════════════════════
-# 4a. Dynamically convert all anonymous AND named structs to cleanly named structs in the .c files 
-# (Uses a negative lookahead to safely parse multi-line structs without overflowing)
 REGEX:::Name_Anonymous_Structs:::typedef\s+struct\s*(?:\w+\s*)?\{((?:(?!typedef\s+struct)[\s\S])*?)\}\s*([A-Za-z_]\w*)\s*;:::typedef struct \2 {\1} \2;
 
-# 4b. Injects the forward declarations into n64_types.h for local structs
 GLOBAL_INJECT:::Inject_sChVegetable:::incomplete definition of type 'struct sChVegetable':::typedef struct sChVegetable sChVegetable;
 GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile LetterFloorTile;
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 5 — Global Type & Struct Injections → n64_types.h
 # ════════════════════════════════════════════════════════════════
-
-# ── 5a. Core Geometry / GBI Types ──────────────────────────────
 GLOBAL_INJECT:::Inject_Mtx:::unknown type name 'Mtx':::typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
 GLOBAL_INJECT:::Inject_Gfx:::unknown type name 'Gfx':::typedef struct { uint32_t words[2]; } Gfx;
 GLOBAL_INJECT:::Inject_Acmd:::unknown type name 'Acmd':::typedef struct { uint32_t words[2]; } Acmd;
 GLOBAL_INJECT:::Inject_Vtx:::unknown type name 'Vtx':::typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align; } Vtx;
 GLOBAL_INJECT:::Inject_LookAt:::unknown type name 'LookAt':::typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
 
-# ── 5b. OS Handle & Thread Types ───────────────────────────────
 GLOBAL_INJECT:::Inject_OSPfs:::unknown type name 'OSPfs':::typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
 GLOBAL_INJECT:::Inject_OSContPad:::unknown type name 'OSContPad':::typedef struct { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; } OSContPad;
 GLOBAL_INJECT:::Inject_OSContStatus:::unknown type name 'OSContStatus':::typedef struct { uint16_t type; uint8_t status; uint8_t errno_val; } OSContStatus;
@@ -72,7 +66,6 @@ GLOBAL_INJECT:::Inject_OSTask_t:::unknown type name 'OSTask_t':::typedef struct 
 GLOBAL_INJECT:::Inject_CPUState:::unknown type name 'CPUState':::typedef struct CPUState { int dummy_data[128]; } CPUState;
 GLOBAL_INJECT:::Inject_OSIntMask:::use of undeclared identifier 'OSIntMask':::typedef uint32_t OSIntMask;
 
-# ── 5c. Audio DSP State Types ──────────────────────────────────
 GLOBAL_INJECT:::Inject_Audio_RESAMPLE:::unknown type name 'RESAMPLE_STATE':::typedef struct RESAMPLE_STATE { long long int force_align[64]; } RESAMPLE_STATE;
 GLOBAL_INJECT:::Inject_Audio_POLEF:::unknown type name 'POLEF_STATE':::typedef struct POLEF_STATE { long long int force_align[64]; } POLEF_STATE;
 GLOBAL_INJECT:::Inject_Audio_ENVMIX:::unknown type name 'ENVMIX_STATE':::typedef struct ENVMIX_STATE { long long int force_align[64]; } ENVMIX_STATE;
@@ -80,7 +73,6 @@ GLOBAL_INJECT:::Inject_Audio_ALVoice:::unknown type name 'ALVoiceState':::typede
 GLOBAL_INJECT:::Inject_Audio_ADPCM:::unknown type name 'ADPCM_STATE':::typedef struct ADPCM_STATE { long long int force_align[64]; } ADPCM_STATE;
 GLOBAL_INJECT:::Inject_Audio_INTERLEAVE:::unknown type name 'INTERLEAVE_STATE':::typedef struct INTERLEAVE_STATE { long long int force_align[64]; } INTERLEAVE_STATE;
 
-# ── 5d. Audio DSP forward-declare guard in synthInternals.h ────
 HEADER_INJECT:::Inject_SynthInternals_Guard:::unknown type name '(RESAMPLE_STATE|POLEF_STATE|ENVMIX_STATE|ALVoiceState|ADPCM_STATE|INTERLEAVE_STATE)':::#include "ultra/n64_types.h"
 
 # ════════════════════════════════════════════════════════════════
@@ -90,7 +82,6 @@ GLOBAL_INJECT:::Macro_PHYSICAL:::use of undeclared identifier 'OS_K0_TO_PHYSICAL
 GLOBAL_INJECT:::Macro_PHYSICAL_K1:::use of undeclared identifier 'OS_PHYSICAL_TO_K1':::#define OS_PHYSICAL_TO_K1(x) ((void *)((uint32_t)(x) | 0xA0000000))
 GLOBAL_INJECT:::Macro_FTOFRAC:::use of undeclared identifier 'FTOFRAC8':::#define FTOFRAC8(x) ((int32_t)((x) * 127.0f) & 0xFF)
 
-# Audio Constants
 GLOBAL_INJECT:::Macro_ADPCMFSIZE:::use of undeclared identifier 'ADPCMFSIZE':::#define ADPCMFSIZE 9
 GLOBAL_INJECT:::Macro_ADPCMVSIZE:::use of undeclared identifier 'ADPCMVSIZE':::#define ADPCMVSIZE 8
 
