@@ -52,7 +52,6 @@ extern "C" {
     #include <PR/sptask.h>
     #include <PR/ucode.h>
     #include <PR/gu.h>
-    #include <PR/sched.h>
     #include <PR/libaudio.h>
     #define msg n_msg
     #include <PR/n_libaudio.h>
@@ -95,66 +94,4 @@ extern "C" {
 #undef OSContPad
 #undef OSContStatus
 #undef OSPiHandle
-#undef OSPiHandle_s
-#undef OSIoMesg
-#undef LookAt
-#undef LookAt_s
-#undef PositionalLight
-#undef Light
-#undef Hilite
-#undef uSprite
-#undef OSTask
-#undef CPUState
-#undef ADPCM_STATE
-#undef ADPCM_INFO
-
-typedef legacy_OSThread OSThread;
-typedef legacy_OSThread_s OSThread_s;
-typedef legacy___OSThreadContext __OSThreadContext;
-typedef legacy_OSMesgQueue OSMesgQueue;
-typedef legacy_OSMesgQueue_s OSMesgQueue_s;
-typedef legacy_OSMesg OSMesg;
-typedef legacy_OSContPad OSContPad;
-typedef legacy_OSContStatus OSContStatus;
-typedef legacy_OSPiHandle OSPiHandle;
-typedef legacy_OSPiHandle_s OSPiHandle_s;
-typedef legacy_OSIoMesg OSIoMesg;
-typedef legacy_Acmd Acmd;
-typedef legacy_LookAt LookAt;
-typedef legacy_LookAt_s LookAt_s;
-typedef legacy_PositionalLight PositionalLight;
-typedef legacy_Light Light;
-typedef legacy_Hilite Hilite;
-typedef legacy_uSprite uSprite;
-typedef legacy_OSTask OSTask;
-typedef legacy_CPUState CPUState;
-typedef legacy_ADPCM_STATE ADPCM_STATE;
-typedef legacy_ADPCM_INFO ADPCM_INFO;
-#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 2 — Missing Graphics & System Fallbacks (Pure C / Emulator)
-# ════════════════════════════════════════════════════════════════
-
-GLOBAL_INJECT:::Inject_GBI_Types_Fallback:::unknown type name '(?:Hilite|Light|PositionalLight|LookAt|uSprite|OSTask|CPUState|ADPCM_STATE|ADPCM_INFO|legacy_Acmd|Acmd)':::#ifndef GBI_TYPES_DEFINED
-typedef struct { int dummy[4]; } Hilite;
-typedef struct { int dummy[4]; } Light;
-typedef struct { int dummy[4]; } PositionalLight;
-typedef struct { int dummy[4]; } LookAt;
-typedef struct { int dummy[4]; } uSprite;
-typedef struct { int dummy[32]; } OSTask;
-typedef struct { int dummy[160]; } CPUState;
-typedef struct { int dummy[8]; } ADPCM_STATE;
-typedef struct { int dummy[8]; } ADPCM_INFO;
-typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
-typedef union { long long int force_align; int dummy[2]; } Acmd;
-#define GBI_TYPES_DEFINED
-#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 3 — Common C++ Emulator Stubs & Includes
-# ════════════════════════════════════════════════════════════════
-
-GLOBAL_INJECT:::Inject_Sched_Include:::use of undeclared identifier 'sched_yield':::#include <sched.h>
-
-STUB_INJECT:::Create_CXX_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::extern "C" void \1(void) { /* Stub */ }
+#undef OSPiHandle
