@@ -1,3 +1,21 @@
-# Name|Regex|Replacement
-Cleanup_Includes|#include "PR/|#include <ultra64/
-Fix_Boolean|u8  is_active|bool is_active
+# ACTION|NAME|SEARCH_PATTERN|REPLACEMENT
+
+# ─── N64 Primitives ───
+REGEX|Fix_u32|\\bu32\\b|uint32_t
+REGEX|Fix_s32|\\bs32\\b|int32_t
+REGEX|Fix_f32|\\bf32\\b|float
+REGEX|Fix_u16|\\bu16\\b|uint16_t
+
+# ─── Header Injections ───
+# If the error log contains "unknown type name 'Mtx'", inject the types header
+HEADER_INJECT|Inject_N64_Types|unknown type name 'Mtx'|#include "ultra/n64_types.h"
+HEADER_INJECT|Inject_Math|implicit declaration of function 'sinf'|#include <math.h>
+
+# ─── POSIX Conflict Handling ───
+# Renames 'read' or 'write' if they conflict with static N64 functions
+REGEX|Rename_Read|static (.*) read\\(|static \\1 n64_read\\(
+REGEX|Rename_Write|static (.*) write\\(|static \\1 n64_write\\(
+
+# ─── Struct Body Injections ───
+# Replicates the N64_STRUCT_BODIES dictionary
+REGEX|Inject_Mtx_Body|typedef struct Mtx_s Mtx;|typedef union {\\n  int32_t i[4][4];\\n  float f[4][4];\\n} Mtx;
