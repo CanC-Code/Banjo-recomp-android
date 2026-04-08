@@ -6,11 +6,6 @@
 # SECTION 1 — C++ Linkage & Math Sanitization (Preemptive Bypass)
 # ════════════════════════════════════════════════════════════════
 
-# Resolves: "declaration of 'sqrtf' has a different language linkage"
-# Instead of trying to wrap localized #includes, we preemptively force-load the problematic 
-# legacy headers (like gu.h) directly into the global n64_types.h, wrapped safely inside 
-# an extern "C" block and a macro bypass. This leverages standard header guards to ensure 
-# the unmodified versions are completely ignored when included later by the C++ wrapper files.
 GLOBAL_INJECT:::Preemptive_Math_Bypass:::different language linkage:::#ifndef PREEMPTIVE_MATH_BYPASS_DEFINED\n#define PREEMPTIVE_MATH_BYPASS_DEFINED\n#ifdef __cplusplus\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\nextern "C" {\n#include <PR/gu.h>\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos\n#endif\n#endif
 
 # ════════════════════════════════════════════════════════════════
@@ -20,13 +15,14 @@ GLOBAL_INJECT:::Preemptive_Math_Bypass:::different language linkage:::#ifndef PR
 GLOBAL_INJECT:::Inject_GBI_Types:::unknown type name '(?:Hilite|Light|PositionalLight|LookAt|uSprite)':::#ifndef GBI_TYPES_DEFINED\ntypedef struct { int dummy[4]; } Hilite;\ntypedef struct { int dummy[4]; } Light;\ntypedef struct { int dummy[4]; } PositionalLight;\ntypedef struct { int dummy[4]; } LookAt;\ntypedef struct { int dummy[4]; } uSprite;\n#define GBI_TYPES_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 3 — Advanced OSThread & Message Queue Member Expansion
+# SECTION 3 — Advanced Struct Member Expansion & Sanitization
 # ════════════════════════════════════════════════════════════════
 
 REGEX:::Sanitize_OSThread_Aggressive:::typedef\s+struct\s*(?:OSThread(?:_s)?\s*)?\{[\s\S]*?\}\s*OSThread\s*;:::/* Legacy OSThread removed to prevent redefinition */
 REGEX:::Sanitize_OSThread_Forward:::typedef\s+struct\s+OSThread_s\s+OSThread\s*;:::/* Legacy forward decl removed */
 REGEX:::Sanitize_OSThreadContext_Aggressive:::typedef\s+struct\s*(?:__OSThreadContext(?:_s)?\s*)?\{[\s\S]*?\}\s*__OSThreadContext\s*;:::/* Legacy __OSThreadContext removed */
 REGEX:::Sanitize_OSMesgQueue:::typedef\s+struct\s*(?:OSMesgQueue(?:_s)?\s*)?\{[\s\S]*?\}\s*OSMesgQueue\s*;:::/* Legacy OSMesgQueue removed */
+REGEX:::Sanitize_Acmd_Aggressive:::typedef\s+(?:struct|union)\s*(?:[a-zA-Z0-9_]+\s*)?\{[\s\S]*?\}\s*Acmd\s*;:::/* Legacy Acmd removed to prevent redefinition */
 
 GLOBAL_INJECT:::Inject_Full_OSThread_And_Queues:::no member named '(?:priority|next|context)' in 'OSThread'|unknown type name 'OSMesgQueue'|typedef redefinition with different types:::#ifndef OSTHREAD_FULL_DEFINED\ntypedef struct { int status; int dummy_ctx[64]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; short state; short flags; int id; int fp; __OSThreadContext context; int dummy_pad[32]; } OSThread;\ntypedef void * OSMesg;\ntypedef struct OSMesgQueue_s { OSThread *mtqueue; OSThread *fullqueue; int validCount; int first; int msgCount; OSMesg *msg; } OSMesgQueue;\ntypedef struct { int dummy[4]; } OSContPad;\ntypedef struct { int dummy[4]; } OSContStatus;\n#define OSTHREAD_FULL_DEFINED\n#endif
 
