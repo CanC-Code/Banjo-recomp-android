@@ -10,8 +10,8 @@
 GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
 # Resolves: "unknown type name 'sChVegetable'" in vegetables.c
-# We inject a robust definition to allow the character manager to compile.
-GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t dummy[128]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
+# Updated to include the vegetable_type field as required by the manager logic.
+GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t vegetable_type; int32_t dummy[127]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
 
 # Resolves: "unknown type name 'LetterFloorTile'" in SM files
 GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile { int32_t dummy[16]; } LetterFloorTile;
