@@ -9,11 +9,41 @@ class SourceConverter:
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
-    def load_logic(self):
-        """Dynamically loads all rules from any file matching 'source_logic*.txt' in the logic directory."""
-        self.rules = []
+    def bootstrap_n64_types(self):
+        """Ensures the global types header exists and has primitives at the very top."""
+        os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
         
-        # Search for any file starting with 'source_logic' and ending in '.txt'
+        content = ""
+        if os.path.exists(self.types_header):
+            with open(self.types_header, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+        # Standard N64/Libultra primitive definitions
+        primitives = (
+            "#pragma once\n"
+            "#include <stdint.h>\n"
+            "typedef uint8_t u8;\n"
+            "typedef int8_t s8;\n"
+            "typedef uint16_t u16;\n"
+            "typedef int16_t s16;\n"
+            "typedef uint32_t u32;\n"
+            "typedef int32_t s32;\n"
+            "typedef uint64_t u64;\n"
+            "typedef int64_t s64;\n"
+            "typedef float f32;\n"
+            "typedef double f64;\n"
+            "typedef int32_t n64_bool;\n\n"
+        )
+
+        # Prepend primitives if f32 is missing to ensure system headers compile
+        if "typedef float f32;" not in content:
+            with open(self.types_header, 'w', encoding='utf-8') as f:
+                f.write(primitives + content)
+            print("🚀 Bootstrapped N64 primitive types into n64_types.h")
+
+    def load_logic(self):
+        """Dynamically loads all rules from any file matching 'source_logic*.txt'."""
+        self.rules = []
         pattern = os.path.join(self.logic_dir, "source_logic*.txt")
         found_files = glob.glob(pattern)
         
@@ -30,8 +60,7 @@ class SourceConverter:
                                 "search": parts[2],
                                 "replace": parts[3].replace("\\n", "\n")
                             })
-                            
-        print(f"--- Logic Loaded: {len(self.rules)} rules active across {len(found_files)} logic file(s) ---")
+        print(f"--- Logic Loaded: {len(self.rules)} rules from {len(found_files)} files ---")
 
     def apply_to_file(self, file_path, error_context=""):
         if not os.path.exists(file_path): return 0
@@ -45,47 +74,45 @@ class SourceConverter:
 
         for rule in self.rules:
             try:
-                # 1. Standard Regex Replacements
+                # REGEX: standard text replacement within the source file
                 if rule["action"] == "REGEX":
                     new_content, count = re.subn(rule["search"], rule["replace"], content)
                     if count > 0:
                         content = new_content
                         changes += count
 
-                # 2. Local Header Injections
+                # HEADER_INJECT: Inserts an #include if a specific error is seen
                 elif rule["action"] == "HEADER_INJECT":
                     if re.search(rule["search"], error_context) and rule["replace"] not in content:
                         content = f"{rule['replace']}\n{content}"
                         changes += 1
 
-                # 3. Dynamic POSIX Renaming (Uses the 'replacement' field as a prefix)
+                # POSIX_RENAME: Resolves name collisions with dynamic namespacing
                 elif rule["action"] == "POSIX_RENAME":
                     match = re.search(rule["search"], error_context)
                     if match:
                         func_name = match.group(1)
-                        prefix = rule["replace"] # e.g., 'n64_renamed'
+                        prefix = rule["replace"]
                         new_name = f"{prefix}_{file_basename}_{func_name}"
                         define = f"\n/* AUTO: fix static conflict */\n#define {func_name} {new_name}\n"
                         if define not in content:
-                            # Insert after last include or at top
                             includes = list(re.finditer(r'#include\s+.*?\n', content))
                             idx = includes[-1].end() if includes else 0
                             content = content[:idx] + define + content[idx:]
                             changes += 1
 
-                # 4. Global Type/Macro Injections
+                # GLOBAL_INJECT: Writes structs/macros to the global n64_types.h
                 elif rule["action"] == "GLOBAL_INJECT":
                     if re.search(rule["search"], error_context):
                         types_content = ""
                         if os.path.exists(self.types_header):
                             with open(self.types_header, 'r') as tf: types_content = tf.read()
-
                         if rule["replace"].strip() not in types_content:
                             with open(self.types_header, 'a') as tf:
                                 tf.write(f"\n{rule['replace']}\n")
                             changes += 1
 
-                # 5. Stubs Generation
+                # STUB_INJECT: Creates empty function stubs in n64_stubs.c
                 elif rule["action"] == "STUB_INJECT":
                     match = re.search(rule["search"], error_context)
                     if match:
@@ -94,7 +121,6 @@ class SourceConverter:
                             stubs_content = ""
                             if os.path.exists(self.stubs_file):
                                 with open(self.stubs_file, 'r') as sf: stubs_content = sf.read()
-
                             stub_func = f"long long int {sym}() {{ return 0; }}"
                             if stub_func not in stubs_content:
                                 with open(self.stubs_file, 'a') as sf:
@@ -102,7 +128,7 @@ class SourceConverter:
                                 changes += 1
 
             except re.error as e:
-                print(f"    ⚠️ Regex Error in rule [{rule['name']}]: {e}")
+                print(f"    ⚠️ Regex Error in [{rule['name']}]: {e}")
                 continue 
 
         if content != original_content:
@@ -111,11 +137,3 @@ class SourceConverter:
             print(f"    ✨ Fixed {changes} issue(s) in {os.path.basename(file_path)}")
 
         return changes
-
-    def bootstrap_n64_types(self):
-        """Ensures the global types header exists before compilation starts."""
-        if not os.path.exists(self.types_header):
-            os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
-            with open(self.types_header, 'w') as f:
-                f.write("#pragma once\n#include <stdint.h>\n")
-                f.write("typedef uint8_t u8;\ntypedef int8_t s8;\ntypedef uint16_t u16;\ntypedef int16_t s16;\ntypedef uint32_t u32;\ntypedef int32_t s32;\ntypedef uint64_t u64;\ntypedef int64_t s64;\ntypedef float f32;\ntypedef double f64;\n")
