@@ -3,12 +3,14 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — C++ Linkage Wrapping (The Extern "C" Fix)
+# SECTION 1 — C++ Linkage Wrapping & Math Sanitization (The Macro Bypass)
 # ════════════════════════════════════════════════════════════════
 
 # Resolves: "declaration of 'sqrtf' has a different language linkage"
-# Expands to include n64_types.h. Wraps legacy C-headers in extern "C" to prevent mangling conflicts.
-REGEX:::Wrap_N64_Headers_ExternC:::different language linkage:::(?m)^(#include\s*["<](?:ultra64\.h|PR/[^>"]+|n64_types\.h)[">][^\n]*):::/* N64 linkage bypass */\nextern "C" {\n \1\n}
+# NDK <math.h> provides C++ inline overloads that conflict with the C-linkage of gu.h.
+# We temporarily macro-rename the legacy math definitions prior to inclusion to leave 
+# the global math namespace untouched for the NDK standard library.
+REGEX:::Wrap_N64_Headers_ExternC:::different language linkage:::(?m)^(#include\s*["<](?:ultra64\.h|PR/[^>"]+|n64_types\.h)[">][^\n]*):::/* Math Linkage Sanitization Bypass */\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\nextern "C" {\n \1\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Missing Graphics Types (GBI.h)
