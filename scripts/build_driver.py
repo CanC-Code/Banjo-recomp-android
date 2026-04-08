@@ -27,7 +27,6 @@ LOG_FILE        = "Android/full_build_log.txt"
 FAILED_LOG_FILE = "Android/failed_files.log"
 MANIFEST_FILE   = "Android/fixed_files.log"
 MAX_STALL       = 5
-PHASE_SHIFT_STALL = 2
 
 def strip_ansi(text):
     """Removes terminal color codes from logs."""
@@ -53,7 +52,7 @@ def run_build():
     tool_name = "Ninja" if "ninja" in cmd[0] else "Gradle"
     print(f"\n🚀 Starting Build Cycle via {tool_name}...")
     os.makedirs("Android", exist_ok=True)
-    
+
     with open(LOG_FILE, "w") as log:
         try:
             process = subprocess.Popen(
@@ -71,7 +70,6 @@ def run_build():
 
 def main():
     stall_count = 0
-    intelligence_level = 1
     converter = SourceConverter()
 
     # Ensure manifest file exists to track progress
@@ -80,7 +78,7 @@ def main():
         open(MANIFEST_FILE, 'w').close()
 
     for cycle in range(1, 401):  # Loop through cycles
-        print(f"\n{'='*40}\n--- Cycle {cycle} | Intelligence Level: {intelligence_level} ---\n{'='*40}")
+        print(f"\n{'='*40}\n--- Cycle {cycle} ---\n{'='*40}")
 
         # Bootstrap essential N64 primitive mappings (stdint.h, u32, f32)
         # before the compiler is invoked, replicating dynamic_corrector.py's safety net
@@ -101,15 +99,10 @@ def main():
         log_data = read_file(LOG_FILE)
         failed_files = generate_failed_log(log_data, FAILED_LOG_FILE)
 
-        # Logic Level Management (Phase Shift)
-        if stall_count >= PHASE_SHIFT_STALL and intelligence_level == 1:
-            print("\n🧠 Leveling up intelligence... Transitioning to Level 2 (Advanced I/O & Structs).")
-            intelligence_level = 2
-            stall_count = 0 
+        # Dynamically load ALL rules defined in external text databases.
+        # Placed here so you can add new logic files mid-execution without restarting!
+        converter.load_logic()
 
-        # Load the rules defined in our external text database
-        converter.load_logic(intelligence_level)
-        
         total_fixes_this_cycle = 0
         files_affected = set()
 
@@ -128,18 +121,18 @@ def main():
             generate_error_summary(log_data)
             stall_count += 1
             print(f"\n⚠️  No fixable patterns found. Stall count: {stall_count}/{MAX_STALL}")
-            
+
             if stall_count >= MAX_STALL:
-                print(f"\n🛑 Loop halted: No matching logic in Level {intelligence_level} for these errors.")
+                print(f"\n🛑 Loop halted: No matching logic found for these errors.")
                 break
         else:
             print(f"\n✨ Applied {total_fixes_this_cycle} fix(es) across {len(files_affected)} file(s).")
-            
+
             # Log progress to manifest
             with open(MANIFEST_FILE, "a") as mf:
                 for f in files_affected:
                     mf.write(f"Cycle {cycle}: Fixed {f}\n")
-            
+
             stall_count = 0 # Reset stall on success
 
         time.sleep(1)
