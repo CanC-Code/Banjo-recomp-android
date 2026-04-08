@@ -3,16 +3,24 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Audio Handler Signature Fix
+# SECTION 1 — Audio Driver Structural Sync
 # ════════════════════════════════════════════════════════════════
 
-# Corrected: Handler MUST return Acmd* for Banjo-Kazooie's audio scheduler.
-# This rule also ensures Acmd is defined before the struct uses it.
-GLOBAL_INJECT:::Inject_ALFilter_Fixed_Signature:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct { uint32_t words[2]; } Acmd;\ntypedef struct ALFilter_s { struct ALFilter_s *source; Acmd* (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); int32_t (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+# Corrected ALFilter to match audioInternals.h exactly.
+# 1. Handler returns Acmd*
+# 2. 5th argument of handler is Acmd*
+# 3. Fields: source, handler, setParam, inp(s16), outp(s16), type(s32)
+GLOBAL_INJECT:::Inject_ALFilter_Fixed_Signature:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct { uint32_t words[2]; } Acmd;\ntypedef Acmd* (*ALCmdHandler)(void *, int16_t *, int32_t, int32_t, Acmd *);\ntypedef int32_t (*ALSetParam)(void *, int32_t, void *);\ntypedef struct ALFilter_s { struct ALFilter_s *source; ALCmdHandler handler; ALSetParam setParam; int16_t inp; int16_t outp; int32_t type; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Header Sanitization (The "Hammer" Rule)
+# SECTION 2 — Header Sanitization (The "Hammer" Rules)
 # ════════════════════════════════════════════════════════════════
 
-# This targets synthInternals.h specifically to stop it from fighting n64_types.h
+# Target synthInternals.h to prevent clashing with our global injection
 REGEX:::Sanitize_SynthInternals:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
+
+# Target audioInternals.h (the file you just provided) to prevent redefinition errors
+REGEX:::Sanitize_AudioInternals:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
+
+# Also sanitize the ALCmdHandler and ALSetParam typedefs in those headers
+REGEX:::Sanitize_AudioTypedefs:::typedef (Acmd \*|s32)\s*\(\*(ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
