@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
+# Path Setup
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(GAME_SRC ${REPO_ROOT}/src)
 set(GAME_INC ${REPO_ROOT}/include)
 
+# Source Discovery
 file(GLOB_RECURSE EMULATOR_SRC "emulator/*.cpp")
 file(GLOB_RECURSE ULTRA_SRC "ultra/*.cpp")
 file(GLOB_RECURSE TOOLS_SRC "tools/*.cpp")
@@ -19,9 +21,11 @@ add_library(bkawrapper SHARED
     ${GAME_CORE}
 )
 
-# CRITICAL: Bridge folders must come FIRST to prevent header hijacking
+# CRITICAL: Bridge folders must come FIRST
+# This ensures "n64_types.h" in your local folder is found before 
+# any potentially conflicting system headers.
 target_include_directories(bkawrapper PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}           # <--- ADDED: Allows resolving #include "tools/..."
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
     ${CMAKE_CURRENT_SOURCE_DIR}/emulator
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
@@ -32,7 +36,15 @@ target_include_directories(bkawrapper PRIVATE
 
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    -w -fcommon -O2 -fno-strict-aliasing
+    -w          # Suppress legacy warnings
+    -fcommon    # Allow multiple definitions of global variables (common in old C)
+    -O2         # Optimization level
+    -fno-strict-aliasing # Crucial for N64 type-punned pointer logic
 )
 
-target_link_libraries(bkawrapper android log GLESv3 EGL)
+target_link_libraries(bkawrapper 
+    android 
+    log 
+    GLESv3 
+    EGL
+)
