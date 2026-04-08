@@ -1,26 +1,28 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
-# Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Audio Driver Structural Sync
+# SECTION 1 — Audio Structural Sync (The "Golden" Definition)
 # ════════════════════════════════════════════════════════════════
 
-# Corrected ALFilter to match audioInternals.h exactly.
-# 1. Handler returns Acmd*
-# 2. 5th argument of handler is Acmd*
-# 3. Fields: source, handler, setParam, inp(s16), outp(s16), type(s32)
-GLOBAL_INJECT:::Inject_ALFilter_Fixed_Signature:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct { uint32_t words[2]; } Acmd;\ntypedef Acmd* (*ALCmdHandler)(void *, int16_t *, int32_t, int32_t, Acmd *);\ntypedef int32_t (*ALSetParam)(void *, int32_t, void *);\ntypedef struct ALFilter_s { struct ALFilter_s *source; ALCmdHandler handler; ALSetParam setParam; int16_t inp; int16_t outp; int32_t type; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+# Corrected: Matches the provided audioInternals.h but keeps Acmd* return for recomp compatibility.
+# Injects ALCmdHandler and ALSetParam typedefs so synthInternals.h doesn't error out.
+GLOBAL_INJECT:::Inject_Audio_Full_Sync:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types|unknown type name 'ALCmdHandler':::#ifndef AL_AUDIO_SYNC_DEFINED\ntypedef struct { uint32_t words[2]; } Acmd;\ntypedef Acmd* (*ALCmdHandler)(void *, int16_t *, int32_t, int32_t, Acmd *);\ntypedef int32_t (*ALSetParam)(void *, int32_t, void *);\ntypedef struct ALFilter_s { struct ALFilter_s *source; ALCmdHandler handler; ALSetParam setParam; int16_t inp; int16_t outp; int32_t type; } ALFilter;\n#define AL_AUDIO_SYNC_DEFINED\n#define AL_FILTER_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Header Sanitization (The "Hammer" Rules)
+# SECTION 2 — Header Sanitization (The "Super Hammer")
 # ════════════════════════════════════════════════════════════════
 
-# Target synthInternals.h to prevent clashing with our global injection
-REGEX:::Sanitize_SynthInternals:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
+# Multiline Regex to find and comment out the ALFilter block in ANY header.
+# Uses [\s\S]*? to match across multiple lines until the closing brace and typedef.
+REGEX:::Sanitize_Audio_Blocks:::typedef struct ALFilter_s\s*\{[\s\S]*?\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
 
-# Target audioInternals.h (the file you just provided) to prevent redefinition errors
-REGEX:::Sanitize_AudioInternals:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
+# Kill local typedefs that conflict with our global ones.
+REGEX:::Sanitize_Audio_Typedefs:::typedef (Acmd \*|int32_t)\s*\(\*(ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
 
-# Also sanitize the ALCmdHandler and ALSetParam typedefs in those headers
-REGEX:::Sanitize_AudioTypedefs:::typedef (Acmd \*|s32)\s*\(\*(ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
+# ════════════════════════════════════════════════════════════════
+# SECTION 3 — Audio PVoice Completion
+# ════════════════════════════════════════════════════════════════
+
+# Resolves: "incomplete definition of type 'struct PVoice_s'" in env.c
+# Injects a dummy struct that has the 'offset' member required by the code.
+GLOBAL_INJECT:::Inject_PVoice_Definition:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; int8_t dummy[128]; } PVoice;\n#define PVOICE_DEFINED\n#endif
