@@ -11,18 +11,19 @@
 GLOBAL_INJECT:::Inject_ALMicroTime:::unknown type name 'ALMicroTime':::#ifndef AL_MICROTIME_DEFINED\ntypedef int32_t ALMicroTime;\n#define AL_MICROTIME_DEFINED\n#endif
 
 # ── 1b. ALFilter / ALFilter_s Struct ───────────────────────────
-# Injects the struct with the 5-argument handler signature.
-# Signature: (struct, int32_t*, int32_t, int32_t, int32_t)
-GLOBAL_INJECT:::Inject_ALFilter:::incomplete type 'struct ALFilter_s'|incomplete definition of type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+# Injects the struct with the 5-argument handler signature returning Acmd*.
+# Return type must be Acmd* to satisfy assignments in auxbus.c and drvrNew.c.
+GLOBAL_INJECT:::Inject_ALFilter:::incomplete type 'struct ALFilter_s'|incomplete definition of type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; Acmd* (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); int32_t (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
 
 # ── 1c. Catch-all for ALFilter_s field definitions ─────────────
-GLOBAL_INJECT:::Inject_ALFilter_Field:::field has incomplete type 'struct ALFilter_s':::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+GLOBAL_INJECT:::Inject_ALFilter_Field:::field has incomplete type 'struct ALFilter_s':::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; Acmd* (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); int32_t (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Audio Driver Specific Fixes
 # ════════════════════════════════════════════════════════════════
 
-# Resolves the conflict where synthInternals.h and n64_types.h both try to define ALFilter
+# Resolves the conflict where synthInternals.h and n64_types.h both try to define ALFilter.
+# This rule strips the local definition to force the compiler to use our guarded global one.
 REGEX:::Fix_Internal_Filter_Conflict:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Handled by n64_types.h */
 
 # ════════════════════════════════════════════════════════════════
