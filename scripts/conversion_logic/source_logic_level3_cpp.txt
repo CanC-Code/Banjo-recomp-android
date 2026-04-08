@@ -3,12 +3,13 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — C++ Linkage Wrapping (The Extern "C" Fix)
+# SECTION 1 — C++ Linkage Inheritance Bypass
 # ════════════════════════════════════════════════════════════════
 
 # Resolves: "declaration of 'sqrtf' has a different language linkage"
-# Wraps legacy N64 headers in extern "C" to prevent mangling conflicts with NDK <math.h>
-REGEX:::Wrap_N64_Headers_ExternC:::different language linkage:::(?m)^(#include\s*["<](?:ultra64\.h|PR/[^>"]+)[">]):::/* N64 linkage bypass */\nextern "C" {\n \1\n}
+# By globally injecting <math.h> first, the compiler establishes C-linkage. 
+# Subsequent N64 headers will legally inherit this linkage without crashing.
+GLOBAL_INJECT:::Inject_Math_Header:::different language linkage:::#ifndef MATH_LINKAGE_FIX\n#include <math.h>\n#define MATH_LINKAGE_FIX\n#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Missing Graphics Types (GBI.h)
