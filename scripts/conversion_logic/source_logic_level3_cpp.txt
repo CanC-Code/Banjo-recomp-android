@@ -1,0 +1,27 @@
+# ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
+# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
+# Delimiter is ::: to avoid collisions with regex pipe | characters.
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 1 — C++ / Standard Library Linkage Fixes
+# ════════════════════════════════════════════════════════════════
+
+# The Android NDK standard <math.h> defines these with C-linkage (extern "C").
+# The N64 headers declare them without extern "C", causing C++ linkage conflicts in .cpp wrapper files.
+# We strip the N64 declarations to let the NDK standard library handle them natively.
+
+REGEX:::Sanitize_Linkage_sqrtf:::extern\s+float\s+sqrtf\s*\([^)]*\)\s*;:::/* sqrtf decl removed to prevent C++ math.h linkage conflict */\n#include <math.h>
+REGEX:::Sanitize_Linkage_sinf:::extern\s+float\s+sinf\s*\([^)]*\)\s*;:::/* sinf decl removed to prevent C++ math.h linkage conflict */
+REGEX:::Sanitize_Linkage_cosf:::extern\s+float\s+cosf\s*\([^)]*\)\s*;:::/* cosf decl removed to prevent C++ math.h linkage conflict */
+
+# Catch-all for double-precision variants if they exist in standard N64 headers
+REGEX:::Sanitize_Linkage_sqrt:::extern\s+double\s+sqrt\s*\([^)]*\)\s*;:::/* sqrt decl removed to prevent C++ math.h linkage conflict */
+REGEX:::Sanitize_Linkage_sin:::extern\s+double\s+sin\s*\([^)]*\)\s*;:::/* sin decl removed to prevent C++ math.h linkage conflict */
+REGEX:::Sanitize_Linkage_cos:::extern\s+double\s+cos\s*\([^)]*\)\s*;:::/* cos decl removed to prevent C++ math.h linkage conflict */
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 2 — Common C++ Emulator Stubs
+# ════════════════════════════════════════════════════════════════
+
+# If the C++ wrapper expects specific N64 low-level routines that aren't compiled, stub them
+STUB_INJECT:::Create_CXX_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
