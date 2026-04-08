@@ -1,6 +1,4 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
-# Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 1 — Game-Specific Actor & Object Types (BK Core)
@@ -9,22 +7,15 @@
 # Forward declare the main Actor struct used by the BK engine
 GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
-# Resolves: "unknown type name 'sChVegetable'" and missing members.
+# Resolves: "unknown type name 'sChVegetable'" in vegetables.c
+# Updated to include the vegetable_type field as required by the manager logic.
 GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable'|no member named 'vegetable_type' in 'struct sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t vegetable_type; int32_t dummy[127]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
 
 # Resolves: "unknown type name 'LetterFloorTile'" in SM files
 GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile { int32_t dummy[16]; } LetterFloorTile;
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Audio Driver Support (Level 2 Completion)
-# ════════════════════════════════════════════════════════════════
-
-# Resolves: "incomplete definition of type 'struct PVoice_s'" in env.c
-# Providing the 'offset' member required by the code.
-GLOBAL_INJECT:::Inject_PVoice_Definition:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; int32_t dummy_padding[64]; } PVoice;\n#define PVOICE_DEFINED\n#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 3 — General Logic Enhancements
+# SECTION 2 — General Logic Enhancements
 # ════════════════════════════════════════════════════════════════
 
 # Handles missing standard Libultra symbols by generating stubs
