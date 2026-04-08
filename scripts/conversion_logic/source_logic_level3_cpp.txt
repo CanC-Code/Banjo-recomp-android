@@ -14,24 +14,25 @@ REGEX:::Wrap_N64_Headers_ExternC:::different language linkage:::(?m)^(#include\s
 # SECTION 2 — Missing Graphics Types (GBI.h)
 # ════════════════════════════════════════════════════════════════
 
-# Resolves: "unknown type name 'Hilite'", 'Light', 'LookAt' in bigalligator.c and others.
+# Resolves: "unknown type name 'Hilite'", 'Light', 'LookAt' in legacy graphics objects.
 GLOBAL_INJECT:::Inject_GBI_Types:::unknown type name '(?:Hilite|Light|PositionalLight|LookAt|uSprite)':::#ifndef GBI_TYPES_DEFINED\ntypedef struct { int dummy[4]; } Hilite;\ntypedef struct { int dummy[4]; } Light;\ntypedef struct { int dummy[4]; } PositionalLight;\ntypedef struct { int dummy[4]; } LookAt;\ntypedef struct { int dummy[4]; } uSprite;\n#define GBI_TYPES_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 3 — OSThread Member Expansion
+# SECTION 3 — Advanced OSThread Member Expansion & Sanitization
 # ════════════════════════════════════════════════════════════════
 
-# Sanitize any auto-bootstrapped OSThread or OSThreadContext that is blocking the full definition.
-REGEX:::Sanitize_OSThread:::typedef struct (?:OSThread(?:_s)?\s*)?\{[\s\S]*?\}\s*OSThread;:::/* OSThread redefined globally */
-REGEX:::Sanitize_OSThreadContext:::typedef struct (?:__OSThreadContext(?:_s)?\s*)?\{[\s\S]*?\}\s*__OSThreadContext;:::/* __OSThreadContext redefined globally */
+# Sanitize all variations of OSThread and OSThreadContext to prevent typedef redefinition errors.
+# This expanded regex uses [\s\S]*? to aggressively capture multiline blocks regardless of formatting.
+REGEX:::Sanitize_OSThread_Aggressive:::typedef\s+struct\s*(?:OSThread(?:_s)?\s*)?\{[\s\S]*?\}\s*OSThread\s*;:::/* Legacy OSThread removed to prevent redefinition */
+REGEX:::Sanitize_OSThread_Forward:::typedef\s+struct\s+OSThread_s\s+OSThread\s*;:::/* Legacy forward decl removed */
+REGEX:::Sanitize_OSThreadContext_Aggressive:::typedef\s+struct\s*(?:__OSThreadContext(?:_s)?\s*)?\{[\s\S]*?\}\s*__OSThreadContext\s*;:::/* Legacy __OSThreadContext removed */
 
-# Resolves: "no member named 'priority' in 'OSThread'" in exceptasm.cpp
-# Injects the exact layout the C++ emulator wrapper expects to map context and queues.
-GLOBAL_INJECT:::Inject_Full_OSThread:::no member named '(?:priority|next|context)' in 'OSThread':::#ifndef OSTHREAD_FULL_DEFINED\ntypedef struct { int status; int dummy_ctx[64]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; short state; short flags; int id; int fp; __OSThreadContext context; int dummy_pad[32]; } OSThread;\n#define OSTHREAD_FULL_DEFINED\n#endif
+# Injects the exact structural layout required by the emulator's thread scheduler.
+GLOBAL_INJECT:::Inject_Full_OSThread:::no member named '(?:priority|next|context)' in 'OSThread'|typedef redefinition with different types:::#ifndef OSTHREAD_FULL_DEFINED\ntypedef struct { int status; int dummy_ctx[64]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; short state; short flags; int id; int fp; __OSThreadContext context; int dummy_pad[32]; } OSThread;\n#define OSTHREAD_FULL_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 4 — Common C++ Emulator Stubs
 # ════════════════════════════════════════════════════════════════
 
-# If the C++ wrapper expects specific N64 low-level routines that aren't compiled, stub them
+# Automatically generates stubs for any undefined N64 hardware routines requested by the C++ wrapper.
 STUB_INJECT:::Create_CXX_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
