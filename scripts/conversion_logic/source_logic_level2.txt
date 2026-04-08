@@ -3,32 +3,33 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Audio System Injections (Level 2)
+# SECTION 1 — Game-Specific Actor & Object Types (BK Core)
 # ════════════════════════════════════════════════════════════════
 
-# ── 1a. ALMicroTime Typedef ────────────────────────────────────
-# Guarded injection for ALMicroTime
-GLOBAL_INJECT:::Inject_ALMicroTime:::unknown type name 'ALMicroTime':::#ifndef AL_MICROTIME_DEFINED\ntypedef int32_t ALMicroTime;\n#define AL_MICROTIME_DEFINED\n#endif
+# Forward declare the main Actor struct used by the BK engine
+GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
-# ── 1b. ALFilter / ALFilter_s Struct ───────────────────────────
-# Injects the struct with the 5-argument handler signature returning Acmd*.
-# Return type must be Acmd* to satisfy assignments in auxbus.c and drvrNew.c.
-GLOBAL_INJECT:::Inject_ALFilter:::incomplete type 'struct ALFilter_s'|incomplete definition of type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; Acmd* (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); int32_t (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+# Resolves: "unknown type name 'sChVegetable'" in vegetables.c
+# We inject a robust definition to allow the character manager to compile.
+GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t dummy[128]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
 
-# ── 1c. Catch-all for ALFilter_s field definitions ─────────────
-GLOBAL_INJECT:::Inject_ALFilter_Field:::field has incomplete type 'struct ALFilter_s':::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; Acmd* (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); int32_t (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+# Resolves: "unknown type name 'LetterFloorTile'" in SM files
+GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile { int32_t dummy[16]; } LetterFloorTile;
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Audio Driver Specific Fixes
+# SECTION 2 — Audio Driver Support (Level 2 Completion)
 # ════════════════════════════════════════════════════════════════
 
-# Resolves the conflict where synthInternals.h and n64_types.h both try to define ALFilter.
-# This rule strips the local definition to force the compiler to use our guarded global one.
-REGEX:::Fix_Internal_Filter_Conflict:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Handled by n64_types.h */
+# Resolves: "incomplete definition of type 'struct PVoice_s'" in env.c
+# The code accesses pvoice->offset, so we must provide a struct with that member.
+GLOBAL_INJECT:::Inject_PVoice_Definition:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; int32_t dummy_padding[64]; } PVoice;\n#define PVOICE_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 3 — Additional Missing Types & Stubs
+# SECTION 3 — General Logic Enhancements
 # ════════════════════════════════════════════════════════════════
 
-# Handles missing audio symbols by generating return-0 stubs
-STUB_INJECT:::Create_Audio_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
+# Handles missing standard Libultra symbols by generating stubs
+STUB_INJECT:::Create_General_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
+
+# Resolves static/non-static naming conflicts during linkage
+POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
