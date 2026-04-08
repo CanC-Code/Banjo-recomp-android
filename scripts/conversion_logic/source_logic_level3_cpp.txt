@@ -37,7 +37,28 @@ GLOBAL_INJECT:::Preemptive_Universal_Bypass:::different language linkage|long lo
 #define CPUState legacy_CPUState
 #define ADPCM_STATE legacy_ADPCM_STATE
 #define ADPCM_INFO legacy_ADPCM_INFO
+#endif
+
+#ifdef __cplusplus
 extern "C" {
+#endif
+    #include <sched.h>
+    #include <ultra64.h>
+    #include <PR/os.h>
+    #include <PR/gbi.h>
+    #include <PR/abi.h>
+    #include <n_abi.h>
+    #include <PR/n_abi.h>
+    #include <PR/sptask.h>
+    #include <PR/ucode.h>
+    #include <PR/gu.h>
+    #include <PR/sched.h>
+    #include <PR/libaudio.h>
+    #define msg n_msg
+    #include <PR/n_libaudio.h>
+    #undef msg
+    #include <PR/mbi.h>
+
     typedef struct { int dummy[4]; } legacy_Hilite;
     typedef struct { int dummy[4]; } legacy_Light;
     typedef struct { int dummy[4]; } legacy_PositionalLight;
@@ -51,25 +72,13 @@ extern "C" {
     #ifdef _ABI_H_
     #define ABI_WAS_EARLY
     #endif
-    #include <ultra64.h>
-    #include <PR/os.h>
-    #include <PR/gbi.h>
-    #include <PR/abi.h>
     #ifdef ABI_WAS_EARLY
     typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
     #endif
-    #include <n_abi.h>
-    #include <PR/n_abi.h>
-    #include <PR/sptask.h>
-    #include <PR/ucode.h>
-    #include <PR/gu.h>
-    #include <PR/sched.h>
-    #include <PR/libaudio.h>
-    #define msg n_msg
-    #include <PR/n_libaudio.h>
-    #undef msg
-    #include <PR/mbi.h>
+#ifdef __cplusplus
 }
+#endif
+
 #undef sqrtf
 #undef sinf
 #undef cosf
@@ -98,6 +107,7 @@ extern "C" {
 #undef CPUState
 #undef ADPCM_STATE
 #undef ADPCM_INFO
+
 typedef legacy_OSThread OSThread;
 typedef legacy_OSThread_s OSThread_s;
 typedef legacy___OSThreadContext __OSThreadContext;
@@ -120,7 +130,6 @@ typedef legacy_OSTask OSTask;
 typedef legacy_CPUState CPUState;
 typedef legacy_ADPCM_STATE ADPCM_STATE;
 typedef legacy_ADPCM_INFO ADPCM_INFO;
-#endif
 #endif
 
 # ════════════════════════════════════════════════════════════════
