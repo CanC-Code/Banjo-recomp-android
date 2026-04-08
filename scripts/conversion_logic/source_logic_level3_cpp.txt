@@ -3,13 +3,12 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — C++ Linkage Inheritance Bypass
+# SECTION 1 — C++ Linkage Wrapping (The Extern "C" Fix)
 # ════════════════════════════════════════════════════════════════
 
 # Resolves: "declaration of 'sqrtf' has a different language linkage"
-# By globally injecting <math.h> first, the compiler establishes C-linkage. 
-# Subsequent N64 headers will legally inherit this linkage without crashing.
-GLOBAL_INJECT:::Inject_Math_Header:::different language linkage:::#ifndef MATH_LINKAGE_FIX\n#include <math.h>\n#define MATH_LINKAGE_FIX\n#endif
+# Expands to include n64_types.h. Wraps legacy C-headers in extern "C" to prevent mangling conflicts.
+REGEX:::Wrap_N64_Headers_ExternC:::different language linkage:::(?m)^(#include\s*["<](?:ultra64\.h|PR/[^>"]+|n64_types\.h)[">][^\n]*):::/* N64 linkage bypass */\nextern "C" {\n \1\n}
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Missing Graphics Types (GBI.h)
@@ -22,7 +21,7 @@ GLOBAL_INJECT:::Inject_GBI_Types:::unknown type name '(?:Hilite|Light|Positional
 # SECTION 3 — Advanced OSThread & Message Queue Member Expansion
 # ════════════════════════════════════════════════════════════════
 
-# Sanitize all variations of OSThread and OSThreadContext to prevent typedef redefinition errors.
+# Sanitize all variations of OSThread, OSThreadContext, and Message Queues to prevent typedef redefinition errors.
 REGEX:::Sanitize_OSThread_Aggressive:::typedef\s+struct\s*(?:OSThread(?:_s)?\s*)?\{[\s\S]*?\}\s*OSThread\s*;:::/* Legacy OSThread removed to prevent redefinition */
 REGEX:::Sanitize_OSThread_Forward:::typedef\s+struct\s+OSThread_s\s+OSThread\s*;:::/* Legacy forward decl removed */
 REGEX:::Sanitize_OSThreadContext_Aggressive:::typedef\s+struct\s*(?:__OSThreadContext(?:_s)?\s*)?\{[\s\S]*?\}\s*__OSThreadContext\s*;:::/* Legacy __OSThreadContext removed */
