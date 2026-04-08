@@ -3,10 +3,14 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — C++ Linkage & Math Sanitization (Preemptive Bypass)
+# SECTION 1 — C++ Linkage & Legacy Struct Sanitization (Preemptive Bypass)
 # ════════════════════════════════════════════════════════════════
 
-GLOBAL_INJECT:::Preemptive_Math_Bypass:::different language linkage:::#ifndef PREEMPTIVE_MATH_BYPASS_DEFINED\n#define PREEMPTIVE_MATH_BYPASS_DEFINED\n#ifdef __cplusplus\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\nextern "C" {\n#include <PR/gu.h>\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos\n#endif\n#endif
+# Resolves: "declaration of 'sqrtf' has a different language linkage" and Acmd "typedef redefinition"
+# By preemptively loading the core legacy headers inside extern "C" while masking conflicting identifiers
+# with macros, we consume the legacy include guards. Later, when the C++ files include them normally, 
+# the compiler skips the files entirely, bypassing both C++ mangling issues and type redefinitions!
+GLOBAL_INJECT:::Preemptive_Bypass:::different language linkage|long long int force_align|typedef redefinition with different types:::#ifndef PREEMPTIVE_BYPASS_DEFINED\n#define PREEMPTIVE_BYPASS_DEFINED\n#ifdef __cplusplus\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\n#define Acmd legacy_Acmd\nextern "C" {\n#include <ultra64.h>\n#include <PR/libaudio.h>\n#include <PR/gu.h>\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos\n#undef Acmd\n#endif\n#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Missing Graphics Types (GBI.h)
