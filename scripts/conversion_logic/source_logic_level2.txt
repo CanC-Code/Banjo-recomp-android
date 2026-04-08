@@ -10,8 +10,10 @@
 GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
 # Resolves: "unknown type name 'sChVegetable'" and missing coordinate members.
-# Injects vegetable_type and unk0 coordinates (x, y, z) to satisfy vegetables.c logic.
 GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable'|no member named '(?:vegetable_type|unk0_x|unk0_y|unk0_z)' in 'struct sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable { int32_t vegetable_type; float unk0_x; float unk0_y; float unk0_z; int32_t dummy[120]; } sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
+
+# Resolves local redefinition clash in vegetables.c after our global injection above.
+REGEX:::Sanitize_Local_Vegetable:::typedef struct sChVegetable\s*\{[\s\S]*?\}\s*sChVegetable;:::/* Definition moved to global n64_types.h */
 
 # Resolves: "unknown type name 'LetterFloorTile'" in SM files
 GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::typedef struct LetterFloorTile { int32_t dummy[16]; } LetterFloorTile;
@@ -21,7 +23,6 @@ GLOBAL_INJECT:::Inject_LetterFloorTile:::unknown type name 'LetterFloorTile':::t
 # ════════════════════════════════════════════════════════════════
 
 # Resolves: "incomplete definition of type 'struct PVoice_s'" in env.c
-# Providing the 'offset' member required by the audio scheduler.
 GLOBAL_INJECT:::Inject_PVoice_Definition:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; int32_t dummy_padding[64]; } PVoice;\n#define PVOICE_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
