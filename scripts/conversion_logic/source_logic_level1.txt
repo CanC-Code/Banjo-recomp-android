@@ -1,7 +1,7 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
 # ─── 1. Core Primitives (Direct Inline Fix) ───
-# Replaces N64 types directly in source to bypass circular header issues
+# Replaces N64 types directly to bypass circular header issues and NDK conflicts
 REGEX:::Fix_u32:::\bu32\b:::uint32_t
 REGEX:::Fix_s32:::\bs32\b:::int32_t
 REGEX:::Fix_f32:::\bf32\b:::float
@@ -13,35 +13,56 @@ REGEX:::Fix_u64:::\bu64\b:::uint64_t
 REGEX:::Replace_s64:::\bs64\b:::int64_t
 
 # ─── 2. Header Injections (Conditional) ───
-# Inject <stdint.h> if standard POSIX types are unknown
+# Standard POSIX environment bootstrapping
 HEADER_INJECT:::Inject_StdInt:::unknown type name '(uint32_t|int32_t|uint16_t|int16_t|uint8_t|int8_t|uint64_t|int64_t)':::#include <stdint.h>
+HEADER_INJECT:::Inject_StdArg:::unknown type name 'va_list'|implicit declaration of function 'va_start':::#include <stdarg.h>
+HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs|pow|floor|ceil|round|atan2f|asinf|acosf)':::#include <math.h>
+HEADER_INJECT:::Inject_String:::implicit declaration of function '(memcpy|memset|strlen|strcpy|strncpy|strcmp|memcmp|strchr|strstr)':::#include <string.h>
+HEADER_INJECT:::Inject_StdLib:::implicit declaration of function '(malloc|free|exit|atoi|rand|srand|abs|labs)':::#include <stdlib.h>
 
 # Inject N64 specific headers for complex structures only
-HEADER_INJECT:::Inject_N64_Types:::unknown type name '(Mtx|LookAt|OSPfs|OSIntMask|OSMesgQueue|OSMesg|OSThread|OSTimer|OSTime|OSEvent|OSPri|OSId|OSTask|OSTask_t|CPUState)':::#include "ultra/n64_types.h"
+HEADER_INJECT:::Inject_N64_Types:::unknown type name '(Mtx|LookAt|Gfx|Vtx|OSPfs|OSIntMask|OSMesgQueue|OSThread|OSTimer|OSTime|OSPri|OSId|OSTask)':::#include "ultra/n64_types.h"
 
-# Standard System libraries
-HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs|pow|floor|ceil|round)':::#include <math.h>
-HEADER_INJECT:::Inject_String:::implicit declaration of function '(memcpy|memset|strlen|strcpy|strncpy|strcmp|memcmp)':::#include <string.h>
-HEADER_INJECT:::Inject_StdLib:::implicit declaration of function '(malloc|free|exit|atoi|rand|srand)':::#include <stdlib.h>
-
-# ─── 3. Actor/Pointer Fix (Safety Improved) ───
-# Use a negative lookahead (?!\s*Actor\s*\*actor) to prevent re-patching already fixed functions
+# ─── 3. Actor/Pointer Fix (Double-Patching Safety) ───
+# Uses negative lookahead. re.sub DOES evaluate \1 correctly, so this is safe!
 REGEX:::Actor_Pointer_Fix:::(\)\s*\{)(?!\s*Actor\s*\*actor):::\1\n    Actor *actor = (Actor *)this;
 
 # ─── 4. POSIX & Static Conflicts ───
-# Fixes name collisions with built-in libc functions (read, write, etc.)
+# Renames N64 static functions that shadow libc reserved names
 POSIX_RENAME:::Rename_POSIX_Static:::static declaration of '([^']+)' follows non-static:::n64_renamed
 
 # ─── 5. Global Type Injections (Targets n64_types.h) ───
+# Essential N64 structures for the Android Port
 GLOBAL_INJECT:::Inject_Mtx:::no member named '.*' in '(struct )?Mtx':::typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
+GLOBAL_INJECT:::Inject_Gfx:::unknown type name '(struct )?Gfx':::typedef struct { uint32_t words[2]; } Gfx;
+GLOBAL_INJECT:::Inject_Vtx:::unknown type name '(struct )?Vtx':::typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align; } Vtx;
 GLOBAL_INJECT:::Inject_LookAt:::incomplete definition of type '(struct )?LookAt':::typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
 GLOBAL_INJECT:::Inject_OSPfs:::incomplete definition of type '(struct )?OSPfs':::typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
-GLOBAL_INJECT:::Inject_Audio_States:::unknown type name '(RESAMPLE_STATE|POLEF_STATE|ENVMIX_STATE|ALVoiceState)':::typedef struct \1 { long long int force_align[64]; } \1;
+GLOBAL_INJECT:::Inject_OSContPad:::incomplete definition of type '(struct )?OSContPad':::typedef struct { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; } OSContPad;
+
+# Audio DSP state types (Unrolled to prevent \1 literal string bugs in global injection)
+GLOBAL_INJECT:::Inject_Audio_RESAMPLE:::unknown type name 'RESAMPLE_STATE':::typedef struct RESAMPLE_STATE { long long int force_align[64]; } RESAMPLE_STATE;
+GLOBAL_INJECT:::Inject_Audio_POLEF:::unknown type name 'POLEF_STATE':::typedef struct POLEF_STATE { long long int force_align[64]; } POLEF_STATE;
+GLOBAL_INJECT:::Inject_Audio_ENVMIX:::unknown type name 'ENVMIX_STATE':::typedef struct ENVMIX_STATE { long long int force_align[64]; } ENVMIX_STATE;
+GLOBAL_INJECT:::Inject_Audio_ALVoice:::unknown type name 'ALVoiceState':::typedef struct ALVoiceState { long long int force_align[64]; } ALVoiceState;
+GLOBAL_INJECT:::Inject_Audio_ADPCM:::unknown type name 'ADPCM_STATE':::typedef struct ADPCM_STATE { long long int force_align[64]; } ADPCM_STATE;
+GLOBAL_INJECT:::Inject_Audio_INTERLEAVE:::unknown type name 'INTERLEAVE_STATE':::typedef struct INTERLEAVE_STATE { long long int force_align[64]; } INTERLEAVE_STATE;
 
 # ─── 6. Macro/GBI Injections (Targets n64_types.h) ───
+# Added an expanded list of standard N64 macros to prevent stalling on renderer logic
+GLOBAL_INJECT:::Macro_PHYSICAL:::use of undeclared identifier 'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
+GLOBAL_INJECT:::Macro_FTOFRAC:::use of undeclared identifier 'FTOFRAC8':::#define FTOFRAC8(x) ((int32_t)((x) * 127.0f) & 0xFF)
 GLOBAL_INJECT:::Macro_G_ZBUFFER:::use of undeclared identifier 'G_ZBUFFER':::#define G_ZBUFFER 0x00000001
 GLOBAL_INJECT:::Macro_G_SHADE:::use of undeclared identifier 'G_SHADE':::#define G_SHADE 0x00000004
-GLOBAL_INJECT:::Macro_PHYSICAL:::use of undeclared identifier 'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
+GLOBAL_INJECT:::Macro_G_CULL_FRONT:::use of undeclared identifier 'G_CULL_FRONT':::#define G_CULL_FRONT 0x00000200
+GLOBAL_INJECT:::Macro_G_CULL_BACK:::use of undeclared identifier 'G_CULL_BACK':::#define G_CULL_BACK 0x00000400
+GLOBAL_INJECT:::Macro_G_CULL_BOTH:::use of undeclared identifier 'G_CULL_BOTH':::#define G_CULL_BOTH 0x00000600
+GLOBAL_INJECT:::Macro_OS_IM_ALL:::use of undeclared identifier 'OS_IM_ALL':::#define OS_IM_ALL 0xFF01
+GLOBAL_INJECT:::Macro_OS_IM_NONE:::use of undeclared identifier 'OS_IM_NONE':::#define OS_IM_NONE 0x0001
+GLOBAL_INJECT:::Macro_OS_IM_CPU:::use of undeclared identifier 'OS_IM_CPU':::#define OS_IM_CPU 0x0201
+GLOBAL_INJECT:::Macro_OS_TV_NTSC:::use of undeclared identifier 'OS_TV_NTSC':::#define OS_TV_NTSC 0
+GLOBAL_INJECT:::Macro_OS_TV_PAL:::use of undeclared identifier 'OS_TV_PAL':::#define OS_TV_PAL 1
 
 # ─── 7. Undefined Symbols (Stubs) ───
+# Creates dummy implementations for missing SDK functions to allow linking
 STUB_INJECT:::Create_Stub:::undefined reference to `([^']+)':::long long int \1() { return 0; }
