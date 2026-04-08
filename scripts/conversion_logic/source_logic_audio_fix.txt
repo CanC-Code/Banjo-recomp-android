@@ -1,31 +1,28 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
-# Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 1 — Audio Structural Sync (The "Golden" Definition)
 # ════════════════════════════════════════════════════════════════
 
-# Corrected: Matches the provided audioInternals.h but keeps Acmd* return for recomp compatibility.
-# Injects ALCmdHandler and ALSetParam typedefs so synthInternals.h doesn't error out.
-# Acmd is now defined as a UNION to resolve redefinition conflicts and match Libultra.
+# Acmd is now a UNION to match Libultra and prevent alignment/redefinition issues.
+# Injects ALCmdHandler and ALSetParam typedefs so audio headers don't error out.
 GLOBAL_INJECT:::Inject_Audio_Full_Sync:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types|unknown type name 'ALCmdHandler':::#ifndef AL_AUDIO_SYNC_DEFINED\ntypedef union { uint32_t words[2]; long long int force_align; } Acmd;\ntypedef Acmd* (*ALCmdHandler)(void *, int16_t *, int32_t, int32_t, Acmd *);\ntypedef int32_t (*ALSetParam)(void *, int32_t, void *);\ntypedef struct ALFilter_s { struct ALFilter_s *source; ALCmdHandler handler; ALSetParam setParam; int16_t inp; int16_t outp; int32_t type; } ALFilter;\n#define AL_AUDIO_SYNC_DEFINED\n#define AL_FILTER_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Header Sanitization (The "Super Hammer")
 # ════════════════════════════════════════════════════════════════
 
-# Multiline Regex to find and comment out the ALFilter block in ANY header.
-# Uses [\s\S]*? to match across multiple lines until the closing brace and typedef.
-REGEX:::Sanitize_Audio_Blocks:::typedef struct ALFilter_s\s*\{[\s\S]*?\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
+# Targets ALFilter definitions in headers (both tagged and anonymous).
+REGEX:::Sanitize_Audio_Blocks:::typedef struct (?:ALFilter_s\s*)?\{[\s\S]*?\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
 
 # Kill local typedefs that conflict with our global ones.
-REGEX:::Sanitize_Audio_Typedefs:::typedef (Acmd \*|int32_t)\s*\(\*(ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
+REGEX:::Sanitize_Audio_Typedefs:::typedef (?:Acmd\s*\*|s32|int32_t)\s*\(\*(?:ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
+
+# Resolves the 'union Acmd' vs 'struct Acmd' conflict in gbi.h and other headers.
+REGEX:::Sanitize_GBI_Acmd:::typedef struct\s*\{[\s\S]*?\}\s*Acmd;:::/* Handled by n64_types.h */
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 3 — Audio PVoice Completion
+# SECTION 3 — Additional Audio Driver Stubs
 # ════════════════════════════════════════════════════════════════
 
-# Resolves: "incomplete definition of type 'struct PVoice_s'" in env.c
-# Injects a dummy struct that has the 'offset' member required by the code.
-GLOBAL_INJECT:::Inject_PVoice_Definition_Fix:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; int8_t dummy[128]; } PVoice;\n#define PVOICE_DEFINED\n#endif
+STUB_INJECT:::Create_Audio_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
