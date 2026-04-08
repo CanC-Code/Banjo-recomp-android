@@ -6,14 +6,28 @@
 # SECTION 1 — Audio System Injections (Level 2)
 # ════════════════════════════════════════════════════════════════
 
-GLOBAL_INJECT:::Inject_ALMicroTime:::unknown type name 'ALMicroTime':::typedef int32_t ALMicroTime;
+# ── 1a. ALMicroTime Typedef ────────────────────────────────────
+# Guarded injection for ALMicroTime
+GLOBAL_INJECT:::Inject_ALMicroTime:::unknown type name 'ALMicroTime':::#ifndef AL_MICROTIME_DEFINED\ntypedef int32_t ALMicroTime;\n#define AL_MICROTIME_DEFINED\n#endif
 
-GLOBAL_INJECT:::Inject_ALFilter:::incomplete type 'struct ALFilter_s'|incomplete definition of type 'struct ALFilter_s':::typedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(struct ALFilter_s *); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;
+# ── 1b. ALFilter / ALFilter_s Struct ───────────────────────────
+# Injects the struct with the 5-argument handler signature.
+# Signature: (struct, int32_t*, int32_t, int32_t, int32_t)
+GLOBAL_INJECT:::Inject_ALFilter:::incomplete type 'struct ALFilter_s'|incomplete definition of type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
 
-GLOBAL_INJECT:::Inject_ALFilter_Field:::field has incomplete type 'struct ALFilter_s':::typedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(struct ALFilter_s *); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;
+# ── 1c. Catch-all for ALFilter_s field definitions ─────────────
+GLOBAL_INJECT:::Inject_ALFilter_Field:::field has incomplete type 'struct ALFilter_s':::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); ALMicroTime (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Additional Missing Types (Caught in Level 2)
+# SECTION 2 — Audio Driver Specific Fixes
 # ════════════════════════════════════════════════════════════════
 
+# Resolves the conflict where synthInternals.h and n64_types.h both try to define ALFilter
+REGEX:::Fix_Internal_Filter_Conflict:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Handled by n64_types.h */
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 3 — Additional Missing Types & Stubs
+# ════════════════════════════════════════════════════════════════
+
+# Handles missing audio symbols by generating return-0 stubs
 STUB_INJECT:::Create_Audio_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
