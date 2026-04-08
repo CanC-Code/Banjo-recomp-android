@@ -3,14 +3,14 @@
 # Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — C++ Linkage & Legacy Struct Sanitization (Preemptive Bypass)
+# SECTION 1 — Universal Preemptive Legacy Shield (n_audio upgraded)
 # ════════════════════════════════════════════════════════════════
 
-# Resolves: "declaration of 'sqrtf' has a different language linkage" and Acmd "typedef redefinition"
-# We aggressively consume the core audio and graphics header files (abi.h, sptask.h, libaudio.h)
-# natively inside the extern "C" shield. This triggers all the legacy include guards while Acmd 
-# is masked, ensuring the raw structs never leak into the C++ compilation boundary.
-GLOBAL_INJECT:::Preemptive_Bypass:::different language linkage|long long int force_align|typedef redefinition with different types:::#ifndef PREEMPTIVE_BYPASS_DEFINED\n#define PREEMPTIVE_BYPASS_DEFINED\n#ifdef __cplusplus\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\n#define Acmd legacy_Acmd\nextern "C" {\n#include <ultra64.h>\n#include <PR/abi.h>\n#include <PR/sptask.h>\n#include <PR/libaudio.h>\n#include <PR/gu.h>\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos\n#undef Acmd\n#endif\n#endif
+# Resolves: All "different language linkage" and "typedef redefinition" errors.
+# We now consume the standard N64 SDK headers AND the n_audio (Next Generation Audio) 
+# variants natively inside the shield. This ensures that no matter which audio 
+# subsystem the C++ objects request, the legacy structs are safely masked!
+GLOBAL_INJECT:::Preemptive_Universal_Bypass:::different language linkage|long long int force_align|typedef redefinition with different types:::#ifndef PREEMPTIVE_BYPASS_DEFINED\n#define PREEMPTIVE_BYPASS_DEFINED\n#ifdef __cplusplus\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\n#define Acmd legacy_Acmd\n#define OSThread legacy_OSThread\n#define OSThread_s legacy_OSThread_s\n#define __OSThreadContext legacy___OSThreadContext\n#define OSMesgQueue legacy_OSMesgQueue\n#define OSMesgQueue_s legacy_OSMesgQueue_s\n#define OSMesg legacy_OSMesg\n#define OSContPad legacy_OSContPad\n#define OSContStatus legacy_OSContStatus\n#define OSPiHandle legacy_OSPiHandle\n#define OSPiHandle_s legacy_OSPiHandle_s\n#define OSIoMesg legacy_OSIoMesg\nextern "C" {\n#include <ultra64.h>\n#include <PR/abi.h>\n#include <PR/n_abi.h>\n#include <PR/sptask.h>\n#include <PR/libaudio.h>\n#include <PR/n_libaudio.h>\n#include <PR/gu.h>\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos\n#undef Acmd\n#undef OSThread\n#undef OSThread_s\n#undef __OSThreadContext\n#undef OSMesgQueue\n#undef OSMesgQueue_s\n#undef OSMesg\n#undef OSContPad\n#undef OSContStatus\n#undef OSPiHandle\n#undef OSPiHandle_s\n#undef OSIoMesg\n#endif\n#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Missing Graphics Types (GBI.h)
