@@ -12,6 +12,7 @@ from source_conversion import SourceConverter
 from error_parser import generate_failed_log, generate_error_summary, read_file
 
 # --- Environment Configuration ---
+# Force single-threaded building to ensure logs are linear and easy to parse
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -29,11 +30,11 @@ MANIFEST_FILE   = "Android/fixed_files.log"
 MAX_STALL       = 5
 
 def strip_ansi(text):
-    """Removes terminal color codes from logs."""
+    """Removes terminal color codes from logs to prevent parsing errors."""
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
 
 def get_ninja_cmd():
-    """Attempts to locate the Ninja build directory to skip Gradle overhead."""
+    """Attempts to locate the Ninja build directory to skip Gradle overhead on retries."""
     base_dir = "Android/app/.cxx/Debug"
     if os.path.exists(base_dir):
         for hash_dir in os.listdir(base_dir):
@@ -72,26 +73,26 @@ def main():
     stall_count = 0
     converter = SourceConverter()
 
-    # Ensure manifest file exists to track progress
+    # Ensure manifest file exists to track which files have been modified
     os.makedirs("Android", exist_ok=True)
     if not os.path.exists(MANIFEST_FILE):
         open(MANIFEST_FILE, 'w').close()
 
-    for cycle in range(1, 401):  # Loop through cycles
+    for cycle in range(1, 401): 
         print(f"\n{'='*40}\n--- Cycle {cycle} ---\n{'='*40}")
 
-        # Bootstrap essential N64 primitive mappings (stdint.h, u32, f32)
-        # before the compiler is invoked, replicating dynamic_corrector.py's safety net
+        # BOOTSTRAP PHASE: Injects core primitives into the types header before build.
+        # This resolves issues where headers like time.h require f32/s32 types.
         if hasattr(converter, 'bootstrap_n64_types'):
             converter.bootstrap_n64_types()
 
-        # Attempt to build
+        # Compilation phase
         if run_build():
             print("\n✅ Build Successful! Target APK generated.")
             if os.path.exists(FAILED_LOG_FILE): os.remove(FAILED_LOG_FILE)
             return
 
-        # If build fails, analyze the logs
+        # Failure analysis phase
         if not os.path.exists(LOG_FILE): 
             print("❌ No log file found, stopping.")
             break
@@ -99,15 +100,12 @@ def main():
         log_data = read_file(LOG_FILE)
         failed_files = generate_failed_log(log_data, FAILED_LOG_FILE)
 
-        # Dynamically load ALL rules defined in external text databases.
-        # Placed here so you can add new logic files mid-execution without restarting!
+        # Dynamic logic loading: Picks up rules from source_logic*.txt
         converter.load_logic()
 
         total_fixes_this_cycle = 0
         files_affected = set()
 
-        # Apply fixes to files causing failures. We pass both the file path AND 
-        # the full log data so the converter can hunt for Macros/Stubs effectively!
         if failed_files:
             print(f"🧐 Targeting {len(failed_files)} failing file(s)...")
             for file_path in failed_files:
@@ -116,24 +114,21 @@ def main():
                     total_fixes_this_cycle += fixes_applied
                     files_affected.add(file_path)
 
-        # Handle stalling
+        # Stalling logic
         if total_fixes_this_cycle == 0:
             generate_error_summary(log_data)
             stall_count += 1
             print(f"\n⚠️  No fixable patterns found. Stall count: {stall_count}/{MAX_STALL}")
 
             if stall_count >= MAX_STALL:
-                print(f"\n🛑 Loop halted: No matching logic found for these errors.")
+                print(f"\n🛑 Loop halted: Build logic exhausted.")
                 break
         else:
             print(f"\n✨ Applied {total_fixes_this_cycle} fix(es) across {len(files_affected)} file(s).")
-
-            # Log progress to manifest
             with open(MANIFEST_FILE, "a") as mf:
                 for f in files_affected:
                     mf.write(f"Cycle {cycle}: Fixed {f}\n")
-
-            stall_count = 0 # Reset stall on success
+            stall_count = 0 
 
         time.sleep(1)
 
