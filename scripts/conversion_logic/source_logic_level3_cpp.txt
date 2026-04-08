@@ -1,20 +1,22 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
-# Delimiter is ::: to avoid collisions with regex pipe | characters.
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Universal Preemptive Legacy Shield (Restoration Added)
+# SECTION 1 — Universal Preemptive Legacy Shield
 # ════════════════════════════════════════════════════════════════
 
 GLOBAL_INJECT:::Preemptive_Universal_Bypass:::different language linkage|long long int force_align|typedef redefinition with different types|unknown type name '(?:legacy_Acmd|OSThread|ADPCM_STATE|Acmd|OSThread_s|__OSThreadContext|OSMesgQueue|OSMesgQueue_s|OSMesg|OSContPad|OSContStatus|OSPiHandle|OSPiHandle_s|OSIoMesg|LookAt|LookAt_s|PositionalLight|Light|Hilite|uSprite|OSTask|CPUState|ADPCM_INFO|Gfx|N64AudioTask|ALADPCMState|ALCMD|ALLink|ALPlayer|ALGlb|ALGlobals)':::#ifndef PREEMPTIVE_BYPASS_DEFINED
 #define PREEMPTIVE_BYPASS_DEFINED
+
 #ifdef __cplusplus
+// Redirect math to prevent namespace collisions during SDK inclusion
 #define sqrtf gu_sqrtf
 #define sinf gu_sinf
 #define cosf gu_cosf
 #define sqrt gu_sqrt
 #define sin gu_sin
 #define cos gu_cos
+
+// Redirect N64 types to legacy names to avoid C++ Linkage clashes
 #define Acmd legacy_Acmd
 #define OSThread legacy_OSThread
 #define OSThread_s legacy_OSThread_s
@@ -45,58 +47,43 @@ GLOBAL_INJECT:::Preemptive_Universal_Bypass:::different language linkage|long lo
 #define ALPlayer legacy_ALPlayer
 #define ALGlb legacy_ALGlb
 #define ALGlobals legacy_ALGlobals
-#endif
 
-#ifdef __cplusplus
 extern "C" {
 #endif
-    #include <sched.h>
     #include <ultra64.h>
     #include <PR/os.h>
     #include <PR/gbi.h>
     #include <PR/abi.h>
-    #include <n_abi.h>
-    #include <PR/n_abi.h>
     #include <PR/sptask.h>
     #include <PR/ucode.h>
     #include <PR/gu.h>
     #include <PR/libaudio.h>
-    #define msg n_msg
-    #include <PR/n_libaudio.h>
-    #undef msg
-    #include <PR/mbi.h>
 
-    // Legacy type definitions
+    // Fallback Definitions for types that might still be missing
+    // Using [1] instead of [?] to ensure valid C compilation
     typedef struct { int dummy[4]; } legacy_Hilite;
     typedef struct { int dummy[4]; } legacy_Light;
     typedef struct { int dummy[4]; } legacy_PositionalLight;
     typedef struct { int dummy[4]; } legacy_LookAt;
-    typedef struct { int dummy[4]; } legacy_LookAt_s;
     typedef struct { int dummy[4]; } legacy_uSprite;
     typedef struct { int dummy[32]; } legacy_OSTask;
+    typedef struct { int dummy[160]; } legacy_CPUState;
     typedef struct { int dummy[8]; } legacy_ADPCM_STATE;
     typedef struct { int dummy[8]; } legacy_ADPCM_INFO;
-    typedef struct { int dummy[160]; } legacy_CPUState;
-    typedef struct { int dummy[?]; } legacy_Gfx; // Adjust size as needed
-    typedef struct { int dummy[?]; } legacy_N64AudioTask;
-    typedef struct { int dummy[?]; } legacy_ALADPCMState;
+    typedef struct { int dummy[1]; } legacy_Gfx; 
+    typedef struct { int dummy[1]; } legacy_N64AudioTask;
+    typedef struct { int dummy[1]; } legacy_ALADPCMState;
     typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
-    typedef struct { int dummy[?]; } legacy_ALCMD;
-    typedef struct { int dummy[?]; } legacy_ALLink;
-    typedef struct { int dummy[?]; } legacy_ALPlayer;
-    typedef struct { int dummy[?]; } legacy_ALGlb;
-    typedef struct { int dummy[?]; } legacy_ALGlobals;
+    typedef struct { int dummy[1]; } legacy_ALCMD;
+    typedef struct { int dummy[1]; } legacy_ALLink;
+    typedef struct { int dummy[1]; } legacy_ALPlayer;
+    typedef struct { int dummy[1]; } legacy_ALGlb;
+    typedef struct { int dummy[1]; } legacy_ALGlobals;
 
-    #ifdef _ABI_H_
-    #define ABI_WAS_EARLY
-    #endif
-    #ifdef ABI_WAS_EARLY
-    typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
-    #endif
 #ifdef __cplusplus
-}
-#endif
+} // end extern "C"
 
+// Clean up macros so we can typedef the real names
 #undef sqrtf
 #undef sinf
 #undef cosf
@@ -134,7 +121,7 @@ extern "C" {
 #undef ALGlb
 #undef ALGlobals
 
-// Map legacy types back to original names
+// Final mapping back to standard names for the game source
 typedef legacy_OSThread OSThread;
 typedef legacy_OSThread_s OSThread_s;
 typedef legacy___OSThreadContext __OSThreadContext;
@@ -166,12 +153,14 @@ typedef legacy_ALPlayer ALPlayer;
 typedef legacy_ALGlb ALGlb;
 typedef legacy_ALGlobals ALGlobals;
 #endif
+#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Missing Graphics & System Fallbacks (Pure C / Emulator)
+# SECTION 2 — Missing Graphics & System Fallbacks
 # ════════════════════════════════════════════════════════════════
 
 GLOBAL_INJECT:::Inject_GBI_Types_Fallback:::unknown type name '(?:Hilite|Light|PositionalLight|LookAt|uSprite|OSTask|CPUState|ADPCM_STATE|ADPCM_INFO|legacy_Acmd|Acmd|Gfx|N64AudioTask|ALADPCMState|ALCMD|ALLink|ALPlayer|ALGlb|ALGlobals)':::#ifndef GBI_TYPES_DEFINED
+#define GBI_TYPES_DEFINED
 typedef struct { int dummy[4]; } Hilite;
 typedef struct { int dummy[4]; } Light;
 typedef struct { int dummy[4]; } PositionalLight;
@@ -181,17 +170,13 @@ typedef struct { int dummy[32]; } OSTask;
 typedef struct { int dummy[160]; } CPUState;
 typedef struct { int dummy[8]; } ADPCM_STATE;
 typedef struct { int dummy[8]; } ADPCM_INFO;
-typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
 typedef union { long long int force_align; int dummy[2]; } Acmd;
-typedef struct { int dummy[?]; } Gfx; // Adjust size as needed
-typedef struct { int dummy[?]; } N64AudioTask;
-typedef struct { int dummy[?]; } ALADPCMState;
-typedef struct { int dummy[?]; } ALCMD;
-typedef struct { int dummy[?]; } ALLink;
-typedef struct { int dummy[?]; } ALPlayer;
-typedef struct { int dummy[?]; } ALGlb;
-typedef struct { int dummy[?]; } ALGlobals;
-#define GBI_TYPES_DEFINED
+typedef struct { int dummy[1]; } Gfx;
+typedef struct { int dummy[1]; } N64AudioTask;
+typedef struct { int dummy[1]; } ALADPCMState;
+typedef struct { int dummy[1]; } ALCMD;
+typedef struct { int dummy[1]; } ALLink;
+typedef struct { int dummy[1]; } ALPlayer;
+typedef struct { int dummy[1]; } ALGlb;
+typedef struct { int dummy[1]; } ALGlobals;
 #endif
-
-# ════════════════════════════════════
