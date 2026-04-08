@@ -6,23 +6,146 @@
 # SECTION 1 — Universal Preemptive Legacy Shield (Restoration Added)
 # ════════════════════════════════════════════════════════════════
 
-# Resolves linkage errors and redefinitions by wrapping the SDK in a namespace shell.
-# We map SDK types to legacy_* so they don't clash with C++ types.
-# Missing structs from the SDK are defined as legacy_* INSIDE the extern block.
-# Finally, types are mapped BACK into the C++ namespace so the emulator source can use them!
-GLOBAL_INJECT:::Preemptive_Universal_Bypass:::different language linkage|long long int force_align|typedef redefinition with different types|unknown type name '(?:legacy_Acmd|OSThread|ADPCM_STATE|Acmd)':::#ifndef PREEMPTIVE_BYPASS_DEFINED\n#define PREEMPTIVE_BYPASS_DEFINED\n#ifdef __cplusplus\n#define sqrtf gu_sqrtf\n#define sinf gu_sinf\n#define cosf gu_cosf\n#define sqrt gu_sqrt\n#define sin gu_sin\n#define cos gu_cos\n#define Acmd legacy_Acmd\n#define OSThread legacy_OSThread\n#define OSThread_s legacy_OSThread_s\n#define __OSThreadContext legacy___OSThreadContext\n#define OSMesgQueue legacy_OSMesgQueue\n#define OSMesgQueue_s legacy_OSMesgQueue_s\n#define OSMesg legacy_OSMesg\n#define OSContPad legacy_OSContPad\n#define OSContStatus legacy_OSContStatus\n#define OSPiHandle legacy_OSPiHandle\n#define OSPiHandle_s legacy_OSPiHandle_s\n#define OSIoMesg legacy_OSIoMesg\n#define LookAt legacy_LookAt\n#define LookAt_s legacy_LookAt_s\n#define PositionalLight legacy_PositionalLight\n#define Light legacy_Light\n#define Hilite legacy_Hilite\n#define uSprite legacy_uSprite\n#define OSTask legacy_OSTask\n#define CPUState legacy_CPUState\n#define ADPCM_STATE legacy_ADPCM_STATE\n#define ADPCM_INFO legacy_ADPCM_INFO\nextern "C" {\ntypedef struct { int dummy[4]; } legacy_Hilite;\ntypedef struct { int dummy[4]; } legacy_Light;\ntypedef struct { int dummy[4]; } legacy_PositionalLight;\ntypedef struct { int dummy[4]; } legacy_LookAt;\ntypedef struct { int dummy[4]; } legacy_LookAt_s;\ntypedef struct { int dummy[4]; } legacy_uSprite;\ntypedef struct { int dummy[32]; } legacy_OSTask;\ntypedef struct { int dummy[8]; } legacy_ADPCM_STATE;\ntypedef struct { int dummy[8]; } legacy_ADPCM_INFO;\ntypedef struct { int dummy[160]; } legacy_CPUState;\n#ifdef _ABI_H_\n#define ABI_WAS_EARLY\n#endif\n#include <ultra64.h>\n#include <PR/os.h>\n#include <PR/gbi.h>\n#include <PR/abi.h>\n#ifdef ABI_WAS_EARLY\ntypedef union { long long int force_align; int dummy[2]; } legacy_Acmd;\n#endif\n#include <n_abi.h>\n#include <PR/n_abi.h>\n#include <PR/sptask.h>\n#include <PR/ucode.h>\n#include <PR/gu.h>\n#include <PR/sched.h>\n#include <PR/libaudio.h>\n#define msg n_msg\n#include <PR/n_libaudio.h>\n#undef msg\n#include <PR/mbi.h>\n}\n#undef sqrtf\n#undef sinf\n#undef cosf\n#undef sqrt\n#undef sin\n#undef cos\n#undef Acmd\n#undef OSThread\n#undef OSThread_s\n#undef __OSThreadContext\n#undef OSMesgQueue\n#undef OSMesgQueue_s\n#undef OSMesg\n#undef OSContPad\n#undef OSContStatus\n#undef OSPiHandle\n#undef OSPiHandle_s\n#undef OSIoMesg\n#undef LookAt\n#undef LookAt_s\n#undef PositionalLight\n#undef Light\n#undef Hilite\n#undef uSprite\n#undef OSTask\n#undef CPUState\n#undef ADPCM_STATE\n#undef ADPCM_INFO\ntypedef legacy_OSThread OSThread;\ntypedef legacy_OSThread_s OSThread_s;\ntypedef legacy___OSThreadContext __OSThreadContext;\ntypedef legacy_OSMesgQueue OSMesgQueue;\ntypedef legacy_OSMesgQueue_s OSMesgQueue_s;\ntypedef legacy_OSMesg OSMesg;\ntypedef legacy_OSContPad OSContPad;\ntypedef legacy_OSContStatus OSContStatus;\ntypedef legacy_OSPiHandle OSPiHandle;\ntypedef legacy_OSPiHandle_s OSPiHandle_s;\ntypedef legacy_OSIoMesg OSIoMesg;\ntypedef legacy_Acmd Acmd;\ntypedef legacy_LookAt LookAt;\ntypedef legacy_LookAt_s LookAt_s;\ntypedef legacy_PositionalLight PositionalLight;\ntypedef legacy_Light Light;\ntypedef legacy_Hilite Hilite;\ntypedef legacy_uSprite uSprite;\ntypedef legacy_OSTask OSTask;\ntypedef legacy_CPUState CPUState;\ntypedef legacy_ADPCM_STATE ADPCM_STATE;\ntypedef legacy_ADPCM_INFO ADPCM_INFO;\n#endif\n#endif
+GLOBAL_INJECT:::Preemptive_Universal_Bypass:::different language linkage|long long int force_align|typedef redefinition with different types|unknown type name '(?:legacy_Acmd|OSThread|ADPCM_STATE|Acmd)':::#ifndef PREEMPTIVE_BYPASS_DEFINED
+#define PREEMPTIVE_BYPASS_DEFINED
+#ifdef __cplusplus
+#define sqrtf gu_sqrtf
+#define sinf gu_sinf
+#define cosf gu_cosf
+#define sqrt gu_sqrt
+#define sin gu_sin
+#define cos gu_cos
+#define Acmd legacy_Acmd
+#define OSThread legacy_OSThread
+#define OSThread_s legacy_OSThread_s
+#define __OSThreadContext legacy___OSThreadContext
+#define OSMesgQueue legacy_OSMesgQueue
+#define OSMesgQueue_s legacy_OSMesgQueue_s
+#define OSMesg legacy_OSMesg
+#define OSContPad legacy_OSContPad
+#define OSContStatus legacy_OSContStatus
+#define OSPiHandle legacy_OSPiHandle
+#define OSPiHandle_s legacy_OSPiHandle_s
+#define OSIoMesg legacy_OSIoMesg
+#define LookAt legacy_LookAt
+#define LookAt_s legacy_LookAt_s
+#define PositionalLight legacy_PositionalLight
+#define Light legacy_Light
+#define Hilite legacy_Hilite
+#define uSprite legacy_uSprite
+#define OSTask legacy_OSTask
+#define CPUState legacy_CPUState
+#define ADPCM_STATE legacy_ADPCM_STATE
+#define ADPCM_INFO legacy_ADPCM_INFO
+extern "C" {
+    typedef struct { int dummy[4]; } legacy_Hilite;
+    typedef struct { int dummy[4]; } legacy_Light;
+    typedef struct { int dummy[4]; } legacy_PositionalLight;
+    typedef struct { int dummy[4]; } legacy_LookAt;
+    typedef struct { int dummy[4]; } legacy_LookAt_s;
+    typedef struct { int dummy[4]; } legacy_uSprite;
+    typedef struct { int dummy[32]; } legacy_OSTask;
+    typedef struct { int dummy[8]; } legacy_ADPCM_STATE;
+    typedef struct { int dummy[8]; } legacy_ADPCM_INFO;
+    typedef struct { int dummy[160]; } legacy_CPUState;
+    #ifdef _ABI_H_
+    #define ABI_WAS_EARLY
+    #endif
+    #include <ultra64.h>
+    #include <PR/os.h>
+    #include <PR/gbi.h>
+    #include <PR/abi.h>
+    #ifdef ABI_WAS_EARLY
+    typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
+    #endif
+    #include <n_abi.h>
+    #include <PR/n_abi.h>
+    #include <PR/sptask.h>
+    #include <PR/ucode.h>
+    #include <PR/gu.h>
+    #include <PR/sched.h>
+    #include <PR/libaudio.h>
+    #define msg n_msg
+    #include <PR/n_libaudio.h>
+    #undef msg
+    #include <PR/mbi.h>
+}
+#undef sqrtf
+#undef sinf
+#undef cosf
+#undef sqrt
+#undef sin
+#undef cos
+#undef Acmd
+#undef OSThread
+#undef OSThread_s
+#undef __OSThreadContext
+#undef OSMesgQueue
+#undef OSMesgQueue_s
+#undef OSMesg
+#undef OSContPad
+#undef OSContStatus
+#undef OSPiHandle
+#undef OSPiHandle_s
+#undef OSIoMesg
+#undef LookAt
+#undef LookAt_s
+#undef PositionalLight
+#undef Light
+#undef Hilite
+#undef uSprite
+#undef OSTask
+#undef CPUState
+#undef ADPCM_STATE
+#undef ADPCM_INFO
+typedef legacy_OSThread OSThread;
+typedef legacy_OSThread_s OSThread_s;
+typedef legacy___OSThreadContext __OSThreadContext;
+typedef legacy_OSMesgQueue OSMesgQueue;
+typedef legacy_OSMesgQueue_s OSMesgQueue_s;
+typedef legacy_OSMesg OSMesg;
+typedef legacy_OSContPad OSContPad;
+typedef legacy_OSContStatus OSContStatus;
+typedef legacy_OSPiHandle OSPiHandle;
+typedef legacy_OSPiHandle_s OSPiHandle_s;
+typedef legacy_OSIoMesg OSIoMesg;
+typedef legacy_Acmd Acmd;
+typedef legacy_LookAt LookAt;
+typedef legacy_LookAt_s LookAt_s;
+typedef legacy_PositionalLight PositionalLight;
+typedef legacy_Light Light;
+typedef legacy_Hilite Hilite;
+typedef legacy_uSprite uSprite;
+typedef legacy_OSTask OSTask;
+typedef legacy_CPUState CPUState;
+typedef legacy_ADPCM_STATE ADPCM_STATE;
+typedef legacy_ADPCM_INFO ADPCM_INFO;
+#endif
+#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 2 — Missing Graphics & System Fallbacks (Pure C / Emulator)
 # ════════════════════════════════════════════════════════════════
 
-# For files that do NOT hit the bypass (pure C files or emulator files without C++ conflicts),
-# they might still need these structs if the SDK is missing them.
-GLOBAL_INJECT:::Inject_GBI_Types_Fallback:::unknown type name '(?:Hilite|Light|PositionalLight|LookAt|uSprite|OSTask|CPUState|ADPCM_STATE|ADPCM_INFO|legacy_Acmd|Acmd)':::#ifndef GBI_TYPES_DEFINED\ntypedef struct { int dummy[4]; } Hilite;\ntypedef struct { int dummy[4]; } Light;\ntypedef struct { int dummy[4]; } PositionalLight;\ntypedef struct { int dummy[4]; } LookAt;\ntypedef struct { int dummy[4]; } uSprite;\ntypedef struct { int dummy[32]; } OSTask;\ntypedef struct { int dummy[160]; } CPUState;\ntypedef struct { int dummy[8]; } ADPCM_STATE;\ntypedef struct { int dummy[8]; } ADPCM_INFO;\ntypedef union { long long int force_align; int dummy[2]; } legacy_Acmd;\ntypedef union { long long int force_align; int dummy[2]; } Acmd;\n#define GBI_TYPES_DEFINED\n#endif
+GLOBAL_INJECT:::Inject_GBI_Types_Fallback:::unknown type name '(?:Hilite|Light|PositionalLight|LookAt|uSprite|OSTask|CPUState|ADPCM_STATE|ADPCM_INFO|legacy_Acmd|Acmd)':::#ifndef GBI_TYPES_DEFINED
+typedef struct { int dummy[4]; } Hilite;
+typedef struct { int dummy[4]; } Light;
+typedef struct { int dummy[4]; } PositionalLight;
+typedef struct { int dummy[4]; } LookAt;
+typedef struct { int dummy[4]; } uSprite;
+typedef struct { int dummy[32]; } OSTask;
+typedef struct { int dummy[160]; } CPUState;
+typedef struct { int dummy[8]; } ADPCM_STATE;
+typedef struct { int dummy[8]; } ADPCM_INFO;
+typedef union { long long int force_align; int dummy[2]; } legacy_Acmd;
+typedef union { long long int force_align; int dummy[2]; } Acmd;
+#define GBI_TYPES_DEFINED
+#endif
 
 # ════════════════════════════════════════════════════════════════
 # SECTION 3 — Common C++ Emulator Stubs & Includes
 # ════════════════════════════════════════════════════════════════
 
-GLOBAL_INJECT:::Inject_Sched_Include:::use of undeclared identifier 'sched_yield':::#include <sched.h>\n
-STUB_INJECT:::Create_CXX_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
+GLOBAL_INJECT:::Inject_Sched_Include:::use of undeclared identifier 'sched_yield':::#include <sched.h>
+
+STUB_INJECT:::Create_CXX_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::extern "C" void \1(void) { /* Stub */ }
