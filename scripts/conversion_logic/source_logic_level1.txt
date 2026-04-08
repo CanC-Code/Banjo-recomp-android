@@ -1,21 +1,35 @@
 # ACTION|NAME|SEARCH_PATTERN|REPLACEMENT
 
-# ─── N64 Primitives ───
-REGEX|Fix_u32|\\bu32\\b|uint32_t
-REGEX|Fix_s32|\\bs32\\b|int32_t
-REGEX|Fix_f32|\\bf32\\b|float
-REGEX|Fix_u16|\\bu16\\b|uint16_t
+# ─── 1. N64 Primitives & Types (Source Files) ───
+HEADER_INJECT|Inject_N64_Types|unknown type name '(Mtx|LookAt|OSPfs|OSIntMask|u32|s32|f32|u8|s8|u16|s16|u64|s64)'|#include "ultra/n64_types.h"
+HEADER_INJECT|Inject_Math|implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs)'|#include <math.h>
+HEADER_INJECT|Inject_String|implicit declaration of function '(memcpy|memset|strlen|strcpy)'|#include <string.h>
 
-# ─── Header Injections ───
-# If the error log contains "unknown type name 'Mtx'", inject the types header
-HEADER_INJECT|Inject_N64_Types|unknown type name 'Mtx'|#include "ultra/n64_types.h"
-HEADER_INJECT|Inject_Math|implicit declaration of function 'sinf'|#include <math.h>
+REGEX|Actor_Pointer_Fix|\)\s*\{|){\n    Actor *actor = (Actor *)this;
+REGEX|Fix_u32_Returns|\bu32\s+([a-zA-Z0-9_]+)\(|uint32_t \1(
+REGEX|Fix_s32_Returns|\bs32\s+([a-zA-Z0-9_]+)\(|int32_t \1(
+REGEX|Fix_f32_Returns|\bf32\s+([a-zA-Z0-9_]+)\(|float \1(
 
-# ─── POSIX Conflict Handling ───
-# Renames 'read' or 'write' if they conflict with static N64 functions
-REGEX|Rename_Read|static (.*) read\\(|static \\1 n64_read\\(
-REGEX|Rename_Write|static (.*) write\\(|static \\1 n64_write\\(
+# ─── 2. POSIX Conflicts ───
+# If the compiler complains about a static declaration of 'read', 'write', 'close', etc.
+POSIX_RENAME|Rename_POSIX_Static|static declaration of '([^']+)' follows non-static|n64_renamed
 
-# ─── Struct Body Injections ───
-# Replicates the N64_STRUCT_BODIES dictionary
-REGEX|Inject_Mtx_Body|typedef struct Mtx_s Mtx;|typedef union {\\n  int32_t i[4][4];\\n  float f[4][4];\\n} Mtx;
+# ─── 3. Global Struct Injections (n64_types.h) ───
+GLOBAL_INJECT|Inject_Mtx|no member named '.*' in 'Mtx'|typedef union { int32_t i[4][4]; float f[4][4]; } Mtx;
+GLOBAL_INJECT|Inject_LookAt|incomplete type 'LookAt'|typedef struct { uint8_t col[3]; uint8_t pad1; uint8_t colc[3]; uint8_t pad2; int8_t dir[3]; uint8_t pad3; } __Light_t; typedef struct { __Light_t l; } __LookAtDir; typedef struct LookAt_s { __LookAtDir l[2]; } LookAt;
+GLOBAL_INJECT|Inject_OSPfs|incomplete type 'OSPfs'|typedef struct OSPfs_s { uint32_t status; uint32_t fileSize; uint32_t initFlag; uint32_t reserved[29]; } OSPfs;
+
+# ─── 4. Global Macro Injections (n64_types.h) ───
+GLOBAL_INJECT|Macro_FTOFRAC|use of undeclared identifier 'FTOFRAC8'|#define FTOFRAC8(x) ((int32_t)((x) * 127.0f) & 0xFF)
+GLOBAL_INJECT|Macro_PHYSICAL_K0|use of undeclared identifier 'OS_K0_TO_PHYSICAL'|#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
+GLOBAL_INJECT|Macro_IM_NONE|use of undeclared identifier 'OS_IM_NONE'|#define OS_IM_NONE 0x0001
+GLOBAL_INJECT|Macro_IM_ALL|use of undeclared identifier 'OS_IM_ALL'|#define OS_IM_ALL 0xFF01
+GLOBAL_INJECT|Macro_G_ZBUFFER|use of undeclared identifier 'G_ZBUFFER'|#define G_ZBUFFER 0x00000001
+GLOBAL_INJECT|Macro_G_SHADE|use of undeclared identifier 'G_SHADE'|#define G_SHADE 0x00000004
+
+# ─── 5. Audio States (n64_types.h) ───
+GLOBAL_INJECT|Audio_RESAMPLE|unknown type name 'RESAMPLE_STATE'|typedef struct RESAMPLE_STATE { long long int force_align[64]; } RESAMPLE_STATE;
+GLOBAL_INJECT|Audio_ENVMIX|unknown type name 'ENVMIX_STATE'|typedef struct ENVMIX_STATE { long long int force_align[64]; } ENVMIX_STATE;
+
+# ─── 6. Stubs Generation (n64_stubs.c) ───
+STUB_INJECT|Create_Stub|undefined reference to `([^']+)'|long long int \1() { return 0; }
