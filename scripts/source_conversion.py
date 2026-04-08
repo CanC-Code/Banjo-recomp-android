@@ -9,28 +9,29 @@ class SourceConverter:
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
-    def load_logic(self, target_level):
-        """Loads all rules cumulatively from Level 1 up to target_level."""
+    def load_logic(self):
+        """Dynamically loads all rules from any file matching 'source_logic*.txt' in the logic directory."""
         self.rules = []
-        # Loop through all levels from 1 to the current target
-        for level in range(1, target_level + 1):
-            pattern = os.path.join(self.logic_dir, f"source_logic_level{level}.txt")
-            found_files = glob.glob(pattern)
-            
-            for logic_file in found_files:
-                with open(logic_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            parts = line.split(':::')
-                            if len(parts) >= 4:
-                                self.rules.append({
-                                    "action": parts[0],
-                                    "name": parts[1],
-                                    "search": parts[2],
-                                    "replace": parts[3].replace("\\n", "\n")
-                                })
-        print(f"--- Logic Loaded: {len(self.rules)} rules active (Levels 1-{target_level}) ---")
+        
+        # Search for any file starting with 'source_logic' and ending in '.txt'
+        pattern = os.path.join(self.logic_dir, "source_logic*.txt")
+        found_files = glob.glob(pattern)
+        
+        for logic_file in found_files:
+            with open(logic_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parts = line.split(':::')
+                        if len(parts) >= 4:
+                            self.rules.append({
+                                "action": parts[0],
+                                "name": parts[1],
+                                "search": parts[2],
+                                "replace": parts[3].replace("\\n", "\n")
+                            })
+                            
+        print(f"--- Logic Loaded: {len(self.rules)} rules active across {len(found_files)} logic file(s) ---")
 
     def apply_to_file(self, file_path, error_context=""):
         if not os.path.exists(file_path): return 0
@@ -117,4 +118,4 @@ class SourceConverter:
             os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
             with open(self.types_header, 'w') as f:
                 f.write("#pragma once\n#include <stdint.h>\n")
-                # ... standard typedefs ...
+                f.write("typedef uint8_t u8;\ntypedef int8_t s8;\ntypedef uint16_t u16;\ntypedef int16_t s16;\ntypedef uint32_t u32;\ntypedef int32_t s32;\ntypedef uint64_t u64;\ntypedef int64_t s64;\ntypedef float f32;\ntypedef double f64;\n")
