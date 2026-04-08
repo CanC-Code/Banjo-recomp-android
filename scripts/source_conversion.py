@@ -6,21 +6,17 @@ class SourceConverter:
     def __init__(self, logic_dir="scripts/conversion_logic"):
         self.logic_dir = logic_dir
         self.rules = []
-        # Normalizing paths to ensure string comparisons work correctly
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
     def bootstrap_n64_types(self):
         """Ensures the global types header exists and has primitives at the very top."""
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
-
         content = ""
         if os.path.exists(self.types_header):
             with open(self.types_header, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-        # Standard N64/Libultra primitive definitions. 
-        # These are the foundations of the recompilation.
         primitives = (
             "#pragma once\n"
             "#include <stdint.h>\n"
@@ -37,8 +33,6 @@ class SourceConverter:
             "typedef int32_t n64_bool;\n\n"
         )
 
-        # Prepend primitives if f32 is missing to ensure system headers compile.
-        # This is a critical safety net for headers like time.h or sched.h.
         if "typedef float f32;" not in content:
             with open(self.types_header, 'w', encoding='utf-8') as f:
                 f.write(primitives + content)
@@ -69,9 +63,8 @@ class SourceConverter:
         """Applies loaded conversion rules to a specific file based on error context."""
         if not os.path.exists(file_path): return 0
 
-        # SAFETY: Protect the bootstrap header. 
-        # If we run regex rules like 'f64' -> 'double' on n64_types.h, 
-        # it creates 'typedef double double', which breaks the whole build.
+        # CRITICAL: Prevent the converter from mangling its own bootstrap header
+        # This stops f64 -> double regexes from creating 'typedef double double;'
         if "n64_types.h" in file_path:
             return 0
 
@@ -84,21 +77,15 @@ class SourceConverter:
 
         for rule in self.rules:
             try:
-                # REGEX: standard text replacement within the source file.
-                # Used for primitive swapping and structural reformatting.
                 if rule["action"] == "REGEX":
                     new_content, count = re.subn(rule["search"], rule["replace"], content)
                     if count > 0:
                         content = new_content
                         changes += count
-
-                # HEADER_INJECT: Inserts an #include if a specific error is seen.
                 elif rule["action"] == "HEADER_INJECT":
                     if re.search(rule["search"], error_context) and rule["replace"] not in content:
                         content = f"{rule['replace']}\n{content}"
                         changes += 1
-
-                # POSIX_RENAME: Resolves name collisions (like 'round') by namespacing.
                 elif rule["action"] == "POSIX_RENAME":
                     match = re.search(rule["search"], error_context)
                     if match:
@@ -111,9 +98,6 @@ class SourceConverter:
                             idx = includes[-1].end() if includes else 0
                             content = content[:idx] + define + content[idx:]
                             changes += 1
-
-                # GLOBAL_INJECT: Writes structs/macros to the global n64_types.h.
-                # This build the environment incrementally as types are discovered.
                 elif rule["action"] == "GLOBAL_INJECT":
                     if re.search(rule["search"], error_context):
                         types_content = ""
@@ -123,14 +107,10 @@ class SourceConverter:
                             with open(self.types_header, 'a') as tf:
                                 tf.write(f"\n{rule['replace']}\n")
                             changes += 1
-
-                # STUB_INJECT: Creates empty function stubs in n64_stubs.c.
-                # Helps bypass missing link-time symbols during the iterative build.
                 elif rule["action"] == "STUB_INJECT":
                     match = re.search(rule["search"], error_context)
                     if match:
                         sym = match.group(1)
-                        # Avoid stubbing C++ mangled names or vtables
                         if not sym.startswith("_Z") and "vtable" not in sym:
                             stubs_content = ""
                             if os.path.exists(self.stubs_file):
@@ -140,7 +120,6 @@ class SourceConverter:
                                 with open(self.stubs_file, 'a') as sf:
                                     sf.write(f"{stub_func}\n")
                                 changes += 1
-
             except re.error as e:
                 print(f"    ⚠️ Regex Error in [{rule['name']}]: {e}")
                 continue 
@@ -149,5 +128,4 @@ class SourceConverter:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             print(f"    ✨ Fixed {changes} issue(s) in {os.path.basename(file_path)}")
-
         return changes
