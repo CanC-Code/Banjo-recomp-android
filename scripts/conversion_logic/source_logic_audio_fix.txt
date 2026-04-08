@@ -1,0 +1,19 @@
+# ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
+# Format: ACTION:::NAME:::SEARCH_OR_ERROR_PATTERN:::REPLACEMENT_OR_INJECTION
+# Delimiter is ::: to avoid collisions with regex pipe | characters.
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 1 — Audio Handler Signature Fix
+# ════════════════════════════════════════════════════════════════
+
+# This targets the specific signature needed for the BK audio driver.
+# It replaces the standard 1-arg handler with the 5-arg version found in the error logs.
+GLOBAL_INJECT:::Inject_ALFilter_Fixed_Signature:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types:::#ifndef AL_FILTER_DEFINED\ntypedef struct ALFilter_s { struct ALFilter_s *source; void (*handler)(void *, int32_t *, int32_t, int32_t, int32_t); int32_t (*setParam)(struct ALFilter_s *, int32_t, void *); int16_t type; int16_t unk; } ALFilter;\n#define AL_FILTER_DEFINED\n#endif
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 2 — Header Sanitization (The "Hammer" Rule)
+# ════════════════════════════════════════════════════════════════
+
+# If synthInternals.h is still causing "redefinition" errors, this rule
+# will comment out its internal definition to force the use of our global one.
+REGEX:::Sanitize_SynthInternals:::typedef struct ALFilter_s\s*\{[^}]*\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
