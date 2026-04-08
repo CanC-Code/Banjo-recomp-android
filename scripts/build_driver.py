@@ -2,13 +2,16 @@ import os
 import subprocess
 import time
 import re
+# Import the new modular converter
+from source_conversion import SourceConverter
+# Keep existing utility imports
 from error_parser import classify_errors, generate_failed_log, generate_error_summary, read_file
-from patch_engine import apply_fixes
 
+# --- Environment Configuration ---
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
-# Fallback Gradle command if Ninja cannot be located
+# Gradle configuration for Android build
 GRADLE_CMD = [
     "gradle", "-p", "Android", "assembleDebug",
     "--console=plain", "--max-workers=1", "--no-daemon",
@@ -23,13 +26,13 @@ MAX_STALL       = 5
 PHASE_SHIFT_STALL = 2
 
 def strip_ansi(text):
+    """Removes terminal color codes from logs."""
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
 
 def get_ninja_cmd():
-    """Attempts to locate the dynamic Ninja build directory to skip Gradle overhead."""
+    """Attempts to locate the Ninja build directory to skip Gradle overhead."""
     base_dir = "Android/app/.cxx/Debug"
     if os.path.exists(base_dir):
-        # Scan for the generated CMake hash directory
         for hash_dir in os.listdir(base_dir):
             ninja_dir = os.path.join(base_dir, hash_dir, "arm64-v8a")
             if os.path.exists(os.path.join(ninja_dir, "build.ninja")):
@@ -41,10 +44,12 @@ def get_ninja_cmd():
     return GRADLE_CMD
 
 def run_build():
+    """Executes the build command and streams logs to file and console."""
     cmd = get_ninja_cmd()
     tool_name = "Ninja" if "ninja" in cmd[0] else "Gradle"
     print(f"\n🚀 Starting Build Cycle via {tool_name}...")
     os.makedirs("Android", exist_ok=True)
+    
     with open(LOG_FILE, "w") as log:
         try:
             process = subprocess.Popen(
@@ -63,58 +68,69 @@ def run_build():
 def main():
     stall_count = 0
     intelligence_level = 1
-    
-    # Ensure manifest file exists
+    converter = SourceConverter()
+
+    # Ensure manifest file exists to track progress
     os.makedirs("Android", exist_ok=True)
     if not os.path.exists(MANIFEST_FILE):
         open(MANIFEST_FILE, 'w').close()
 
-    for i in range(1, 400):  # Expanded range to allow for deeper compiling
+    for i in range(1, 401):  # Loop through cycles
         print(f"\n{'='*40}\n--- Cycle {i} | Intelligence Level: {intelligence_level} ---\n{'='*40}")
 
+        # Attempt to build
         if run_build():
-            print("\n✅ Build Successful!")
+            print("\n✅ Build Successful! Target APK generated.")
             if os.path.exists(FAILED_LOG_FILE): os.remove(FAILED_LOG_FILE)
             return
 
+        # If build fails, analyze the logs
         if not os.path.exists(LOG_FILE): 
             print("❌ No log file found, stopping.")
             break
 
         log_data = read_file(LOG_FILE)
-
-        # Step 1: Parse the errors
-        categories = classify_errors(log_data)
         failed_files = generate_failed_log(log_data, FAILED_LOG_FILE)
 
-        # Phase Shift Logic: Upgrade intelligence if stuck at Level 1
+        # Logic Level Management (Phase Shift)
         if stall_count >= PHASE_SHIFT_STALL and intelligence_level == 1:
             print("\n🧠 Leveling up intelligence... Transitioning to Level 2 (Advanced I/O & Structs).")
             intelligence_level = 2
-            stall_count = 0  # Reset stall count for the new phase
-            
-        # Step 2: Apply the fixes with our current intelligence state
-        # Note: We are now passing `intelligence_level` to the patch engine.
-        fixes, fixed_files = apply_fixes(categories, intelligence_level)
+            stall_count = 0 
 
-        if fixes == 0:
+        # Load the rules defined in external text files
+        converter.load_logic(intelligence_level)
+        
+        total_fixes_this_cycle = 0
+        files_affected = set()
+
+        # Apply fixes ONLY to files currently causing build failures
+        if failed_files:
+            print(f"🧐 Targeting {len(failed_files)} failing file(s)...")
+            for file_path in failed_files:
+                fixes_applied = converter.apply_to_file(file_path)
+                if fixes_applied > 0:
+                    total_fixes_this_cycle += fixes_applied
+                    files_affected.add(file_path)
+
+        # Handle stalling
+        if total_fixes_this_cycle == 0:
             generate_error_summary(log_data)
             stall_count += 1
-            print(f"\n⚠️  No fixable patterns this cycle. Stall count: {stall_count}/{MAX_STALL}")
-            if failed_files: print(f"   {len(failed_files)} file(s) still failing — see {FAILED_LOG_FILE}")
+            print(f"\n⚠️  No fixable patterns found. Stall count: {stall_count}/{MAX_STALL}")
             
             if stall_count >= MAX_STALL:
-                print(f"\n🛑 Loop halted after {MAX_STALL} consecutive stall cycles at Max Intelligence.")
+                print(f"\n🛑 Loop halted: No matching logic in Level {intelligence_level} for these errors.")
                 break
         else:
-            print(f"\n  ✅ Applied {fixes} fix(es) across {len(fixed_files)} source file(s) this cycle.")
+            print(f"\n✨ Applied {total_fixes_this_cycle} fix(es) across {len(files_affected)} file(s).")
             
-            # Lock in fixed files
+            # Log progress to manifest
             with open(MANIFEST_FILE, "a") as mf:
-                for f in fixed_files:
-                    mf.write(f"{f}\n")
-                    
-            stall_count = 0
+                for f in files_affected:
+                    mf.write(f"Cycle {i}: Fixed {f}\n")
+            
+            stall_count = 0 # Reset stall on success
 
         time.sleep(1)
 
