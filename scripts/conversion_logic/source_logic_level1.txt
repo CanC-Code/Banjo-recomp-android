@@ -1,14 +1,26 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
 # ─── 1. N64 Primitives & Types (Source Files) ───
-HEADER_INJECT:::Inject_N64_Types:::unknown type name '(Mtx|LookAt|OSPfs|OSIntMask|u32|s32|f32|u8|s8|u16|s16|u64|s64)':::#include "ultra/n64_types.h"
+HEADER_INJECT:::Inject_N64_Types:::unknown type name '(Mtx|LookAt|OSPfs|OSIntMask)':::#include "ultra/n64_types.h"
 HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|abs|fabs)':::#include <math.h>
 HEADER_INJECT:::Inject_String:::implicit declaration of function '(memcpy|memset|strlen|strcpy)':::#include <string.h>
 
+# Ensure stdint.h is present if POSIX standard int types are missing
+HEADER_INJECT:::Inject_StdInt:::unknown type name '(int32_t|uint32_t|int16_t|uint16_t|int8_t|uint8_t|int64_t|uint64_t)':::#include <stdint.h>
+
+# Direct regex replacements for primitive types to avoid circular header dependencies!
+REGEX:::Replace_u32:::\bu32\b:::uint32_t
+REGEX:::Replace_s32:::\bs32\b:::int32_t
+REGEX:::Replace_f32:::\bf32\b:::float
+REGEX:::Replace_u16:::\bu16\b:::uint16_t
+REGEX:::Replace_s16:::\bs16\b:::int16_t
+REGEX:::Replace_u8:::\bu8\b:::uint8_t
+REGEX:::Replace_s8:::\bs8\b:::int8_t
+REGEX:::Replace_u64:::\bu64\b:::uint64_t
+REGEX:::Replace_s64:::\bs64\b:::int64_t
+
+# Fixes C++ "this" pointers trying to act as Actor pointers
 REGEX:::Actor_Pointer_Fix:::\)\s*\{:::){ \n    Actor *actor = (Actor *)this;
-REGEX:::Fix_u32_Returns:::\bu32\s+([a-zA-Z0-9_]+)\(:::uint32_t \1(
-REGEX:::Fix_s32_Returns:::\bs32\s+([a-zA-Z0-9_]+)\(:::int32_t \1(
-REGEX:::Fix_f32_Returns:::\bf32\s+([a-zA-Z0-9_]+)\(:::float \1(
 
 # ─── 2. POSIX Conflicts ───
 POSIX_RENAME:::Rename_POSIX_Static:::static declaration of '([^']+)' follows non-static:::n64_renamed
