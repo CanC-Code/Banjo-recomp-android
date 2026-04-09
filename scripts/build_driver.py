@@ -1,9 +1,3 @@
-"""
-build_driver.py — Self-healing build driver for the BK AArch64 Android port.
-This orchestrates the SourceConverter to dynamically parse error logs,
-inject structs, resolve POSIX conflicts, and bootstrap SDK types.
-"""
-
 import os
 import subprocess
 import time
@@ -12,11 +6,9 @@ from source_conversion import SourceConverter
 from error_parser import generate_failed_log, generate_error_summary, read_file
 
 # --- Environment Configuration ---
-# Force single-threaded building to ensure logs are linear and easy to parse
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
-# Gradle configuration for Android build
 GRADLE_CMD = [
     "gradle", "-p", "Android", "assembleDebug",
     "--console=plain", "--max-workers=1", "--no-daemon",
@@ -30,35 +22,24 @@ MANIFEST_FILE   = "Android/fixed_files.log"
 MAX_STALL       = 5
 
 def strip_ansi(text):
-    """Removes terminal color codes from logs to prevent parsing errors."""
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
 
 def get_ninja_cmd():
-    """Attempts to locate the Ninja build directory to skip Gradle overhead on retries."""
     base_dir = "Android/app/.cxx/Debug"
     if os.path.exists(base_dir):
         for hash_dir in os.listdir(base_dir):
             ninja_dir = os.path.join(base_dir, hash_dir, "arm64-v8a")
             if os.path.exists(os.path.join(ninja_dir, "build.ninja")):
-                return [
-                    "/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja",
-                    "-C", ninja_dir,
-                    "bkawrapper"
-                ]
+                return ["/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja", "-C", ninja_dir, "bkawrapper"]
     return GRADLE_CMD
 
 def run_build():
-    """Executes the build command and streams logs to file and console."""
     cmd = get_ninja_cmd()
-    tool_name = "Ninja" if "ninja" in cmd[0] else "Gradle"
-    print(f"\n🚀 Starting Build Cycle via {tool_name}...")
+    print(f"\n🚀 Starting Build Cycle...")
     os.makedirs("Android", exist_ok=True)
-
     with open(LOG_FILE, "w") as log:
         try:
-            process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for line in process.stdout:
                 clean_line = strip_ansi(line)
                 log.write(clean_line)
@@ -73,63 +54,39 @@ def main():
     stall_count = 0
     converter = SourceConverter()
 
-    # Ensure manifest file exists to track which files have been modified
-    os.makedirs("Android", exist_ok=True)
-    if not os.path.exists(MANIFEST_FILE):
-        open(MANIFEST_FILE, 'w').close()
-
+    # --- CRITICAL: HARD RESET FOR CYCLE 1 ---
+    # This ensures we start with a clean Master Shield v24 and no "Layer Cake" header.
+    print("🧹 Performing Initial Cleanse...")
+    converter.bootstrap_n64_types(clear_existing=True) 
+    
     for cycle in range(1, 401): 
         print(f"\n{'='*40}\n--- Cycle {cycle} ---\n{'='*40}")
 
-        # BOOTSTRAP PHASE: Injects core primitives into the types header before build.
-        # This resolves issues where headers like time.h require f32/s32 types.
-        if hasattr(converter, 'bootstrap_n64_types'):
-            converter.bootstrap_n64_types()
+        # Ensure the header is initialized (won't clear after Cycle 1)
+        converter.bootstrap_n64_types(clear_existing=False)
 
-        # Compilation phase
         if run_build():
-            print("\n✅ Build Successful! Target APK generated.")
-            if os.path.exists(FAILED_LOG_FILE): os.remove(FAILED_LOG_FILE)
+            print("\n✅ Build Successful!")
             return
-
-        # Failure analysis phase
-        if not os.path.exists(LOG_FILE): 
-            print("❌ No log file found, stopping.")
-            break
 
         log_data = read_file(LOG_FILE)
         failed_files = generate_failed_log(log_data, FAILED_LOG_FILE)
-
-        # Dynamic logic loading: Picks up rules from source_logic*.txt
         converter.load_logic()
 
         total_fixes_this_cycle = 0
-        files_affected = set()
-
         if failed_files:
-            print(f"🧐 Targeting {len(failed_files)} failing file(s)...")
             for file_path in failed_files:
+                # We pass the log_data so GLOBAL_INJECT can find the Master Shield triggers
                 fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
-                if fixes_applied > 0:
-                    total_fixes_this_cycle += fixes_applied
-                    files_affected.add(file_path)
+                total_fixes_this_cycle += fixes_applied
 
-        # Stalling logic
         if total_fixes_this_cycle == 0:
-            generate_error_summary(log_data)
             stall_count += 1
-            print(f"\n⚠️  No fixable patterns found. Stall count: {stall_count}/{MAX_STALL}")
-
             if stall_count >= MAX_STALL:
-                print(f"\n🛑 Loop halted: Build logic exhausted.")
+                print(f"\n🛑 Loop halted: No fixable patterns found.")
                 break
         else:
-            print(f"\n✨ Applied {total_fixes_this_cycle} fix(es) across {len(files_affected)} file(s).")
-            with open(MANIFEST_FILE, "a") as mf:
-                for f in files_affected:
-                    mf.write(f"Cycle {cycle}: Fixed {f}\n")
             stall_count = 0 
-
         time.sleep(1)
 
 if __name__ == "__main__":
