@@ -1,35 +1,11 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Audio Structural Sync (The "Golden" Definition)
-# ════════════════════════════════════════════════════════════════
-
-# Resolves: "incomplete type 'struct ALFilter_s'" and "unknown type name 'ALCmdHandler'"
-# Uses the v14 standard for 64-bit alignment and hardware fidelity.
-GLOBAL_INJECT:::Inject_Audio_Full_Sync:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types|unknown type name 'ALCmdHandler':::#ifndef AL_AUDIO_SYNC_DEFINED\n#define AL_AUDIO_SYNC_DEFINED\n#include <stdint.h>\n\n// One True Acmd: Union for 64-bit alignment\n#ifndef ACMD_DEFINED\n  typedef union { long long int force_align; uint32_t words[2]; } Acmd;\n  #define ACMD_DEFINED\n#endif\n\ntypedef Acmd* (*ALCmdHandler)(void *, int16_t *, int32_t, int32_t, Acmd *);\ntypedef int32_t (*ALSetParam)(void *, int32_t, void *);\n\ntypedef struct ALFilter_s {\n    struct ALFilter_s *source;\n    ALCmdHandler handler;\n    ALSetParam setParam;\n    int16_t inp;\n    int16_t outp;\n    int32_t type;\n} ALFilter;\n\n#define AL_FILTER_DEFINED\n#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 2 — Header Sanitization (The "Conflict Hammer")
-# ════════════════════════════════════════════════════════════════
-
-# These rules aggressively comment out SDK-provided definitions so 
-# that our Global Injection in n64_types.h is the only version the compiler sees.
-
-# Strips ALFilter from SDK headers
-REGEX:::Sanitize_Audio_Blocks:::typedef struct (?:ALFilter_s\s*)?\{[\s\S]*?\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
-
-# Strips handler typedefs that clash with our global handler definitions
-REGEX:::Sanitize_Audio_Typedefs:::typedef (?:Acmd\s*\*|s32|int32_t)\s*\(\*(?:ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
-
-# Prevents 'redefinition as different kind of symbol' for Acmd in gbi.h/libaudio.h
-REGEX:::Sanitize_SDK_Acmd:::typedef (?:struct|union)\s*\{[\s\S]*?\}\s*Acmd;:::/* Handled by global n64_types.h */
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 3 — Audio Driver Components
+# SECTION 1 — Audio Driver Components
 # ════════════════════════════════════════════════════════════════
 
 # Resolves: "incomplete definition of type 'struct PVoice_s'" 
-GLOBAL_INJECT:::Inject_PVoice_Definition_Fix:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; void* stack_ptr; int32_t dummy_padding[64]; } PVoice;\n#define PVOICE_DEFINED\n#endif
+GLOBAL_INJECT:::Inject_PVoice_Definition_Fix:::incomplete definition of type 'struct PVoice_s':::#ifndef PVOICE_DEFINED\ntypedef struct PVoice_s { int32_t offset; void* stack_ptr; long long int force_align[16]; } PVoice;\n#define PVOICE_DEFINED\n#endif
 
 # Resolves missing Audio Task types
 GLOBAL_INJECT:::Inject_AudioTask_Fix:::unknown type name 'N64AudioTask':::typedef struct { int dummy; } N64AudioTask;
