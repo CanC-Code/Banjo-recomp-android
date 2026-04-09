@@ -1,40 +1,6 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 1 — Audio Driver Structural Sync
-# ════════════════════════════════════════════════════════════════
-
-# Resolves: "incomplete type 'struct ALFilter_s'" and "unknown type name 'ALCmdHandler'"
-# Note: Acmd definition is now handled globally by the Master Shield (File 3).
-GLOBAL_INJECT:::Inject_Audio_Full_Sync:::incomplete type 'struct ALFilter_s'|typedef redefinition with different types|unknown type name 'ALCmdHandler':::#ifndef AL_AUDIO_SYNC_DEFINED\n#define AL_AUDIO_SYNC_DEFINED\n#include <stdint.h>\n\ntypedef Acmd* (*ALCmdHandler)(void *, int16_t *, int32_t, int32_t, Acmd *);\ntypedef int32_t (*ALSetParam)(void *, int32_t, void *);\n\ntypedef struct ALFilter_s {\n    struct ALFilter_s *source;\n    ALCmdHandler handler;\n    ALSetParam setParam;\n    int16_t inp;\n    int16_t outp;\n    int32_t type;\n} ALFilter;\n\n#define AL_FILTER_DEFINED\n#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 2 — Game-Specific Actor & Object Types (BK Core)
-# ════════════════════════════════════════════════════════════════
-
-# Resolves: "unknown type name 'Actor'"
 GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
-# Resolves: "unknown type name 'sChVegetable'" and missing coordinate members.
-GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable'|no member named '(?:vegetable_type|unk0_x|unk0_y|unk0_z)' in 'struct sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable {\n    int32_t vegetable_type;\n    float unk0_x;\n    float unk0_y;\n    float unk0_z;\n    int32_t dummy_padding[64];\n} sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
+GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable'|no member named '(?:vegetable_type|unk0_x|unk0_y|unk0_z)' in 'struct sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable {\n    int32_t vegetable_type;\n    float unk0_x, unk0_y, unk0_z;\n    int32_t dummy_padding[64];\n} sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
 
-# ════════════════════════════════════════════════════════════════
-# SECTION 3 — Header Sanitization (The "Conflict Hammer")
-# ════════════════════════════════════════════════════════════════
-
-# Strips local definitions that would clash with our global n64_types.h
-REGEX:::Sanitize_Audio_Blocks:::typedef struct (?:ALFilter_s\s*)?\{[\s\S]*?\}\s*ALFilter;:::/* Definition moved to global n64_types.h */
-
-REGEX:::Sanitize_Audio_Typedefs:::typedef (?:Acmd\s*\*|s32|int32_t)\s*\(\*(?:ALCmdHandler|ALSetParam)\)\([^)]*\);:::/* Typedef moved to global n64_types.h */
-
-REGEX:::Sanitize_GBI_Acmd:::typedef (?:struct|union)\s*\{[\s\S]*?\}\s*Acmd;:::/* Redefinition handled by n64_types.h */
-
-REGEX:::Sanitize_Local_Vegetable:::typedef struct sChVegetable\s*\{[\s\S]*?\}\s*sChVegetable;:::/* Redefinition handled by n64_types.h */
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 4 — Linkage & Symbol Stubs
-# ════════════════════════════════════════════════════════════════
-
-POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
-
-STUB_INJECT:::Create_General_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
+REGEX:::Sanitize_Local_Vegetable:::typedef struct sChVegetable\s*\{[\s\S]*?\}\s*sChVegetable;:::/* Handled by n64_types.h */
