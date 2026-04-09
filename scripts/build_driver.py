@@ -19,6 +19,7 @@ GRADLE_CMD = [
 LOG_FILE        = "Android/full_build_log.txt"
 FAILED_LOG_FILE = "Android/failed_files.log"
 MANIFEST_FILE   = "Android/fixed_files.log"
+TYPES_HEADER    = "Android/app/src/main/cpp/ultra/n64_types.h"
 MAX_STALL       = 5
 
 def strip_ansi(text):
@@ -54,16 +55,14 @@ def main():
     stall_count = 0
     converter = SourceConverter()
 
-    # --- CRITICAL: HARD RESET FOR CYCLE 1 ---
-    # This ensures we start with a clean Master Shield v24 and no "Layer Cake" header.
     print("🧹 Performing Initial Cleanse...")
     converter.bootstrap_n64_types(clear_existing=True) 
-    
+
+    # FIX 1: Load logic ONCE before the loop starts to prevent rule duplication
+    converter.load_logic()
+
     for cycle in range(1, 401): 
         print(f"\n{'='*40}\n--- Cycle {cycle} ---\n{'='*40}")
-
-        # Ensure the header is initialized (won't clear after Cycle 1)
-        converter.bootstrap_n64_types(clear_existing=False)
 
         if run_build():
             print("\n✅ Build Successful!")
@@ -71,14 +70,21 @@ def main():
 
         log_data = read_file(LOG_FILE)
         failed_files = generate_failed_log(log_data, FAILED_LOG_FILE)
-        converter.load_logic()
-
+        
         total_fixes_this_cycle = 0
         if failed_files:
-            for file_path in failed_files:
-                # We pass the log_data so GLOBAL_INJECT can find the Master Shield triggers
-                fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
+            # FIX 2: Safely handle GLOBAL_INJECT routing for the Master Shield
+            # If the log contains Master Shield triggers, explicitly update the header
+            if re.search(r"unknown type name '(?:OSMesg|OSTime|f32|Mtx|Gfx|ALFilter)'|undeclared identifier 'm'", log_data):
+                print("🛡️ Master Shield Trigger Detected: Routing to n64_types.h")
+                fixes_applied = converter.apply_to_file(TYPES_HEADER, error_context=log_data)
                 total_fixes_this_cycle += fixes_applied
+
+            # Apply standard file-specific fixes
+            for file_path in failed_files:
+                if file_path != TYPES_HEADER: # Prevent double-processing
+                    fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
+                    total_fixes_this_cycle += fixes_applied
 
         if total_fixes_this_cycle == 0:
             stall_count += 1
