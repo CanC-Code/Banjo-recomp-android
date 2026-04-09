@@ -2,5 +2,3 @@
 GLOBAL_INJECT:::Inject_Actor_Forward:::unknown type name 'Actor':::typedef struct Actor Actor;
 
 GLOBAL_INJECT:::Inject_sChVegetable:::unknown type name 'sChVegetable'|no member named '(?:vegetable_type|unk0_x|unk0_y|unk0_z)' in 'struct sChVegetable':::#ifndef VEGETABLE_DEFINED\ntypedef struct sChVegetable {\n    int32_t vegetable_type;\n    float unk0_x, unk0_y, unk0_z;\n    int32_t dummy_padding[64];\n} sChVegetable;\n#define VEGETABLE_DEFINED\n#endif
-
-REGEX:::Sanitize_Local_Vegetable:::typedef struct sChVegetable\s*\{[\s\S]*?\}\s*sChVegetable;:::/* Handled by n64_types.h */
