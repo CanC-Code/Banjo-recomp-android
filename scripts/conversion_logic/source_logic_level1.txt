@@ -1,4 +1,8 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 1 — Core Primitive Token Replacement
+# ════════════════════════════════════════════════════════════════
 REGEX:::Fix_u8:::\bu8\b:::uint8_t
 REGEX:::Fix_s8:::\bs8\b:::int8_t
 REGEX:::Fix_u16:::\bu16\b:::uint16_t
@@ -10,5 +14,8 @@ REGEX:::Fix_s64:::\bs64\b:::int64_t
 REGEX:::Fix_f32:::\bf32\b:::float
 REGEX:::Fix_f64:::\bf64\b:::double
 
+# ════════════════════════════════════════════════════════════════
+# SECTION 2 — Linkage & Stubs
+# ════════════════════════════════════════════════════════════════
 POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
 STUB_INJECT:::Create_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
