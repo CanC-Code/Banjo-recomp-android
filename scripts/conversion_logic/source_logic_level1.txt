@@ -3,7 +3,6 @@
 # ════════════════════════════════════════════════════════════════
 # SECTION 1 — Core Primitive Type Replacements (Inline REGEX)
 # ════════════════════════════════════════════════════════════════
-# These remain as a secondary safety net for the bootstrap primitives
 REGEX:::Fix_u8:::\bu8\b:::uint8_t
 REGEX:::Fix_s8:::\bs8\b:::int8_t
 REGEX:::Fix_u16:::\bu16\b:::uint16_t
@@ -22,37 +21,12 @@ HEADER_INJECT:::Inject_StdInt:::unknown type name '(uint32_t|int32_t|uint16_t|in
 HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|fabsf?|atan2f?)':::#include <math.h>
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 3 — The Universal Preemptive Shield (Bulletproof Integration)
+# SECTION 3 — Early OS Type Injection (Base Foundation)
 # ════════════════════════════════════════════════════════════════
-# This rule intercepts the "First Contact" errors and sets up the SDK Hiding logic.
-GLOBAL_INJECT:::Universal_Shield_Base:::different language linkage|unknown type name '(?:OSThread|OSMesgQueue|Mtx|Gfx|Acmd)':::#ifndef PREEMPTIVE_SHIELD_H\n#define PREEMPTIVE_SHIELD_H\n\n#ifdef __cplusplus\n#include <cmath>\n// HIDE SDK TYPES: Rename SDK versions so they don't clash with ours\n#define OSThread __SDK_OSThread\n#define OSMesgQueue __SDK_OSMesgQueue\n#define Vp __SDK_Vp\n#define Mtx __SDK_Mtx\n#define Gfx __SDK_Gfx\n#define LookAt __SDK_LookAt\nextern "C" {\n#endif\n\n    // Forward-declare renmaned SDK types\n    typedef struct __SDK_OSThread_s __SDK_OSThread;\n    typedef struct __SDK_Mtx_s __SDK_Mtx;\n\n    #include <ultra64.h>\n    #include <PR/os.h>\n    #include <PR/gbi.h>\n\n#ifdef __cplusplus\n} // end extern \"C\"\n#undef OSThread\n#undef OSMesgQueue\n#undef Vp\n#undef Mtx\n#undef Gfx\n#undef LookAt\n#endif\n#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 4 — Hardware & OS Type Injections (High Fidelity)
-# ════════════════════════════════════════════════════════════════
-
-# Resolves .m and .words access errors in graphics bridge
-GLOBAL_INJECT:::Inject_Mtx:::unknown type name 'Mtx':::#ifndef MTX_DEFINED\ntypedef union { long long int m[8]; long long int force_align; } Mtx;\n#define MTX_DEFINED\n#endif
-
-GLOBAL_INJECT:::Inject_Gfx:::unknown type name 'Gfx':::#ifndef GFX_DEFINED\ntypedef struct { uint32_t words[2]; } Gfx;\n#define GFX_DEFINED\n#endif
-
-GLOBAL_INJECT:::Inject_Acmd:::unknown type name 'Acmd':::#ifndef ACMD_DEFINED\ntypedef union { uint32_t words[2]; long long int force_align; } Acmd;\n#define ACMD_DEFINED\n#endif
-
-# Resolves .priority, .t, and .fp errors in threading/exceptions
-GLOBAL_INJECT:::Inject_OSThread:::unknown type name 'OSThread':::#ifndef OSTHREAD_DEFINED\ntypedef struct OSThread_s {\n    struct OSThread_s *next;\n    int priority;\n    void *queue;\n    void *context;\n    unsigned long long t;\n    void *fp;\n} OSThread, OSThread_s;\n#define OSTHREAD_DEFINED\n#endif
-
-GLOBAL_INJECT:::Inject_OSMesgQueue:::unknown type name 'OSMesgQueue':::#ifndef OSMESGQ_DEFINED\ntypedef struct OSMesgQueue_s {\n    void *eventMgr;\n    void *mq;\n    int validCount;\n    int first;\n    int msgCount;\n} OSMesgQueue;\n#define OSMESGQ_DEFINED\n#endif
-
-# ── 4b. Controller & Input ─────────────────────────────────────
-GLOBAL_INJECT:::Inject_OSContPad:::unknown type name 'OSContPad':::#ifndef OSCONTPAD_DEFINED\ntypedef struct { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; } OSContPad;\n#define OSCONTPAD_DEFINED\n#endif
+GLOBAL_INJECT:::Inject_Base_OS_Types:::unknown type name '(?:OSId|OSTime|OSPri|OSMesg|n64_bool)':::#ifndef BASE_OS_TYPES_H\n#define BASE_OS_TYPES_H\n#include <stdint.h>\ntypedef int32_t OSId;\ntypedef uint64_t OSTime;\ntypedef int32_t OSPri;\ntypedef void* OSMesg;\ntypedef int32_t n64_bool;\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 5 — Macro & Constant Injections
+# SECTION 4 — Linkage & Stubs
 # ════════════════════════════════════════════════════════════════
-GLOBAL_INJECT:::Macro_PHYSICAL:::use of undeclared identifier 'OS_K0_TO_PHYSICAL':::#define OS_K0_TO_PHYSICAL(x) ((uint32_t)(x) & 0x1FFFFFFF)
-GLOBAL_INJECT:::Macro_OS_MESG:::use of undeclared identifier 'OS_MESG_BLOCK':::#define OS_MESG_NOBLOCK 0\n#define OS_MESG_BLOCK 1
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 6 — Stubs
-# ════════════════════════════════════════════════════════════════
+POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
 STUB_INJECT:::Create_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
