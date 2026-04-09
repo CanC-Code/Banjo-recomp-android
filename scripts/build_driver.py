@@ -5,14 +5,15 @@ import re
 from source_conversion import SourceConverter
 from error_parser import generate_failed_log, generate_error_summary, read_file
 
-os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
-os.environ["NINJAJOBS"] = "-j1"
+# THE FIX: Unleash parallel processing so we can patch hundreds of files in one cycle
+os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "8"
+if "NINJAJOBS" in os.environ:
+    del os.environ["NINJAJOBS"]
 
 GRADLE_CMD = [
     "gradle", "-p", "Android", "assembleDebug",
-    "--console=plain", "--max-workers=1", "--no-daemon",
+    "--console=plain", "--max-workers=8", "--no-daemon",
     "-Dorg.gradle.jvmargs=-Xmx6g -XX:+HeapDumpOnOutOfMemoryError",
-    "-Pandroid.ndk.cmakeArgs=-k 0",
 ]
 
 LOG_FILE        = "Android/full_build_log.txt"
@@ -30,7 +31,8 @@ def get_ninja_cmd():
         for hash_dir in os.listdir(base_dir):
             ninja_dir = os.path.join(base_dir, hash_dir, "arm64-v8a")
             if os.path.exists(os.path.join(ninja_dir, "build.ninja")):
-                return ["/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja", "-C", ninja_dir, "bkawrapper"]
+                # THE FIX: -k 0 forces Ninja to keep going and gather ALL failing files at once
+                return ["/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja", "-C", ninja_dir, "-k", "0", "bkawrapper"]
     return GRADLE_CMD
 
 def run_build():
@@ -60,7 +62,6 @@ def resolve_cpp_path(file_path):
     if os.path.exists(attempt):
         return attempt
         
-    # Recursive fallback search if directory structure differs
     filename = os.path.basename(file_path)
     for root, _, files in os.walk(cpp_base):
         if filename in files:
@@ -78,9 +79,8 @@ def ensure_bridge_at_top(file_path):
 
     bridge = '#include "ultra/n64_types.h"'
     if content.strip().startswith(bridge):
-        return False # Already safe at the top
+        return False
 
-    # Strip any existing late includes to prevent duplication
     content = re.sub(r'#include\s+["<](?:ultra/)?n64_types\.h[">]\n?', '', content)
 
     with open(file_path, 'w', encoding='utf-8') as f:
@@ -108,7 +108,6 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            # Synchronized Omni-Trigger v36
             trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
 
             if re.search(trigger_pattern, log_data):
@@ -117,14 +116,10 @@ def main():
                 total_fixes_this_cycle += fixes_applied
 
             for raw_path in failed_files:
-                # FIX: Resolve relative compiler file paths explicitly
                 file_path = resolve_cpp_path(raw_path) 
                 if file_path != TYPES_HEADER: 
-                    # Force the bridge to the top of the failing file
                     bridge_added = ensure_bridge_at_top(file_path)
                     fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
-
-                    # Prevent False Stalls by acknowledging the bridge adjustment
                     total_fixes_this_cycle += fixes_applied + (1 if bridge_added else 0)
 
         if total_fixes_this_cycle == 0:
