@@ -5,7 +5,6 @@ import re
 from source_conversion import SourceConverter
 from error_parser import generate_failed_log, generate_error_summary, read_file
 
-# --- Environment Configuration ---
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "1"
 os.environ["NINJAJOBS"] = "-j1"
 
@@ -51,14 +50,32 @@ def run_build():
             print(f"🛑 Build execution failed: {e}")
             return False
 
+def ensure_bridge_at_top(file_path):
+    """Forces the Master Shield bridge to Line 1 so SDK headers don't crash."""
+    if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
+        return False
+        
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+    
+    bridge = '#include "ultra/n64_types.h"'
+    if content.strip().startswith(bridge):
+        return False # Already safe at the top
+        
+    # Strip any existing late includes to prevent duplication
+    content = re.sub(r'#include\s+["<](?:ultra/)?n64_types\.h[">]\n?', '', content)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(f"{bridge}\n{content}")
+    print(f"    🌉 Forced Bridge Header to absolute top of {file_path}")
+    return True
+
 def main():
     stall_count = 0
     converter = SourceConverter()
 
     print("🧹 Performing Initial Cleanse...")
     converter.bootstrap_n64_types(clear_existing=True) 
-
-    # Load logic ONCE before the loop starts to prevent rule duplication
     converter.load_logic()
 
     for cycle in range(1, 401): 
@@ -73,7 +90,7 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            # Omni-Routed GLOBAL_INJECT perfectly synced with Level 3 triggers
+            # Synchronized Omni-Trigger
             trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
             
             if re.search(trigger_pattern, log_data):
@@ -81,11 +98,14 @@ def main():
                 fixes_applied = converter.apply_to_file(TYPES_HEADER, error_context=log_data)
                 total_fixes_this_cycle += fixes_applied
 
-            # Apply standard file-specific fixes
             for file_path in failed_files:
-                if file_path != TYPES_HEADER: # Strict prevention of double-processing
+                if file_path != TYPES_HEADER: 
+                    # Force the bridge to the top of the failing file
+                    bridge_added = ensure_bridge_at_top(file_path)
                     fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
-                    total_fixes_this_cycle += fixes_applied
+                    
+                    # Prevent False Stalls by acknowledging the bridge adjustment
+                    total_fixes_this_cycle += fixes_applied + (1 if bridge_added else 0)
 
         if total_fixes_this_cycle == 0:
             stall_count += 1
