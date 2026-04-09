@@ -10,6 +10,10 @@ class SourceConverter:
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
     def repair_unterminated_conditionals(self, content: str) -> str:
+        """
+        Scans for unclosed #if/#ifndef blocks and removes orphaned guards.
+        Ensures the generated n64_types.h is always syntactically valid.
+        """
         lines = content.split('\n')
         stack = []
         remove = set()
@@ -20,21 +24,29 @@ class SourceConverter:
             elif re.match(r'#\s*endif\b', stripped):
                 if stack:
                     stack.pop()
+                    
         for idx in stack:
             remove.add(idx)
+            # Remove associated #define on next lines
             for j in range(idx + 1, min(idx + 4, len(lines))):
                 if lines[j].strip().startswith('#define'):
                     remove.add(j)
                     break
+                    
         if not remove: return content
         print(f"    🩹 Repaired {len(remove)} unterminated preprocessor conditionals.")
         return '\n'.join([line for i, line in enumerate(lines) if i not in remove])
 
     def bootstrap_n64_types(self, clear_existing=False):
+        """
+        Ensures the directory exists and provides a fresh header.
+        Logic Primitives are now handled by the Master Shield rules instead of Python.
+        """
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
         if clear_existing and os.path.exists(self.types_header):
             os.remove(self.types_header)
             print("🧹 Cleared existing n64_types.h for a fresh sync.")
+            
         if not os.path.exists(self.types_header):
             with open(self.types_header, 'w', encoding='utf-8') as f:
                 f.write("#pragma once\n\n/* N64 Recompilation Bridge Header */\n")
@@ -58,7 +70,7 @@ class SourceConverter:
         print(f"--- Logic Loaded: {len(self.rules)} rules ---")
 
     def apply_to_file(self, file_path, error_context=""):
-        # THE FIX: Removed the logic blocking n64_types.h
+        # Allowed modification of n64_types.h
         if not os.path.exists(file_path): return 0
         
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -77,13 +89,13 @@ class SourceConverter:
                         content, changes = f"{rule['replace']}\n{content}", changes + 1
                 
                 elif rule["action"] == "GLOBAL_INJECT":
-                    # THE FIX: Execute ONLY if explicitly routed to n64_types.h
+                    # Execute ONLY if explicitly routed to n64_types.h
                     if "n64_types.h" in file_path and re.search(rule["search"], error_context):
                         rule_marker = f"/* Rule: {rule['name']} */"
                         if rule_marker not in content:
                             new_header_data = f"{content}\n{rule_marker}\n{rule['replace']}\n"
                             content = self.repair_unterminated_conditionals(new_header_data)
-                            changes += 1 # Only increment if an actual injection occurred!
+                            changes += 1 # Only increment if an actual injection occurred
                             print(f"    🧬 Injected {rule['name']} into n64_types.h")
                             
                 elif rule["action"] == "STUB_INJECT":
@@ -102,6 +114,7 @@ class SourceConverter:
         stubs_content = ""
         if os.path.exists(self.stubs_file):
             with open(self.stubs_file, 'r', encoding='utf-8') as sf: stubs_content = sf.read()
+            
         stub_func = f"long long int {sym}() {{ return 0; }}"
         if stub_func not in stubs_content:
             with open(self.stubs_file, 'a', encoding='utf-8') as sf: sf.write(f"{stub_func}\n")
