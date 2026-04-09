@@ -1,7 +1,7 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Core Primitive Token Replacement
+# SECTION 1 — Core Primitive Token Replacement (Clean Source)
 # ════════════════════════════════════════════════════════════════
 REGEX:::Fix_u8:::\bu8\b:::uint8_t
 REGEX:::Fix_s8:::\bs8\b:::int8_t
@@ -11,11 +11,15 @@ REGEX:::Fix_u32:::\bu32\b:::uint32_t
 REGEX:::Fix_s32:::\bs32\b:::int32_t
 REGEX:::Fix_u64:::\bu64\b:::uint64_t
 REGEX:::Fix_s64:::\bs64\b:::int64_t
-REGEX:::Fix_f32:::\bf32\b:::float
-REGEX:::Fix_f64:::\bf64\b:::double
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Linkage & Stubs
+# SECTION 2 — Bridge Injection (Ensures Shield Visibility)
+# ════════════════════════════════════════════════════════════════
+# Injects the bridge into any file that errors out on N64 system types.
+HEADER_INJECT:::Inject_Bridge_Include:::unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Acmd|u32|u16)':::#include "ultra/n64_types.h"
+
+# ════════════════════════════════════════════════════════════════
+# SECTION 3 — Linkage & Stubs
 # ════════════════════════════════════════════════════════════════
 POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
 STUB_INJECT:::Create_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
