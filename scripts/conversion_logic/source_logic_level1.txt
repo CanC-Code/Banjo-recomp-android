@@ -1,7 +1,7 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 1 — Core Primitive Type Replacements (Inline REGEX)
+# SECTION 1 — Core Primitive Type Replacements
 # ════════════════════════════════════════════════════════════════
 REGEX:::Fix_u8:::\bu8\b:::uint8_t
 REGEX:::Fix_s8:::\bs8\b:::int8_t
@@ -15,18 +15,12 @@ REGEX:::Fix_f32:::\bf32\b:::float
 REGEX:::Fix_f64:::\bf64\b:::double
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 2 — Standard Header Injections
+# SECTION 2 — Foundation OS Types (Triggered by early errors)
 # ════════════════════════════════════════════════════════════════
-HEADER_INJECT:::Inject_StdInt:::unknown type name '(uint32_t|int32_t|uint16_t|int16_t|uint8_t|int8_t|uint64_t|int64_t)':::#include <stdint.h>
-HEADER_INJECT:::Inject_Math:::implicit declaration of function '(sinf|cosf|sqrtf|fabsf?|atan2f?)':::#include <math.h>
+GLOBAL_INJECT:::Inject_Base_OS_Types:::unknown type name '(?:OSId|OSTime|OSPri|OSMesg|n64_bool|OSIntMask)':::#ifndef BASE_OS_TYPES_H\n#define BASE_OS_TYPES_H\n#include <stdint.h>\ntypedef int32_t OSId;\ntypedef uint64_t OSTime;\ntypedef int32_t OSPri;\ntypedef void* OSMesg;\ntypedef uint32_t OSIntMask;\ntypedef int32_t n64_bool;\n\n/* Phase 1 Macros */\n#define OS_IM_NONE 0x0000\n#define OS_IM_ALL  0x007F\n#define ADPCMFSIZE 9\n#define ADPCMVSIZE 16\n#endif
 
 # ════════════════════════════════════════════════════════════════
-# SECTION 3 — Early OS Type Injection (Base Foundation)
-# ════════════════════════════════════════════════════════════════
-GLOBAL_INJECT:::Inject_Base_OS_Types:::unknown type name '(?:OSId|OSTime|OSPri|OSMesg|n64_bool)':::#ifndef BASE_OS_TYPES_H\n#define BASE_OS_TYPES_H\n#include <stdint.h>\ntypedef int32_t OSId;\ntypedef uint64_t OSTime;\ntypedef int32_t OSPri;\ntypedef void* OSMesg;\ntypedef int32_t n64_bool;\n#endif
-
-# ════════════════════════════════════════════════════════════════
-# SECTION 4 — Linkage & Stubs
+# SECTION 3 — POSIX & Linkage
 # ════════════════════════════════════════════════════════════════
 POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
 STUB_INJECT:::Create_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
