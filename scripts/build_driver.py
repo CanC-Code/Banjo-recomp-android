@@ -50,6 +50,24 @@ def run_build():
             print(f"🛑 Build execution failed: {e}")
             return False
 
+def resolve_cpp_path(file_path):
+    """Resolves relative compiler paths to absolute source tree paths."""
+    if os.path.exists(file_path):
+        return file_path
+    
+    cpp_base = "Android/app/src/main/cpp"
+    attempt = os.path.join(cpp_base, file_path)
+    if os.path.exists(attempt):
+        return attempt
+        
+    # Recursive fallback search if directory structure differs
+    filename = os.path.basename(file_path)
+    for root, _, files in os.walk(cpp_base):
+        if filename in files:
+            return os.path.join(root, filename)
+            
+    return file_path
+
 def ensure_bridge_at_top(file_path):
     """Forces the Master Shield bridge to Line 1 so SDK headers don't crash."""
     if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
@@ -90,7 +108,7 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            # Synchronized Omni-Trigger v35 (Includes OSTask)
+            # Synchronized Omni-Trigger v36
             trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
 
             if re.search(trigger_pattern, log_data):
@@ -98,7 +116,9 @@ def main():
                 fixes_applied = converter.apply_to_file(TYPES_HEADER, error_context=log_data)
                 total_fixes_this_cycle += fixes_applied
 
-            for file_path in failed_files:
+            for raw_path in failed_files:
+                # FIX: Resolve relative compiler file paths explicitly
+                file_path = resolve_cpp_path(raw_path) 
                 if file_path != TYPES_HEADER: 
                     # Force the bridge to the top of the failing file
                     bridge_added = ensure_bridge_at_top(file_path)
