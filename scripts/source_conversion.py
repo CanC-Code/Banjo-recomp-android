@@ -21,17 +21,15 @@ class SourceConverter:
 
         for i, line in enumerate(lines):
             stripped = line.strip()
-            # Match #if, #ifdef, #ifndef
             if re.match(r'#\s*(?:ifndef|ifdef|if)\b', stripped):
                 stack.append(i)
             elif re.match(r'#\s*endif\b', stripped):
                 if stack:
                     stack.pop()
-        
-        # Any remaining indices in stack are unclosed guards
+
         for idx in stack:
             remove.add(idx)
-            # Aggressively remove the #define usually associated with an #ifndef on next lines
+            # Remove associated #define on next lines
             for j in range(idx + 1, min(idx + 4, len(lines))):
                 if lines[j].strip().startswith('#define'):
                     remove.add(j)
@@ -39,41 +37,24 @@ class SourceConverter:
 
         if not remove:
             return content
-            
+
         print(f"    🩹 Repaired {len(remove)} unterminated preprocessor conditionals.")
         return '\n'.join([line for i, line in enumerate(lines) if i not in remove])
 
     def bootstrap_n64_types(self, clear_existing=False):
+        """
+        Ensures the directory exists and provides a fresh header.
+        Logic Primitives are now handled by the Master Shield rules instead of Python.
+        """
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
         if clear_existing and os.path.exists(self.types_header):
             os.remove(self.types_header)
             print("🧹 Cleared existing n64_types.h for a fresh sync.")
 
-        content = ""
-        if os.path.exists(self.types_header):
-            with open(self.types_header, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-        primitives = (
-            "#ifndef N64_TYPES_PRIMITIVES_H\n"
-            "#define N64_TYPES_PRIMITIVES_H\n"
-            "#include <stdint.h>\n"
-            "#ifndef _N64_PRIMS_DEFINED\n"
-            "#define _N64_PRIMS_DEFINED\n"
-            "typedef uint8_t u8; typedef int8_t s8;\n"
-            "typedef uint16_t u16; typedef int16_t s16;\n"
-            "typedef uint32_t u32; typedef int32_t s32;\n"
-            "typedef uint64_t u64; typedef int64_t s64;\n"
-            "typedef float f32; typedef double f64;\n"
-            "typedef int32_t n64_bool;\n"
-            "#endif\n"
-            "#endif\n\n"
-        )
-
-        if "N64_TYPES_PRIMITIVES_H" not in content:
+        if not os.path.exists(self.types_header):
             with open(self.types_header, 'w', encoding='utf-8') as f:
-                f.write(primitives + content)
-            print("🚀 Bootstrapped N64 primitive types into n64_types.h")
+                f.write("#pragma once\n\n/* N64 Recompilation Bridge Header */\n")
+            print("🚀 Initialized fresh n64_types.h")
 
     def load_logic(self):
         self.rules = []
@@ -87,12 +68,10 @@ class SourceConverter:
                         parts = line.split(':::')
                         if len(parts) >= 4:
                             self.rules.append({
-                                "action": parts[0],
-                                "name": parts[1],
-                                "search": parts[2],
-                                "replace": parts[3].replace("\\n", "\n")
+                                "action": parts[0], "name": parts[1],
+                                "search": parts[2], "replace": parts[3].replace("\\n", "\n")
                             })
-        print(f"--- Logic Loaded: {len(self.rules)} rules from {len(found_files)} files ---")
+        print(f"--- Logic Loaded: {len(self.rules)} rules ---")
 
     def _handle_global_inject(self, rule):
         types_content = ""
@@ -101,13 +80,11 @@ class SourceConverter:
                 types_content = tf.read()
 
         rule_marker = f"/* Rule: {rule['name']} */"
-        if rule_marker in types_content or rule["replace"].strip() in types_content:
+        if rule_marker in types_content:
             return
 
-        # Append new rule content
+        # Append new rule and repair
         new_header_data = f"{types_content}\n{rule_marker}\n{rule['replace']}\n"
-        
-        # Apply the preprocessor repair logic
         repaired_content = self.repair_unterminated_conditionals(new_header_data)
 
         with open(self.types_header, 'w', encoding='utf-8') as tf:
@@ -115,23 +92,18 @@ class SourceConverter:
         print(f"    🧬 Injected {rule['name']} into n64_types.h")
 
     def apply_to_file(self, file_path, error_context=""):
-        if not os.path.exists(file_path): return 0
-        if "n64_types.h" in file_path: return 0
+        if not os.path.exists(file_path) or "n64_types.h" in file_path: return 0
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-        changes = 0
-        original_content = content
+        changes, original_content = 0, content
         for rule in self.rules:
             try:
                 if rule["action"] == "REGEX":
                     new_content, count = re.subn(rule["search"], rule["replace"], content)
-                    if count > 0:
-                        content = new_content
-                        changes += count
+                    if count > 0: content, changes = new_content, changes + count
                 elif rule["action"] == "HEADER_INJECT":
                     if re.search(rule["search"], error_context) and rule["replace"] not in content:
-                        content = f"{rule['replace']}\n{content}"
-                        changes += 1
+                        content, changes = f"{rule['replace']}\n{content}", changes + 1
                 elif rule["action"] == "GLOBAL_INJECT":
                     if re.search(rule["search"], error_context):
                         self._handle_global_inject(rule)
@@ -139,24 +111,19 @@ class SourceConverter:
                 elif rule["action"] == "STUB_INJECT":
                     match = re.search(rule["search"], error_context)
                     if match:
-                        sym = match.group(1)
-                        self._handle_stub_inject(sym)
+                        self._handle_stub_inject(match.group(1))
                         changes += 1
-            except re.error as e:
-                continue 
+            except re.error: continue 
         if content != original_content:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
+            with open(file_path, 'w', encoding='utf-8') as f: f.write(content)
         return changes
 
     def _handle_stub_inject(self, sym):
         if not sym or sym.startswith("_Z") or "vtable" in sym: return
         stubs_content = ""
         if os.path.exists(self.stubs_file):
-            with open(self.stubs_file, 'r', encoding='utf-8') as sf: 
-                stubs_content = sf.read()
+            with open(self.stubs_file, 'r', encoding='utf-8') as sf: stubs_content = sf.read()
         stub_func = f"long long int {sym}() {{ return 0; }}"
         if stub_func not in stubs_content:
-            with open(self.stubs_file, 'a', encoding='utf-8') as sf:
-                sf.write(f"{stub_func}\n")
+            with open(self.stubs_file, 'a', encoding='utf-8') as sf: sf.write(f"{stub_func}\n")
             print(f"    🛠️ Stubbed missing symbol: {sym}")
