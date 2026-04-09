@@ -10,7 +10,7 @@ REGEX:::Fix_s64:::\bs64\b:::int64_t
 REGEX:::Fix_f32:::\bf32\b:::float
 REGEX:::Fix_f64:::\bf64\b:::double
 
-# Broad Trigger: Handles f32, s32, and all other SDK primitives
+# Broad Trigger: Injects the shield if ANY base type is missing
 HEADER_INJECT:::Inject_Bridge:::unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Acmd|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler)':::#include "n64_types.h"
 
 POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
