@@ -54,17 +54,17 @@ def ensure_bridge_at_top(file_path):
     """Forces the Master Shield bridge to Line 1 so SDK headers don't crash."""
     if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
         return False
-        
+
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-    
+
     bridge = '#include "ultra/n64_types.h"'
     if content.strip().startswith(bridge):
         return False # Already safe at the top
-        
+
     # Strip any existing late includes to prevent duplication
     content = re.sub(r'#include\s+["<](?:ultra/)?n64_types\.h[">]\n?', '', content)
-    
+
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(f"{bridge}\n{content}")
     print(f"    🌉 Forced Bridge Header to absolute top of {file_path}")
@@ -90,9 +90,9 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            # Synchronized Omni-Trigger
-            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
-            
+            # Synchronized Omni-Trigger v35 (Includes OSTask)
+            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
+
             if re.search(trigger_pattern, log_data):
                 print("🛡️ Master Shield Trigger Detected: Routing to n64_types.h")
                 fixes_applied = converter.apply_to_file(TYPES_HEADER, error_context=log_data)
@@ -103,7 +103,7 @@ def main():
                     # Force the bridge to the top of the failing file
                     bridge_added = ensure_bridge_at_top(file_path)
                     fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
-                    
+
                     # Prevent False Stalls by acknowledging the bridge adjustment
                     total_fixes_this_cycle += fixes_applied + (1 if bridge_added else 0)
 
