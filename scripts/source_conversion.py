@@ -1,3 +1,4 @@
+
 import os
 import re
 import glob
@@ -19,39 +20,39 @@ class SourceConverter:
         # Core Protection Lists
         # ---------------------------------------------------------------------------
         self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable"}
-        
+
         self.STANDARD_TYPES = {
-            "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t", 
-            "uint64_t", "int64_t", "size_t", "intptr_t", "uintptr_t", "ptrdiff_t", 
-            "bool", "_Bool", "wchar_t", "char16_t", "char32_t", "float", "double", 
+            "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t",
+            "uint64_t", "int64_t", "size_t", "intptr_t", "uintptr_t", "ptrdiff_t",
+            "bool", "_Bool", "wchar_t", "char16_t", "char32_t", "float", "double",
             "void", "char", "short", "int", "long", "unsigned", "signed",
             "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"
         }
 
         self.POSIX_RESERVED_NAMES = {
-            "close", "open", "read", "write", "send", "recv", "connect", "accept", 
+            "close", "open", "read", "write", "send", "recv", "connect", "accept",
             "bind", "listen", "select", "poll", "dup", "dup2", "fork", "exec", "exit",
-            "stat", "fstat", "lstat", "access", "unlink", "rename", "mkdir", "rmdir", 
-            "chdir", "getcwd", "getpid", "getppid", "getuid", "getgid", "signal", 
-            "raise", "kill", "printf", "fprintf", "sprintf", "snprintf", "scanf", 
-            "fscanf", "sscanf", "time", "clock", "sleep", "usleep", "malloc", "calloc", 
-            "realloc", "free", "memcpy", "memset", "memmove", "memcmp", "strlen", 
-            "strcpy", "strncpy", "strcmp", "strncmp", "strcat", "strncat", "strchr", 
-            "strrchr", "strstr", "atoi", "atol", "atof", "strtol", "strtod", "abs", 
-            "labs", "fabs", "sqrt", "pow", "sin", "cos", "tan", "asin", "acos", "atan", 
+            "stat", "fstat", "lstat", "access", "unlink", "rename", "mkdir", "rmdir",
+            "chdir", "getcwd", "getpid", "getppid", "getuid", "getgid", "signal",
+            "raise", "kill", "printf", "fprintf", "sprintf", "snprintf", "scanf",
+            "fscanf", "sscanf", "time", "clock", "sleep", "usleep", "malloc", "calloc",
+            "realloc", "free", "memcpy", "memset", "memmove", "memcmp", "strlen",
+            "strcpy", "strncpy", "strcmp", "strncmp", "strcat", "strncat", "strchr",
+            "strrchr", "strstr", "atoi", "atol", "atof", "strtol", "strtod", "abs",
+            "labs", "fabs", "sqrt", "pow", "sin", "cos", "tan", "asin", "acos", "atan",
             "atan2", "rand", "srand",
         }
 
         self.N64_OS_OPAQUE_TYPES = {
-            "OSPfs", "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue", 
-            "OSThread", "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", 
+            "OSPfs", "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue",
+            "OSThread", "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient",
             "OSScKiller", "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr",
             "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
         }
 
         self.N64_AUDIO_STATE_TYPES = {
-            "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "INTERLEAVE_STATE", 
-            "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE", 
+            "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "INTERLEAVE_STATE",
+            "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE",
             "MIXER_STATE",
         }
 
@@ -127,6 +128,9 @@ class SourceConverter:
         }
         self.rules = []
         self.dynamic_categories = defaultdict(set)
+
+    def _is_known_global(self, var_name: str) -> bool:
+        return var_name in self.N64_KNOWN_GLOBALS
 
     def read_file(self, filepath: str) -> str:
         try:
@@ -225,7 +229,7 @@ class SourceConverter:
     def repair_unterminated_conditionals(self, content: str) -> str:
         """Scan for #ifndef/#ifdef that are never closed and remove orphaned guards."""
         lines = content.split('\n')
-        stack = [] 
+        stack = []
         output = list(lines)
         remove = set()
 
@@ -236,7 +240,7 @@ class SourceConverter:
             elif re.match(r'#\s*endif\b', stripped):
                 if stack:
                     stack.pop()
-                    
+
         for idx in stack:
             remove.add(idx)
             for j in range(idx + 1, min(idx + 4, len(lines))):
@@ -295,18 +299,30 @@ class SourceConverter:
             if not self._type_already_defined(tag, types_content):
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
                 decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
-                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
+                wrapped_decl = f"""#ifdef __cplusplus
+extern "C" {{
+#endif
+{decl}#ifdef __cplusplus
+}}
+#endif
+"""
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{wrapped_decl}#endif\n"
                 changed = True
 
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
-            if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS or ident in self.STANDARD_TYPES:
+            if self._is_known_global(ident) or ident in self.PHASE_3_MACROS or ident in self.STANDARD_TYPES:
                 continue
             if ident.isupper() or ident.startswith(("G_", "OS_", "PI_", "PFS_", "LEO_", "ADPCM")):
                 decl = f"#define {ident} 0"
             else:
-                # Add extern "C" wrapping for generated stubs
-                decl = f"#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern long long int {ident};\n#ifdef __cplusplus\n}}\n#endif"
-                
+                decl = f"""#ifdef __cplusplus
+extern "C" {{
+#endif
+extern long long int {ident};
+#ifdef __cplusplus
+}}
+#endif
+"""
             if decl not in types_content and f"{ident}_DEFINED" not in types_content:
                 types_content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n{decl}\n#endif\n"
                 changed = True
@@ -322,24 +338,38 @@ class SourceConverter:
 
         # Resolve type mismatches actively (C++ friendly)
         for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
-            if var_name in self.N64_KNOWN_GLOBALS:
-                continue # GLOBAL PREEMPTION: Let the known globals handler manage this
+            if self._is_known_global(var_name):
+                continue  # GLOBAL PREEMPTION: Let the known globals handler manage this
 
-            types_content = re.sub(rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', types_content)
-            types_content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', types_content)
-            
-            decl = f"#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {var_type} {var_name};\n#ifdef __cplusplus\n}}\n#endif"
+            types_content = re.sub(
+                rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?',
+                '', types_content
+            )
+            decl = f"""#ifdef __cplusplus
+extern "C" {{
+#endif
+extern {var_type} {var_name};
+#ifdef __cplusplus
+}}
+#endif
+"""
             if decl not in types_content:
                 types_content += f"\n#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n{decl}\n#endif\n"
                 changed = True
 
         for mismatch in self.dynamic_categories.get("type_mismatches", set()):
-            if mismatch in self.N64_KNOWN_GLOBALS:
-                continue # GLOBAL PREEMPTION: Let the known globals handler manage this
+            if self._is_known_global(mismatch):
+                continue  # GLOBAL PREEMPTION: Let the known globals handler manage this
 
             if not any(m == mismatch for m, _ in self.dynamic_categories.get("type_mismatches_resolved", set())):
-                new_content, n = re.subn(rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', types_content)
-                new_content, n2 = re.subn(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', new_content)
+                new_content, n = re.subn(
+                    rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?',
+                    '', types_content
+                )
+                new_content, n2 = re.subn(
+                    rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?',
+                    '', new_content
+                )
                 if n > 0 or n2 > 0:
                     types_content = new_content
                     changed = True
@@ -352,12 +382,11 @@ class SourceConverter:
                 if f" {sym}(" not in stubs_content:
                     stubs_content += f"long long int {sym}() {{ return 0; }}\n"
                     stubs_added = True
-        
+
         if stubs_added:
             self.write_file(self.stubs_file, stubs_content)
 
         if changed:
-            # Self-heal any broken ifndef guards before writing
             types_content = self.repair_unterminated_conditionals(types_content)
             self.write_file(self.types_header, types_content)
 
@@ -448,8 +477,14 @@ int sched_yield(void);
 
             # Purge globals carefully (accounting for the new extern "C" blocks and volatile qualifiers)
             for glob_var in self.N64_KNOWN_GLOBALS:
-                content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', content)
-                content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', content)
+                content = re.sub(
+                    rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?',
+                    '', content
+                )
+                content = re.sub(
+                    rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?',
+                    '', content
+                )
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
@@ -459,7 +494,7 @@ int sched_yield(void);
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
-                    
+
             for tag, body in self.PHASE_3_STRUCTS.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
@@ -468,7 +503,15 @@ int sched_yield(void);
             # Re-inject known globals with C++ safety
             for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
                 if not self._global_already_declared(glob_var, content):
-                    content += f"\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {decl}\n#ifdef __cplusplus\n}}\n#endif\n"
+                    wrapped_decl = f"""#ifdef __cplusplus
+extern "C" {{
+#endif
+extern {decl}
+#ifdef __cplusplus
+}}
+#endif
+"""
+                    content += f"\n#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n{wrapped_decl}\n#endif\n"
 
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
