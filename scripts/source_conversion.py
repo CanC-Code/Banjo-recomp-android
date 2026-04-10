@@ -278,6 +278,14 @@ typedef void*    OSMesg;
                 content = re.sub(rf"extern\s+float\s+{func}\s*\([^;]*;", f"{decl}", content)
         return content
 
+    def _handle_exceptasm_fixes(self, content: str) -> str:
+        # Fix __osRunQueue and __osFaultedThread linkage
+        content = re.sub(r'extern struct OSThread_s \*__osRunQueue;', 'extern "C" struct OSThread_s *__osRunQueue;', content)
+        content = re.sub(r'extern struct OSThread_s \*__osFaultedThread;', 'extern "C" struct OSThread_s *__osFaultedThread;', content)
+        # Fix context.status access
+        content = re.sub(r'__osRunningThread->context\.status', '((uint32_t*)__osRunningThread->context)[0]', content)
+        return content
+
     def apply_to_file(self, file_path: str, error_context: str = "") -> int:
         if not os.path.exists(file_path):
             return 0
@@ -294,6 +302,7 @@ typedef void*    OSMesg;
             content = self._handle_missing_macros(content)
             content = self._handle_missing_functions(content)
             content = self._handle_math_conflicts(content)
+            content = self._handle_exceptasm_fixes(content)
 
         if "n64_types.h" not in file_path:
             content = self._handle_opensl_es_headers(content)
