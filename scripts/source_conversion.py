@@ -322,6 +322,9 @@ class SourceConverter:
 
         # Resolve type mismatches actively (C++ friendly)
         for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
+            if var_name in self.N64_KNOWN_GLOBALS:
+                continue # GLOBAL PREEMPTION: Let the known globals handler manage this
+
             types_content = re.sub(rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', types_content)
             types_content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', types_content)
             
@@ -331,6 +334,9 @@ class SourceConverter:
                 changed = True
 
         for mismatch in self.dynamic_categories.get("type_mismatches", set()):
+            if mismatch in self.N64_KNOWN_GLOBALS:
+                continue # GLOBAL PREEMPTION: Let the known globals handler manage this
+
             if not any(m == mismatch for m, _ in self.dynamic_categories.get("type_mismatches_resolved", set())):
                 new_content, n = re.subn(rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', types_content)
                 new_content, n2 = re.subn(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', new_content)
@@ -440,10 +446,10 @@ int sched_yield(void);
                 content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
                 content = re.sub(rf'struct\s+{prim}_s\s*\{{[^}}]*\}};\n?', '', content)
 
-            # Purge globals carefully (accounting for the new extern "C" blocks)
+            # Purge globals carefully (accounting for the new extern "C" blocks and volatile qualifiers)
             for glob_var in self.N64_KNOWN_GLOBALS:
-                content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]+ {glob_var}[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', content)
-                content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]+ {glob_var}[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', content)
+                content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', content)
+                content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', content)
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
