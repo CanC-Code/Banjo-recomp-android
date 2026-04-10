@@ -70,17 +70,43 @@ class SourceConverter:
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
 
+    def read_file(self, filepath: str) -> str:
+        try:
+            with open(filepath, 'r', errors='replace') as f: return f.read()
+        except Exception: return ""
+
+    def write_file(self, filepath: str, content: str) -> None:
+        try:
+            with open(filepath, 'w') as f: f.write(content)
+        except Exception as e: logger.error(f"Failed to write {filepath}: {e}")
+
+    def load_logic(self):
+        self.rules = []
+        pattern = os.path.join(self.logic_dir, "source_logic*.txt")
+        found_files = glob.glob(pattern)
+        for logic_file in found_files:
+            with open(logic_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parts = line.split(':::')
+                        if len(parts) >= 4:
+                            self.rules.append({
+                                "action": parts[0], "name": parts[1],
+                                "search": parts[2], "replace": parts[3].replace("\\n", "\n")
+                            })
+
+    def _type_already_defined(self, tag: str, content: str) -> bool:
+        return bool(re.search(rf"\btypedef\s+(?:struct|union|union)\s+{re.escape(tag)}", content)) or f"{tag}_DEFINED" in content
+
     def bootstrap_n64_types(self, clear_existing=False):
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
-        if clear_existing and os.path.exists(self.types_header):
-            os.remove(self.types_header)
+        if clear_existing and os.path.exists(self.types_header): os.remove(self.types_header)
         if not os.path.exists(self.types_header):
-            with open(self.types_header, 'w', encoding='utf-8') as f:
-                f.write("#pragma once\n\n/* N64 Recompilation Bridge Header */\n")
+            with open(self.types_header, 'w', encoding='utf-8') as f: f.write("#pragma once\n")
         if not os.path.exists(self.stubs_file):
             os.makedirs(os.path.dirname(self.stubs_file), exist_ok=True)
-            with open(self.stubs_file, 'w', encoding='utf-8') as f:
-                f.write('#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
+            with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
         primitives_block = """\
@@ -126,38 +152,39 @@ void sched_yield(void);
 #endif
 """
         if "sched_yield_DEFINED" not in content: content += f"\n{sched_yield_decl}\n"
-        # Ensure stub is also added to stubs_file
-        with open(self.stubs_file, 'a', encoding='utf-8') as sf:
-            if "void sched_yield(void) {}" not in open(self.stubs_file).read():
-                sf.write("void sched_yield(void) {}\n")
         return content
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        # Wrap linkage overrides in guards to prevent C compiler errors (e.g. bss_pad.c)
+        # Protect extern "C" with __cplusplus guards for .c files
         linkage_fix = r'#ifdef __cplusplus\nextern "C" struct OSThread_s *\1;\n#else\nextern struct OSThread_s *\1;\n#endif'
         content = re.sub(r'extern struct OSThread_s \*(__osRunQueue);', linkage_fix, content)
         content = re.sub(r'extern struct OSThread_s \*(__osFaultedThread);', linkage_fix, content)
-        # Fix context.status member reference (Cast array to uint32_t*)
+        # Fix context.status access
         content = re.sub(r'__osRunningThread->context\.status', '((uint32_t*)__osRunningThread->context)[0]', content)
         return content
 
     def apply_to_file(self, file_path: str) -> int:
         if not os.path.exists(file_path): return 0
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f: content = f.read()
+        content = self.read_file(file_path)
         original_content = content
 
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
             content = self._handle_math_conflicts(content)
             content = self._handle_missing_functions(content)
-            # Inject general linkage and status fixes for the header
             content = self._handle_exceptasm_fixes(content)
+            # Inject structure bodies if missing
+            for tag, body in self.N64_OS_STRUCT_BODIES.items():
+                if not self._type_already_defined(tag, content): content += f"\n{body}\n"
+            for tag, body in self.PHASE_3_STRUCTS.items():
+                if not self._type_already_defined(tag, content): content += f"\n{body}\n"
+            for glob, decl in self.N64_KNOWN_GLOBALS.items():
+                if glob not in content: content += f"\nextern {decl}\n"
 
-        # Apply source-level fixes (like context.status) to all source files
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
 
         if content != original_content:
-            with open(file_path, 'w', encoding='utf-8') as f: f.write(content)
+            self.write_file(file_path, content)
             return 1
         return 0
