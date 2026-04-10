@@ -16,9 +16,16 @@ class SourceConverter:
         self.intelligence_level = 3
 
         # Types that the game/SDK natively defines. Auto-scraper MUST NOT stub these.
-        # OSScTask is strictly defined natively by <PR/sched.h>, so we protect it.
-        # sChVegetable is a game-native Actor struct.
         self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable"}
+        
+        # Standard C primitives. Auto-scraper MUST NEVER stub these.
+        self.STANDARD_TYPES = {
+            "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t", 
+            "uint64_t", "int64_t", "size_t", "intptr_t", "uintptr_t", "ptrdiff_t", 
+            "bool", "_Bool", "wchar_t", "char16_t", "char32_t", "float", "double", 
+            "void", "char", "short", "int", "long", "unsigned", "signed",
+            "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"
+        }
 
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -112,7 +119,7 @@ class SourceConverter:
                             })
 
     def _type_already_defined(self, tag: str, content: str) -> bool:
-        if tag in self.SDK_DEFINES_THESE:
+        if tag in self.SDK_DEFINES_THESE or tag in self.STANDARD_TYPES:
             return True
         if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content):
             return True
@@ -167,15 +174,21 @@ class SourceConverter:
         for m in re.finditer(r"error:\s+implicit declaration of function '(\w+)'", log_content):
             self.dynamic_categories["implicit_func_stubs"].add(m.group(1))
 
-        # Catch files with incompatible initializers (like {NULL, NULL} to f32)
+        # Capture files with incompatible float initializers
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+initializing 'f32'", log_content):
             filepath = m.group(1)
             self.dynamic_categories["needs_float_fix"].add(filepath)
 
-        # Catch files with redefinitions
+        # Capture files with strict redefinitions
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+(?:typedef )?redefinition", log_content):
             filepath = m.group(1)
             self.dynamic_categories["needs_redef_strip"].add(filepath)
+
+        # Capture misidentified pointer accesses
+        for m in re.finditer(r"error:\s+member reference (?:base )?type '.*?' is not a (?:pointer|structure or union)\n([^\n]+)\n", log_content):
+            snippet = m.group(1)
+            for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', snippet):
+                self.dynamic_categories["not_a_pointer"].add(mm.group(1))
 
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
@@ -184,7 +197,7 @@ class SourceConverter:
         changed = False
 
         for tag in self.dynamic_categories.get("missing_types", set()):
-            if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES:
+            if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES or tag in self.STANDARD_TYPES:
                 continue
             if not self._type_already_defined(tag, types_content):
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
@@ -194,12 +207,27 @@ class SourceConverter:
                 changed = True
 
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
-            if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS:
+            if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS or ident in self.STANDARD_TYPES:
                 continue
-            decl = f"extern long long int {ident};"
+            
+            # Smart Macro Inference vs. Global Inference
+            if ident.isupper() or ident.startswith(("G_", "OS_", "PI_", "PFS_", "LEO_", "ADPCM")):
+                decl = f"#define {ident} 0"
+            else:
+                decl = f"extern long long int {ident};"
+                
             if decl not in types_content and f"{ident}_DEFINED" not in types_content:
                 types_content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n{decl}\n#endif\n"
                 changed = True
+
+        for member in self.dynamic_categories.get("not_a_pointer", set()):
+            if isinstance(member, str):
+                new_types, n = re.subn(
+                    rf"\bextern\s+long\s+long\s+int\s+{re.escape(member)}\s*;",
+                    f"extern void* {member}; /* AUTO-FIX: cast to pointer */", types_content)
+                if n > 0:
+                    types_content = new_types
+                    changed = True
 
         if changed:
             self.write_file(self.types_header, types_content)
@@ -283,9 +311,13 @@ int sched_yield(void);
             content = re.sub(r'struct\s+OSTask_s;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
             content = re.sub(r'struct\s+OSScTask_s;\n?', '', content)
-            # Remove previously injected sChVegetable to resolve the immediate conflict
             content = re.sub(r'typedef\s+struct\s+sChVegetable_s\s+sChVegetable;\n?', '', content)
             content = re.sub(r'struct\s+sChVegetable_s;\n?', '', content)
+
+            # Destroys any lingering standard primitive stubs that caused the typedef collisions
+            for prim in self.STANDARD_TYPES:
+                content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
+                content = re.sub(rf'struct\s+{prim}_s\s*\{{[^}}]*\}};\n?', '', content)
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
