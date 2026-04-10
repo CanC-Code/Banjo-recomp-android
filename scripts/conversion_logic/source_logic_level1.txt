@@ -1,3 +1,4 @@
+
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 REGEX:::Fix_u8:::\bu8\b:::uint8_t
 REGEX:::Fix_s8:::\bs8\b:::int8_t
@@ -10,8 +11,7 @@ REGEX:::Fix_s64:::\bs64\b:::int64_t
 REGEX:::Fix_f32:::\bf32\b:::float
 REGEX:::Fix_f64:::\bf64\b:::double
 
-# Omni-Trigger: Catches standard missing types AND the C++ gu.h parsing collapses
-HEADER_INJECT:::Inject_Bridge:::unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Acmd|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast:::#include "n64_types.h"
+HEADER_INJECT:::Inject_Bridge:::unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast:::#include "n64_types.h"
 
 POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
 STUB_INJECT:::Create_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
