@@ -14,7 +14,7 @@ class SourceConverter:
         self.logic_dir = logic_dir
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
-        self.intelligence_level = 3  # Start at max intelligence level
+        self.intelligence_level = 3
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
             "OS_IM_4": "0x0008", "OS_IM_5": "0x0010", "OS_IM_6": "0x0020", "OS_IM_7": "0x0040",
@@ -77,6 +77,13 @@ typedef struct OSPfs_s {
 } OSPfs;""",
             "OSTimer": "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; uint64_t interval; uint64_t value; struct OSMesgQueue_s *mq; void *msg; } OSTimer;",
             "LookAt": "typedef struct { struct { struct { float x, y, z; float pad; } l[2]; } l; } LookAt;",
+            "ADPCM_STATE": "typedef struct { long long int force_align[16]; } ADPCM_STATE;",
+            "Acmd": "typedef union { long long int force_align; uint32_t words[2]; } Acmd;",
+            "Hilite": "typedef struct { int32_t words[2]; } Hilite;",
+            "Light": "typedef struct { int32_t words[2]; } Light;",
+            "OSTask": "typedef struct { long long int force_align[64]; } OSTask;",
+            "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
+            "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
@@ -248,6 +255,7 @@ typedef void*    OSMesg;
         missing_functions = {
             "osCreateThread": "void osCreateThread(void* thread, void* func, void* arg) {}",
             "osDestroyThread": "void osDestroyThread(void* thread) {}",
+            "sched_yield": "void sched_yield() {}",
         }
         stubs_content = ""
         if os.path.exists(self.stubs_file):
@@ -257,6 +265,17 @@ typedef void*    OSMesg;
             if stub not in stubs_content:
                 with open(self.stubs_file, 'a', encoding='utf-8') as sf:
                     sf.write(f"{stub}\n")
+        return content
+
+    def _handle_math_conflicts(self, content: str) -> str:
+        math_conflicts = {
+            "cosf": "extern \"C\" float cosf(float angle);",
+            "sinf": "extern \"C\" float sinf(float angle);",
+            "sqrtf": "extern \"C\" float sqrtf(float value);",
+        }
+        for func, decl in math_conflicts.items():
+            if f"extern \"C\" {func}" not in content:
+                content = re.sub(rf"extern\s+float\s+{func}\s*\([^;]*;", f"{decl}", content)
         return content
 
     def apply_to_file(self, file_path: str, error_context: str = "") -> int:
@@ -274,6 +293,7 @@ typedef void*    OSMesg;
             content = self._inject_globals(content)
             content = self._handle_missing_macros(content)
             content = self._handle_missing_functions(content)
+            content = self._handle_math_conflicts(content)
 
         if "n64_types.h" not in file_path:
             content = self._handle_opensl_es_headers(content)
