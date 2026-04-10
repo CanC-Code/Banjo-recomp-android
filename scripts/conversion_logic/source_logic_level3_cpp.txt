@@ -1,4 +1,3 @@
-
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 
 GLOBAL_INJECT:::Master_Bulletproof_Shield_v37:::unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq|__SDK_)'|different language linkage|redefinition of 'OSId'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast:::#ifndef MASTER_SHIELD_V37_H
