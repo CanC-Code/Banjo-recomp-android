@@ -1,16 +1,11 @@
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-REGEX:::Fix_u8:::\bu8\b:::uint8_t
-REGEX:::Fix_s8:::\bs8\b:::int8_t
-REGEX:::Fix_u16:::\bu16\b:::uint16_t
-REGEX:::Fix_s16:::\bs16\b:::int16_t
-REGEX:::Fix_u32:::\bu32\b:::uint32_t
-REGEX:::Fix_s32:::\bs32\b:::int32_t
-REGEX:::Fix_u64:::\bu64\b:::uint64_t
-REGEX:::Fix_s64:::\bs64\b:::int64_t
-REGEX:::Fix_f32:::\bf32\b:::float
-REGEX:::Fix_f64:::\bf64\b:::double
-
-HEADER_INJECT:::Inject_Bridge:::unknown type name '(?:OSMesg|OSTime|OSPri|OSId|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast:::#include "n64_types.h"
-
-POSIX_RENAME:::Rename_POSIX_Conflict:::static declaration of '([^']+)' follows non-static declaration:::n64_renamed
-STUB_INJECT:::Create_Stub:::undefined (?:reference to `|symbol: )([^'`\n]+)[`\n]?:::ignored
+regex:::Fix_u8:::\bu8\b:::uint8_t
+regex:::Fix_s8:::\bs8\b:::int8_t
+regex:::Fix_u16:::\bu16\b:::uint16_t
+regex:::Fix_s16:::\bs16\b:::int16_t
+regex:::Fix_u32:::\bu32\b:::uint32_t
+regex:::Fix_s32:::\bs32\b:::int32_t
+regex:::Fix_u64:::\bu64\b:::uint64_t
+regex:::Fix_s64:::\bs64\b:::int64_t
+regex:::Fix_f32:::\bf32\b:::float
+regex:::Fix_f64:::\bf64\b:::double
