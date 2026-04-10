@@ -13,6 +13,7 @@ class SourceConverter:
         self.logic_dir = logic_dir
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
+        self.intelligence_level = 3
 
         # ---------------------------------------------------------------------------
         # Core Protection Lists
@@ -267,7 +268,6 @@ class SourceConverter:
             for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', m.group(1)):
                 self.dynamic_categories["not_a_pointer"].add(mm.group(1))
 
-        # Advanced Categories from Logical Enhancer
         for m in re.finditer(r"error:\s+redefinition of '(\w+)' (?:with a different type|as different kind of symbol)", log_content):
             self.dynamic_categories["type_mismatches"].add(m.group(1))
 
@@ -294,10 +294,7 @@ class SourceConverter:
                 continue
             if not self._type_already_defined(tag, types_content):
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
-                if tag in self.N64_OS_OPAQUE_TYPES or tag in self.N64_AUDIO_STATE_TYPES:
-                    decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
-                else:
-                    decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
+                decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 changed = True
 
@@ -307,7 +304,8 @@ class SourceConverter:
             if ident.isupper() or ident.startswith(("G_", "OS_", "PI_", "PFS_", "LEO_", "ADPCM")):
                 decl = f"#define {ident} 0"
             else:
-                decl = f"extern long long int {ident};"
+                # Add extern "C" wrapping for generated stubs
+                decl = f"#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern long long int {ident};\n#ifdef __cplusplus\n}}\n#endif"
                 
             if decl not in types_content and f"{ident}_DEFINED" not in types_content:
                 types_content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n{decl}\n#endif\n"
@@ -322,19 +320,20 @@ class SourceConverter:
                     types_content = new_types
                     changed = True
 
-        # Resolve type mismatches actively
+        # Resolve type mismatches actively (C++ friendly)
         for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
-            types_content = re.sub(rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\nextern long long int {var_name};\n#endif\n?', '', types_content)
-            types_content = re.sub(rf'extern long long int {var_name};\n?', '', types_content)
-            decl = f"extern {var_type} {var_name};"
+            types_content = re.sub(rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', types_content)
+            types_content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', types_content)
+            
+            decl = f"#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {var_type} {var_name};\n#ifdef __cplusplus\n}}\n#endif"
             if decl not in types_content:
                 types_content += f"\n#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n{decl}\n#endif\n"
                 changed = True
 
         for mismatch in self.dynamic_categories.get("type_mismatches", set()):
             if not any(m == mismatch for m, _ in self.dynamic_categories.get("type_mismatches_resolved", set())):
-                new_content, n = re.subn(rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\nextern long long int {mismatch};\n#endif\n?', '', types_content)
-                new_content, n2 = re.subn(rf'extern long long int {mismatch};\n?', '', new_content)
+                new_content, n = re.subn(rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', types_content)
+                new_content, n2 = re.subn(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', new_content)
                 if n > 0 or n2 > 0:
                     types_content = new_content
                     changed = True
@@ -441,9 +440,10 @@ int sched_yield(void);
                 content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
                 content = re.sub(rf'struct\s+{prim}_s\s*\{{[^}}]*\}};\n?', '', content)
 
+            # Purge globals carefully (accounting for the new extern "C" blocks)
             for glob_var in self.N64_KNOWN_GLOBALS:
-                content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\nextern long long int {glob_var};\n#endif\n?', '', content)
-                content = re.sub(rf'extern long long int {glob_var};\n?', '', content)
+                content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]+ {glob_var}[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?', '', content)
+                content = re.sub(rf'(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]+ {glob_var}[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?\n?', '', content)
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
@@ -459,9 +459,10 @@ int sched_yield(void);
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
 
+            # Re-inject known globals with C++ safety
             for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
                 if not self._global_already_declared(glob_var, content):
-                    content += f"\nextern {decl}\n"
+                    content += f"\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {decl}\n#ifdef __cplusplus\n}}\n#endif\n"
 
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
