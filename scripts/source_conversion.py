@@ -186,10 +186,10 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
-        # Enforce C standard linkage for math before N64 headers are loaded to prevent NDK 25 C++ clashes.
+        # Explicit forward-declarations bypass include path shadowing conflicts 
+        # specifically with the N64 SDK's internal PR/sched.h
         primitives_block = """\
 #include <stdint.h>
-#include <sched.h>
 
 #ifndef CORE_PRIMITIVES_DEFINED
 #define CORE_PRIMITIVES_DEFINED
@@ -205,6 +205,7 @@ extern "C" {
 float cosf(float);
 float sinf(float);
 float sqrtf(float);
+int sched_yield(void);
 #ifdef __cplusplus
 }
 #endif
