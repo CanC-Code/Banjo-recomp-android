@@ -67,7 +67,8 @@ class SourceConverter:
             "Light": "typedef struct { int32_t words[2]; } Light;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
-            "OSTask": "typedef struct OSTask_s { long long int force_align[64]; } OSTask;"
+            "OSTask": "typedef struct { uint32_t type; uint32_t flags; uint64_t *ucode_boot; uint32_t ucode_boot_size; uint64_t *ucode; uint32_t ucode_size; uint64_t *ucode_data; uint32_t ucode_data_size; uint64_t *dram_stack; uint32_t dram_stack_size; uint64_t *output_buff; uint64_t *output_buff_size; uint64_t *data_ptr; uint32_t data_size; uint64_t *yield_data_ptr; uint32_t yield_data_size; } OSTask_t; typedef union { OSTask_t t; long long int force_structure_alignment[64]; } OSTask;",
+            "Vp": "typedef struct { short vscale[4]; short vtrans[4]; } Vp_t; typedef union { Vp_t vp; long long int force_align[8]; } Vp;"
         }
 
         self.PHASE_3_STRUCTS = {
@@ -322,7 +323,7 @@ int sched_yield(void);
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
-            # 2. Safely apply the standard body dict. OSTask is now rebuilt as a full opaque struct here. 
+            # 2. Safely apply the standard body dict. OSTask and Vp are rebuilt as full structs here. 
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
