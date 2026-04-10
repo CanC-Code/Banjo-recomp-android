@@ -85,6 +85,12 @@ class SourceConverter:
             "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
             "__osRunQueue": "struct OSThread_s *__osRunQueue;",
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
+            "__OSGlobalIntMask": "volatile uint32_t __OSGlobalIntMask;",
+            "osTvType": "uint32_t osTvType;",
+            "osRomBase": "uint32_t osRomBase;",
+            "osResetType": "uint32_t osResetType;",
+            "osAppNMIBuffer": "uint32_t osAppNMIBuffer;",
+            "osPiRawStartDma": "int32_t osPiRawStartDma(int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);"
         }
         self.rules = []
         self.dynamic_categories = defaultdict(set)
@@ -191,6 +197,17 @@ class SourceConverter:
             for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', snippet):
                 self.dynamic_categories["not_a_pointer"].add(mm.group(1))
 
+        # Capture generalized type mismatches (fallback for unrecognized mismatch signatures)
+        for m in re.finditer(r"error:\s+redefinition of '(\w+)' (?:with a different type|as different kind of symbol)", log_content):
+            self.dynamic_categories["type_mismatches"].add(m.group(1))
+
+        # Capture resolvable type mismatches to dynamically learn the correct signature
+        for m in re.finditer(r"error:\s+redefinition of '(\w+)' with a different type: '([^']+)'", log_content):
+            var_name = m.group(1)
+            var_type = m.group(2)
+            var_type = re.sub(r"\s*\(aka '[^']+'\)", "", var_type) # Strip aka notes
+            self.dynamic_categories["type_mismatches_resolved"].add((var_name, var_type))
+
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
             return
@@ -228,6 +245,25 @@ class SourceConverter:
                     f"extern void* {member}; /* AUTO-FIX: cast to pointer */", types_content)
                 if n > 0:
                     types_content = new_types
+                    changed = True
+
+        # Resolve type mismatches actively
+        for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
+            types_content = re.sub(rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\nextern long long int {var_name};\n#endif\n?', '', types_content)
+            types_content = re.sub(rf'extern long long int {var_name};\n?', '', types_content)
+            
+            decl = f"extern {var_type} {var_name};"
+            if decl not in types_content:
+                types_content += f"\n#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n{decl}\n#endif\n"
+                changed = True
+
+        # Strip unresolvable type mismatches to force header fallback
+        for mismatch in self.dynamic_categories.get("type_mismatches", set()):
+            if not any(m == mismatch for m, _ in self.dynamic_categories.get("type_mismatches_resolved", set())):
+                new_content, n = re.subn(rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\nextern long long int {mismatch};\n#endif\n?', '', types_content)
+                new_content, n2 = re.subn(rf'extern long long int {mismatch};\n?', '', new_content)
+                if n > 0 or n2 > 0:
+                    types_content = new_content
                     changed = True
 
         if changed:
@@ -305,7 +341,6 @@ int sched_yield(void);
 
         if "n64_types.h" in file_path:
             # 1. AGGRESSIVE RUNNER CACHE PURGE
-            # Destroys any lingering forward declarations or injected fwd blocks from previous attempts.
             content = re.sub(r'/\* OSTask/OSScTask forward decls.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'#ifndef OSTASK_FWD_DECLARED.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
@@ -319,6 +354,11 @@ int sched_yield(void);
             for prim in self.STANDARD_TYPES:
                 content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
                 content = re.sub(rf'struct\s+{prim}_s\s*\{{[^}}]*\}};\n?', '', content)
+
+            # Purge any incorrectly assumed 'long long int' for known globals
+            for glob_var in self.N64_KNOWN_GLOBALS:
+                content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\nextern long long int {glob_var};\n#endif\n?', '', content)
+                content = re.sub(rf'extern long long int {glob_var};\n?', '', content)
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
