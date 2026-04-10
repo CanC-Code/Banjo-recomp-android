@@ -1,3 +1,4 @@
+
 import os
 import subprocess
 import time
@@ -19,9 +20,7 @@ LOG_FILE        = "Android/full_build_log.txt"
 FAILED_LOG_FILE = "Android/failed_files.log"
 MANIFEST_FILE   = "Android/fixed_files.log"
 TYPES_HEADER    = "Android/app/src/main/cpp/ultra/n64_types.h"
-
-# 🚀 Fast-Abort Optimization: We don't need 5 cycles. 1 stall prevents 40+ minutes of wasted CI processing.
-MAX_STALL       = 1 
+MAX_STALL       = 1
 
 def strip_ansi(text):
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
@@ -55,32 +54,25 @@ def run_build():
 def resolve_cpp_path(file_path):
     if os.path.exists(file_path):
         return file_path
-    
     cpp_base = "Android/app/src/main/cpp"
     attempt = os.path.join(cpp_base, file_path)
     if os.path.exists(attempt):
         return attempt
-        
     filename = os.path.basename(file_path)
     for root, _, files in os.walk(cpp_base):
         if filename in files:
             return os.path.join(root, filename)
-            
     return file_path
 
 def ensure_bridge_at_top(file_path):
     if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
         return False
-
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-
     bridge = '#include "ultra/n64_types.h"'
     if content.strip().startswith(bridge):
-        return False 
-
+        return False
     content = re.sub(r'#include\s+["<](?:ultra/)?n64_types\.h[">]\n?', '', content)
-
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(f"{bridge}\n{content}")
     print(f"    🌉 Forced Bridge Header to absolute top of {file_path}")
@@ -89,13 +81,12 @@ def ensure_bridge_at_top(file_path):
 def main():
     stall_count = 0
     converter = SourceConverter()
-
     print("🧹 Performing Initial Cleanse...")
-    converter.bootstrap_n64_types(clear_existing=True) 
+    converter.bootstrap_n64_types(clear_existing=True)
     converter.load_logic()
 
-    for cycle in range(1, 401): 
-        print(f"\n{'='*40}\n--- Cycle {cycle} ---\n{'='*40}")
+    for cycle in range(1, 401):
+        print(f"\n{'='*40}\n--- Cycle {cycle} (Intelligence Level: {converter.intelligence_level}) ---\n{'='*40}")
 
         if run_build():
             print("\n✅ Build Successful!")
@@ -106,7 +97,6 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            # Synchronized Omni-Trigger v38 (Includes ALHeap, OSThread, OSMesgQueue)
             trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|OSThread|OSMesgQueue|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq|ALHeap|__SDK_)'|different language linkage|redefinition of 'OSId'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
 
             if re.search(trigger_pattern, log_data):
@@ -115,8 +105,8 @@ def main():
                 total_fixes_this_cycle += fixes_applied
 
             for raw_path in failed_files:
-                file_path = resolve_cpp_path(raw_path) 
-                if file_path != TYPES_HEADER: 
+                file_path = resolve_cpp_path(raw_path)
+                if file_path != TYPES_HEADER:
                     bridge_added = ensure_bridge_at_top(file_path)
                     fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
                     total_fixes_this_cycle += fixes_applied + (1 if bridge_added else 0)
@@ -124,10 +114,14 @@ def main():
         if total_fixes_this_cycle == 0:
             stall_count += 1
             if stall_count >= MAX_STALL:
-                print(f"\n🛑 Loop halted: No fixable patterns found.")
-                break
+                print(f"\n🛑 Loop halted: No fixable patterns found. Escalating intelligence level...")
+                converter.escalate_intelligence()
+                stall_count = 0
+                if converter.intelligence_level > 3:
+                    print(f"\n🛑 Maximum intelligence level reached. Aborting.")
+                    break
         else:
-            stall_count = 0 
+            stall_count = 0
         time.sleep(1)
 
 if __name__ == "__main__":
