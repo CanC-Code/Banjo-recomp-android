@@ -12,20 +12,16 @@ logger = logging.getLogger("N64_RECOMP_ENGINE")
 class SourceConverter:
     def __init__(self, logic_dir="scripts/conversion_logic"):
         self.logic_dir = logic_dir
-        self.rules = []
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
-        self.intelligence_level = 1
-        self.PHASE_1_MACROS = {
+        self.intelligence_level = 3  # Start at max intelligence level
+        self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
             "OS_IM_4": "0x0008", "OS_IM_5": "0x0010", "OS_IM_6": "0x0020", "OS_IM_7": "0x0040",
             "OS_IM_ALL": "0x007F", "PFS_ERR_ID_FATAL": "0x10", "PFS_ERR_DEVICE": "0x02",
             "PFS_ERR_CONTRFAIL": "0x01", "PFS_ERR_INVALID": "0x03", "PFS_ERR_EXIST": "0x04",
-            "PFS_ERR_NOEXIST": "0x05", "PFS_DATA_ENXIO": "0x06", "ADPCMFSIZE": "9",
-            "ADPCMVSIZE": "16", "UNITY_PITCH": "0x8000", "MAX_RATIO": "0xFFFF",
-            "PI_DOMAIN1": "0", "PI_DOMAIN2": "1",
-        }
-        self.PHASE_2_MACROS = {**self.PHASE_1_MACROS, **{
+            "PFS_ERR_NOEXIST": "0x05", "PFS_DATA_ENXIO": "0x06", "ADPCMFSIZE": "9", "ADPCMVSIZE": "16",
+            "UNITY_PITCH": "0x8000", "MAX_RATIO": "0xFFFF", "PI_DOMAIN1": "0", "PI_DOMAIN2": "1",
             "DEVICE_TYPE_64DD": "0x06", "LEO_CMD_TYPE_0": "0", "LEO_CMD_TYPE_1": "1", "LEO_CMD_TYPE_2": "2",
             "LEO_SECTOR_MODE": "1", "LEO_TRACK_MODE": "2", "LEO_BM_CTL": "0x05000510", "LEO_BM_CTL_RESET": "0",
             "LEO_ERROR_29": "29", "OS_READ": "0", "OS_WRITE": "1", "OS_MESG_NOBLOCK": "0", "OS_MESG_BLOCK": "1",
@@ -35,12 +31,10 @@ class SourceConverter:
             "PI_BSD_DOM1_LAT_REG": "0x04600014", "PI_BSD_DOM1_PWD_REG": "0x04600018", "PI_BSD_DOM1_PGS_REG": "0x0460001C",
             "PI_BSD_DOM1_RLS_REG": "0x04600020", "PI_BSD_DOM2_LAT_REG": "0x04600024", "PI_BSD_DOM2_PWD_REG": "0x04600028",
             "PI_BSD_DOM2_PGS_REG": "0x0460002C", "PI_BSD_DOM2_RLS_REG": "0x04600030",
-        }}
-        self.PHASE_3_MACROS = {**self.PHASE_2_MACROS, **{
             "G_ON": "1", "G_OFF": "0", "G_RM_AA_ZB_OPA_SURF": "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
             "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
             "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
-        }}
+        }
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": """\
 typedef union {
@@ -121,33 +115,6 @@ typedef struct OSPfs_s {
         except Exception as e:
             logger.error(f"Failed to write {filepath}: {e}")
 
-    def normalize_path(self, filepath: str) -> str:
-        for marker in ["Banjo-recomp-android/", "Android/app/"]:
-            if marker in filepath:
-                return filepath.split(marker)[-1]
-        return filepath.lstrip("/") if filepath.startswith("/") else filepath
-
-    def repair_unterminated_conditionals(self, content: str) -> str:
-        lines = content.split('\n')
-        stack = []
-        remove = set()
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if re.match(r'#\s*(?:ifndef|ifdef|if)\b', stripped):
-                stack.append(i)
-            elif re.match(r'#\s*endif\b', stripped):
-                if stack:
-                    stack.pop()
-        for idx in stack:
-            remove.add(idx)
-            for j in range(idx + 1, min(idx + 4, len(lines))):
-                if lines[j].strip().startswith('#define'):
-                    remove.add(j)
-                    break
-        if not remove:
-            return content
-        return '\n'.join([line for i, line in enumerate(lines) if i not in remove])
-
     def bootstrap_n64_types(self, clear_existing=False):
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
         if clear_existing and os.path.exists(self.types_header):
@@ -195,74 +162,6 @@ typedef struct OSPfs_s {
             f"#endif\n"
         )
 
-    def _strip_redefinition(self, content: str, tag: str) -> str:
-        changed = True
-        while changed:
-            changed = False
-            pattern1 = re.compile(rf"\bstruct\s+{re.escape(tag)}\s*\{{")
-            match = pattern1.search(content)
-            if match:
-                start_idx = match.start()
-                pre = content[:start_idx].rstrip()
-                if pre.endswith("typedef"):
-                    start_idx = pre.rfind("typedef")
-                brace_idx = content.find('{', match.start())
-                open_braces, curr_idx = 1, brace_idx + 1
-                while curr_idx < len(content) and open_braces > 0:
-                    if content[curr_idx] == '{':
-                        open_braces += 1
-                    elif content[curr_idx] == '}':
-                        open_braces -= 1
-                    curr_idx += 1
-                semi_idx = content.find(';', curr_idx)
-                if semi_idx != -1:
-                    content = content[:start_idx] + f"/* AUTO-STRIPPED RE-DEF: {tag} */\n" + content[semi_idx+1:]
-                    changed = True
-                    continue
-            idx = 0
-            while True:
-                match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
-                if not match:
-                    break
-                start_idx = idx + match.start()
-                brace_idx = content.find('{', start_idx)
-                open_braces, curr_idx = 1, brace_idx + 1
-                while curr_idx < len(content) and open_braces > 0:
-                    if content[curr_idx] == '{':
-                        open_braces += 1
-                    elif content[curr_idx] == '}':
-                        open_braces -= 1
-                    curr_idx += 1
-                semi_idx = content.find(';', curr_idx)
-                if semi_idx != -1:
-                    tail = content[curr_idx:semi_idx]
-                    if re.search(rf"\b{re.escape(tag)}\b", tail):
-                        content = content[:start_idx] + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n" + content[semi_idx+1:]
-                        changed = True
-                        break
-                    idx = semi_idx + 1
-                else:
-                    idx = curr_idx + 1
-            if changed:
-                continue
-            c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
-            if n > 0:
-                content, changed = c_new, True
-            c_new, n = re.subn(rf"\bstruct\s+{re.escape(tag)}\s*;", f"/* STRIPPED FWD DECL: {tag} */", content)
-            if n > 0:
-                content, changed = c_new, True
-        return content
-
-    def _rename_posix_static(self, content: str, func_name: str, filepath: str) -> Tuple[str, bool]:
-        prefix = os.path.basename(filepath).split('.')[0]
-        new_name = f"n64_{prefix}_{func_name}"
-        define = f"\n/* AUTO: rename POSIX-reserved static '{func_name}' */\n#define {func_name} {new_name}\n"
-        if define in content:
-            return content, False
-        includes = list(re.finditer(r'#include\s+.*?\n', content))
-        idx = includes[-1].end() if includes else 0
-        return content[:idx] + define + content[idx:], True
-
     def _inject_primitives_block(self, content: str) -> str:
         primitives_block = """\
 #include <stdint.h>
@@ -292,14 +191,14 @@ typedef void*    OSMesg;
         content = content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
         return content
 
-    def _inject_macros(self, content: str, macros: Dict[str, str]) -> str:
-        for macro, value in macros.items():
+    def _inject_macros(self, content: str) -> str:
+        for macro, value in self.PHASE_3_MACROS.items():
             if f"#define {macro}" not in content:
                 content += f"\n#ifndef {macro}\n#define {macro} {value}\n#endif\n"
         return content
 
-    def _inject_structs(self, content: str, structs: Dict[str, str]) -> str:
-        for tag, body in structs.items():
+    def _inject_structs(self, content: str) -> str:
+        for tag, body in {**self.N64_OS_STRUCT_BODIES, **self.PHASE_3_STRUCTS}.items():
             if not self._type_already_defined(tag, content):
                 content += f"\n{body}\n"
         return content
@@ -310,92 +209,25 @@ typedef void*    OSMesg;
                 content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {decl}\n#endif\n"
         return content
 
-    def _handle_missing_types(self, content: str, error_context: str) -> str:
-        missing_types = set()
-        for m in re.finditer(r"unknown type name '(\w+)'", error_context):
-            missing_types.add(m.group(1))
-        for tag in missing_types:
-            if tag in self.N64_PRIMITIVES:
-                continue
-            elif tag in {**self.N64_OS_STRUCT_BODIES, **self.PHASE_3_STRUCTS}:
-                if not self._type_already_defined(tag, content):
-                    body = self.N64_OS_STRUCT_BODIES.get(tag, self.PHASE_3_STRUCTS.get(tag, ""))
-                    content += f"\n{body}\n"
-            elif tag in self.N64_OS_OPAQUE_TYPES:
-                if not self._type_already_defined(tag, content):
-                    content += f"\n{self._opaque_stub(tag)}\n"
-            elif tag in self.N64_AUDIO_STATE_TYPES:
-                if not self._type_already_defined(tag, content):
-                    content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
-            else:
-                if not self._type_already_defined(tag, content):
-                    struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
-                    content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\nstruct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n#endif\n"
+    def _handle_opensl_es_headers(self, content: str) -> str:
+        if '#include <SLES/OpenSLES.h>' not in content:
+            content = f"#include <SLES/OpenSLES.h>\n#include <SLES/OpenSLES_Android.h>\n{content}"
         return content
 
-    def _handle_posix_conflicts(self, content: str, error_context: str, filepath: str) -> str:
-        for m in re.finditer(r"static declaration of '(\w+)' follows non-static declaration", error_context):
-            func_name = m.group(1)
-            if func_name in self.POSIX_RESERVED_NAMES:
-                content, _ = self._rename_posix_static(content, func_name, filepath)
+    def _handle_pthread_header(self, content: str) -> str:
+        if '#include <pthread.h>' not in content:
+            content = f"#include <pthread.h>\n{content}"
         return content
 
-    def _handle_undeclared_identifiers(self, content: str, error_context: str) -> str:
-        undeclared_idents = set()
-        for m in re.finditer(r"use of undeclared identifier '(\w+)'", error_context):
-            undeclared_idents.add(m.group(1))
-        for ident in undeclared_idents:
-            if ident in self.N64_KNOWN_GLOBALS:
-                continue
-            if ident in {**self.PHASE_1_MACROS, **self.PHASE_2_MACROS, **self.PHASE_3_MACROS}:
-                if f"#define {ident}" not in content:
-                    macro_dict = {**self.PHASE_1_MACROS, **self.PHASE_2_MACROS, **self.PHASE_3_MACROS}
-                    content += f"\n#ifndef {ident}\n#define {ident} {macro_dict[ident]}\n#endif\n"
-            elif ident.isupper() or ident.startswith(("G_", "OS_", "PI_", "PFS_", "LEO_", "ADPCM", "UNITY", "MAX_")):
-                if f"#define {ident}" not in content:
-                    content += f"\n#ifndef {ident}\n#define {ident} 0 /* AUTO-INJECTED UNDECLARED IDENTIFIER */\n#endif\n"
-            else:
-                if f"extern long long int {ident};" not in content:
-                    content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\nextern long long int {ident};\n#endif\n"
+    def _handle_jni_header(self, content: str) -> str:
+        if '#include <jni.h>' not in content:
+            content = f"#include <jni.h>\n{content}"
         return content
 
-    def _handle_implicit_functions(self, content: str, error_context: str) -> str:
-        implicit_funcs = set()
-        for m in re.finditer(r"implicit declaration of function '(\w+)'", error_context):
-            implicit_funcs.add(m.group(1))
-        for func in implicit_funcs:
-            if func in {"sinf", "cosf", "sqrtf", "abs", "fabs", "pow", "floor", "ceil", "round", "memcpy", "memset", "strlen", "strcpy", "strncpy", "strcmp", "memcmp", "malloc", "free", "exit", "atoi", "rand", "srand"}:
-                continue
-            if f"extern long long int {func}();" not in content:
-                content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern long long int {func}();\n#endif\n"
-        return content
-
-    def _handle_opensl_es_headers(self, content: str, error_context: str) -> str:
-        if re.search(r"unknown type name '(?:SLEngineItf|SLObjectItf|SLPlayItf|SLAndroidSimpleBufferQueueItf)'", error_context):
-            if '#include <SLES/OpenSLES.h>' not in content:
-                content = f"#include <SLES/OpenSLES.h>\n#include <SLES/OpenSLES_Android.h>\n{content}"
-        return content
-
-    def _handle_pthread_header(self, content: str, error_context: str) -> str:
-        if re.search(r"'pthread_t' was not declared in this scope", error_context):
-            if '#include <pthread.h>' not in content:
-                content = f"#include <pthread.h>\n{content}"
-        return content
-
-    def _handle_jni_header(self, content: str, error_context: str) -> str:
-        if re.search(r"'JNIEnv' was not declared in this scope", error_context):
-            if '#include <jni.h>' not in content:
-                content = f"#include <jni.h>\n{content}"
-        return content
-
-    def _handle_missing_macros(self, content: str, error_context: str) -> str:
-        missing_macros = set()
-        for m in re.finditer(r"'([A-Za-z0-9_]+)' was not declared in this scope", error_context):
-            missing_macros.add(m.group(1))
-        for macro in missing_macros:
-            if macro in {"OEPRESCRIPT", "DANDROID02"}:
-                if f"#define {macro}" not in content:
-                    content += f"\n#ifndef {macro}\n#define {macro} 1\n#endif\n"
+    def _handle_missing_macros(self, content: str) -> str:
+        for macro in {"OEPRESCRIPT", "DANDROID02"}:
+            if f"#define {macro}" not in content:
+                content += f"\n#ifndef {macro}\n#define {macro} 1\n#endif\n"
         return content
 
     def _handle_stub_inject(self, sym: str) -> bool:
@@ -405,21 +237,26 @@ typedef void*    OSMesg;
         if os.path.exists(self.stubs_file):
             with open(self.stubs_file, 'r', encoding='utf-8') as sf:
                 stubs_content = sf.read()
-        stub_func = f"long long int {sym}() {{ return 0; }}"
+        stub_func = f"void {sym}() {{}}\n"
         if stub_func not in stubs_content:
             with open(self.stubs_file, 'a', encoding='utf-8') as sf:
-                sf.write(f"{stub_func}\n")
+                sf.write(f"{stub_func}")
             return True
         return False
 
-    def _handle_missing_structs(self, content: str, error_context: str) -> str:
-        missing_structs = set()
-        for m in re.finditer(r"unknown type name '([A-Za-z0-9_]+)'", error_context):
-            missing_structs.add(m.group(1))
-        for struct_name in missing_structs:
-            if struct_name in {"OSThread", "OSMesgQueue"}:
-                if not self._type_already_defined(struct_name, content):
-                    content += f"\ntypedef struct {struct_name}_s {{ long long int force_align[64]; }} {struct_name};\n"
+    def _handle_missing_functions(self, content: str) -> str:
+        missing_functions = {
+            "osCreateThread": "void osCreateThread(void* thread, void* func, void* arg) {}",
+            "osDestroyThread": "void osDestroyThread(void* thread) {}",
+        }
+        stubs_content = ""
+        if os.path.exists(self.stubs_file):
+            with open(self.stubs_file, 'r', encoding='utf-8') as sf:
+                stubs_content = sf.read()
+        for func, stub in missing_functions.items():
+            if stub not in stubs_content:
+                with open(self.stubs_file, 'a', encoding='utf-8') as sf:
+                    sf.write(f"{stub}\n")
         return content
 
     def apply_to_file(self, file_path: str, error_context: str = "") -> int:
@@ -430,56 +267,22 @@ typedef void*    OSMesg;
         original_content = content
         changes = 0
 
-        for rule in self.rules:
-            try:
-                if rule["action"] == "REGEX":
-                    new_content, count = re.subn(rule["search"], rule["replace"], content)
-                    if count > 0:
-                        content, changes = new_content, changes + count
-                elif rule["action"] == "HEADER_INJECT":
-                    if re.search(rule["search"], error_context) and rule["replace"] not in content:
-                        content, changes = f"{rule['replace']}\n{content}", changes + 1
-                elif rule["action"] == "GLOBAL_INJECT":
-                    if "n64_types.h" in file_path and re.search(rule["search"], error_context):
-                        rule_marker = f"/* Rule: {rule['name']} */"
-                        if rule_marker not in content:
-                            content = f"{content}\n{rule_marker}\n{rule['replace']}\n"
-                            changes += 1
-                elif rule["action"] == "STUB_INJECT":
-                    match = re.search(rule["search"], error_context)
-                    if match and self._handle_stub_inject(match.group(1)):
-                        changes += 1
-            except re.error:
-                continue
-
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
-            if self.intelligence_level >= 1:
-                content = self._inject_macros(content, self.PHASE_1_MACROS)
-            if self.intelligence_level >= 2:
-                content = self._inject_macros(content, self.PHASE_2_MACROS)
-                content = self._inject_structs(content, self.N64_OS_STRUCT_BODIES)
-            if self.intelligence_level >= 3:
-                content = self._inject_macros(content, self.PHASE_3_MACROS)
-                content = self._inject_structs(content, self.PHASE_3_STRUCTS)
+            content = self._inject_macros(content)
+            content = self._inject_structs(content)
             content = self._inject_globals(content)
-            content = self._handle_missing_types(content, error_context)
-            content = self._handle_undeclared_identifiers(content, error_context)
-            content = self._handle_implicit_functions(content, error_context)
-            content = self.repair_unterminated_conditionals(content)
+            content = self._handle_missing_macros(content)
+            content = self._handle_missing_functions(content)
 
         if "n64_types.h" not in file_path:
-            content = self._handle_opensl_es_headers(content, error_context)
-            content = self._handle_pthread_header(content, error_context)
-            content = self._handle_jni_header(content, error_context)
-            content = self._handle_missing_macros(content, error_context)
-            content = self._handle_missing_structs(content, error_context)
-            content = self._handle_posix_conflicts(content, error_context, file_path)
+            content = self._handle_opensl_es_headers(content)
+            content = self._handle_pthread_header(content)
+            content = self._handle_jni_header(content)
 
         if content != original_content:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-        return changes
+            changes += 1
 
-    def escalate_intelligence(self):
-        self.intelligence_level = min(self.intelligence_level + 1, 3)
+        return changes
