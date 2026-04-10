@@ -17,8 +17,8 @@ class SourceConverter:
 
         # Types that the game/SDK natively defines. Auto-scraper MUST NOT stub these.
         # OSScTask is strictly defined natively by <PR/sched.h>, so we protect it.
-        # OSTask has been removed so it generates an opaque body required by PR/sched.h.
-        self.SDK_DEFINES_THESE = {"Actor", "OSScTask"}
+        # sChVegetable is a game-native Actor struct.
+        self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable"}
 
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -60,8 +60,6 @@ class SourceConverter:
             "Light": "typedef struct { int32_t words[2]; } Light;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
-            "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
-            # Full body defined here to satisfy the internal compiler size checks in <PR/sched.h>
             "OSTask": "typedef struct OSTask_s { long long int force_align[64]; } OSTask;"
         }
 
@@ -169,6 +167,16 @@ class SourceConverter:
         for m in re.finditer(r"error:\s+implicit declaration of function '(\w+)'", log_content):
             self.dynamic_categories["implicit_func_stubs"].add(m.group(1))
 
+        # Catch files with incompatible initializers (like {NULL, NULL} to f32)
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+initializing 'f32'", log_content):
+            filepath = m.group(1)
+            self.dynamic_categories["needs_float_fix"].add(filepath)
+
+        # Catch files with redefinitions
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+(?:typedef )?redefinition", log_content):
+            filepath = m.group(1)
+            self.dynamic_categories["needs_redef_strip"].add(filepath)
+
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
             return
@@ -275,6 +283,9 @@ int sched_yield(void);
             content = re.sub(r'struct\s+OSTask_s;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
             content = re.sub(r'struct\s+OSScTask_s;\n?', '', content)
+            # Remove previously injected sChVegetable to resolve the immediate conflict
+            content = re.sub(r'typedef\s+struct\s+sChVegetable_s\s+sChVegetable;\n?', '', content)
+            content = re.sub(r'struct\s+sChVegetable_s;\n?', '', content)
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
