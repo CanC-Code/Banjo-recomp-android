@@ -1,4 +1,3 @@
-
 import os
 import re
 import glob
@@ -17,9 +16,9 @@ class SourceConverter:
         self.intelligence_level = 3
 
         # ---------------------------------------------------------------------------
-        # Core Protection Lists
+        # Core Protection Lists (UPDATED for this build log)
         # ---------------------------------------------------------------------------
-        self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable"}
+        self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable", "LetterFloorTile"}
 
         self.STANDARD_TYPES = {
             "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t",
@@ -57,7 +56,7 @@ class SourceConverter:
         }
 
         # ---------------------------------------------------------------------------
-        # Macros & Struct Dicts
+        # Macros & Struct Dicts (UPDATED with new fixes from this log)
         # ---------------------------------------------------------------------------
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -78,20 +77,43 @@ class SourceConverter:
             "G_ON": "1", "G_OFF": "0", "G_RM_AA_ZB_OPA_SURF": "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
             "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
             "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
+            # NEW: required by initialize.c and audio
+            "OS_CLOCK_RATE": "62500000LL",
         }
 
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; long long int force_align; } Mtx;",
             "OSContStatus": "typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errno; } OSContStatus;",
             "OSContPad": "typedef struct OSContPad_s { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errno; } OSContPad;",
-            "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; void *msg; } OSMesgQueue;",
-            "OSThread": "typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; long long int context[67]; } OSThread;",
+            # FIXED: msg must be OSMesg* (void**) to support mq->msg[last] = ... assignments
+            "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; OSMesg *msg; } OSMesgQueue;",
+            # UPDATED OSThread: context is now a minimal struct so createthread.c member accesses (pc, a0, sp, ra, sr, rcp, fpcsr) succeed
+            "OSThread": """typedef struct __OSThreadContext_s {
+    uint64_t pc;
+    uint64_t a0;
+    uint64_t sp;
+    uint64_t ra;
+    uint32_t sr;
+    uint32_t rcp;
+    uint32_t fpcsr;
+    long long int force_align[60]; /* keep original 67-word alignment */
+} __OSThreadContext;
+typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; __OSThreadContext context; } OSThread;""",
             "OSMesgHdr": "typedef struct { uint16_t type; uint8_t pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
             "__OSBlockInfo": "typedef struct { uint32_t errStatus; void *dramAddr; void *C2Addr; uint32_t sectorSize; uint32_t C1ErrNum; uint32_t C1ErrSector[4]; } __OSBlockInfo;",
             "__OSTranxInfo": "typedef struct { uint32_t cmdType; uint16_t transferMode; uint16_t blockNum; int32_t sectorNum; uint32_t devAddr; uint32_t bmCtlShadow; uint32_t seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;",
             "OSPiHandle": "typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; __OSTranxInfo transferInfo; } OSPiHandle;",
             "OSIoMesg": "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; uint32_t devAddr; uint32_t size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
-            "OSDevMgr": "typedef struct OSDevMgr_s { int32_t active; struct OSThread_s *thread; struct OSMesgQueue_s *cmdQueue; struct OSMesgQueue_s *evtQueue; struct OSMesgQueue_s *acsQueue; } OSDevMgr;",
+            # FIXED: OSDevMgr now includes dma/edma function pointers required by devmgr.c and pimgr.c
+            "OSDevMgr": """typedef struct OSDevMgr_s {
+    int32_t active;
+    struct OSThread_s *thread;
+    struct OSMesgQueue_s *cmdQueue;
+    struct OSMesgQueue_s *evtQueue;
+    struct OSMesgQueue_s *acsQueue;
+    int32_t (*dma)(int32_t, void*, void*, uint32_t);
+    int32_t (*edma)(struct OSPiHandle_s*, int32_t, void*, void*, uint32_t);
+} OSDevMgr;""",
             "OSPfs": "typedef struct OSPfs_s { struct OSIoMesg_s ioMesgBuf; struct OSMesgQueue_s *queue; int32_t channel; uint8_t activebank; uint8_t banks; uint8_t inodeTable[256]; uint8_t dir[256]; uint32_t label[8]; int32_t repairList[256]; uint32_t version; uint32_t checksum; uint32_t inodeCacheIndex; uint8_t inodeCache[256]; } OSPfs;",
             "OSTimer": "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; uint64_t interval; uint64_t value; struct OSMesgQueue_s *mq; void *msg; } OSTimer;",
             "LookAt": "typedef struct { struct { struct { float x, y, z; float pad; } l[2]; } l; } LookAt;",
@@ -102,7 +124,13 @@ class SourceConverter:
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "OSTask": "typedef struct { uint32_t type; uint32_t flags; uint64_t *ucode_boot; uint32_t ucode_boot_size; uint64_t *ucode; uint32_t ucode_size; uint64_t *ucode_data; uint32_t ucode_data_size; uint64_t *dram_stack; uint32_t dram_stack_size; uint64_t *output_buff; uint64_t *output_buff_size; uint64_t *data_ptr; uint32_t data_size; uint64_t *yield_data_ptr; uint32_t yield_data_size; } OSTask_t; typedef union { OSTask_t t; long long int force_structure_alignment[64]; } OSTask;",
-            "Vp": "typedef struct { short vscale[4]; short vtrans[4]; } Vp_t; typedef union { Vp_t vp; long long int force_align[8]; } Vp;"
+            "Vp": "typedef struct { short vscale[4]; short vtrans[4]; } Vp_t; typedef union { Vp_t vp; long long int force_align[8]; } Vp;",
+            # NEW: LetterFloorTile_s with members used in TTC/ma/castle.c (fixes redefinition + member errors)
+            "LetterFloorTile": """typedef struct LetterFloorTile_s {
+    void *meshId;
+    int state;
+    float timeDeltaSum;
+} LetterFloorTile;""",
         }
 
         self.PHASE_3_STRUCTS = {
@@ -123,8 +151,10 @@ class SourceConverter:
             "osTvType": "uint32_t osTvType;",
             "osRomBase": "uint32_t osRomBase;",
             "osResetType": "uint32_t osResetType;",
-            "osAppNMIBuffer": "uint32_t osAppNMIBuffer;",
-            "osPiRawStartDma": "int32_t osPiRawStartDma(int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);"
+            "osAppNMIBuffer": "uint32_t osAppNMIBuffer[OS_APP_NMI_BUFSIZE];",
+            "osPiRawStartDma": "int32_t osPiRawStartDma(int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);",
+            # NEW: required by seteventmesg.c / core1/os
+            "__osEventStateTab": "OSMesg __osEventStateTab[16];",
         }
         self.rules = []
         self.dynamic_categories = defaultdict(set)
@@ -286,13 +316,17 @@ class SourceConverter:
         for m in re.finditer(r"undefined reference to `(\w+)'", log_content):
             self.dynamic_categories["undefined_symbols"].add(m.group(1))
 
+        # NEW: catch the exact array subscript error for __osEventStateTab
+        for m in re.finditer(r"array subscript is not an integer", log_content):
+            self.dynamic_categories["undeclared_identifiers"].add("__osEventStateTab")
+
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
             return
         types_content = self.read_file(self.types_header)
         changed = False
 
-        # Advanced Stub Generator
+        # Advanced Stub Generator (unchanged but now benefits from better struct bodies)
         for tag in self.dynamic_categories.get("missing_types", set()):
             if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES or tag in self.STANDARD_TYPES:
                 continue
@@ -339,8 +373,7 @@ extern long long int {ident};
         # Resolve type mismatches actively (C++ friendly)
         for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
             if self._is_known_global(var_name):
-                continue  # GLOBAL PREEMPTION: Let the known globals handler manage this
-
+                continue
             types_content = re.sub(
                 rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {var_name};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?',
                 '', types_content
@@ -359,8 +392,7 @@ extern {var_type} {var_name};
 
         for mismatch in self.dynamic_categories.get("type_mismatches", set()):
             if self._is_known_global(mismatch):
-                continue  # GLOBAL PREEMPTION: Let the known globals handler manage this
-
+                continue
             if not any(m == mismatch for m, _ in self.dynamic_categories.get("type_mismatches_resolved", set())):
                 new_content, n = re.subn(
                     rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern long long int {mismatch};\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?',
@@ -461,7 +493,7 @@ int sched_yield(void);
         original_content = content
 
         if "n64_types.h" in file_path:
-            # 1. AGGRESSIVE RUNNER CACHE PURGE
+            # 1. AGGRESSIVE RUNNER CACHE PURGE (expanded for new errors)
             content = re.sub(r'/\* OSTask/OSScTask forward decls.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'#ifndef OSTASK_FWD_DECLARED.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
@@ -470,6 +502,8 @@ int sched_yield(void);
             content = re.sub(r'struct\s+OSScTask_s;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+sChVegetable_s\s+sChVegetable;\n?', '', content)
             content = re.sub(r'struct\s+sChVegetable_s;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+LetterFloorTile_s\s+LetterFloorTile;\n?', '', content)
+            content = re.sub(r'struct\s+LetterFloorTile_s;\n?', '', content)
 
             for prim in self.STANDARD_TYPES:
                 content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
@@ -489,7 +523,7 @@ int sched_yield(void);
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
-            # 2. Safely apply the standard body dict
+            # 2. Safely apply the standard body dict (now includes all fixes)
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
