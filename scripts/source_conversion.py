@@ -16,7 +16,8 @@ class SourceConverter:
         self.intelligence_level = 3
         
         # Types that the game natively defines. Auto-scraper MUST NOT stub these.
-        self.SDK_DEFINES_THESE = {"OSTask", "OSScTask", "Actor"}
+        # OSTask and OSScTask removed so the Android wrapper generates opaque fallbacks.
+        self.SDK_DEFINES_THESE = {"Actor"}
 
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -57,7 +58,9 @@ class SourceConverter:
             "Light": "typedef struct { int32_t words[2]; } Light;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
-            "sChVegetable": "typedef struct sChVegetable_s sChVegetable;"
+            "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
+            "OSTask": "typedef struct OSTask_s { long long int force_align[64]; } OSTask;",
+            "OSScTask": "typedef struct OSScTask_s { long long int force_align[64]; } OSScTask;"
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
@@ -186,8 +189,10 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
-        # Explicit forward-declarations bypass include path shadowing conflicts 
-        # specifically with the N64 SDK's internal PR/sched.h
+        # Idempotency check prevents double-injection and removes the need for dangerous regex stripping
+        if "CORE_PRIMITIVES_DEFINED" in content: 
+            return content
+
         primitives_block = """\
 #include <stdint.h>
 
@@ -213,7 +218,6 @@ int sched_yield(void);
 #endif
 """
         if "#pragma once" not in content: content = "#pragma once\n" + content
-        content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
         return content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
 
     def _handle_float_initializers(self, content: str) -> str:
