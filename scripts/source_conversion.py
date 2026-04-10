@@ -122,7 +122,6 @@ class SourceConverter:
         return False
 
     def _global_already_declared(self, glob_var: str, content: str) -> bool:
-        """Word-boundary safe check for global variable declarations."""
         return bool(re.search(rf"\b{re.escape(glob_var)}\b", content))
 
     def strip_redefinition(self, content: str, tag: str) -> str:
@@ -154,12 +153,10 @@ class SourceConverter:
                         break
                     idx = semi_idx + 1
                 else:
-                    # FIX Bug 2: semi_idx == -1 means malformed input; break to avoid infinite loop.
                     break
         return content
 
     def scrape_logs(self, log_content: str):
-        """Self-healing engine component: Scrapes build logs to dynamically discover missing types."""
         for m in re.finditer(r"error:\s+unknown type name '(\w+)'", log_content):
             self.dynamic_categories["missing_types"].add(m.group(1))
 
@@ -170,16 +167,13 @@ class SourceConverter:
             self.dynamic_categories["implicit_func_stubs"].add(m.group(1))
 
     def apply_dynamic_fixes(self):
-        """Self-healing engine component: Injects scraped types into headers dynamically."""
         if not os.path.exists(self.types_header):
             return
         types_content = self.read_file(self.types_header)
         changed = False
 
         for tag in self.dynamic_categories.get("missing_types", set()):
-            # Skip types owned by SDK or already covered by static struct bodies.
             if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES:
-                logger.info(f"  [dynamic_fix] Skipping '{tag}' — owned by SDK or static bodies dict.")
                 continue
             if not self._type_already_defined(tag, types_content):
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
@@ -187,7 +181,6 @@ class SourceConverter:
                         f"typedef struct {struct_tag} {tag};\n")
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 changed = True
-                logger.info(f"  [dynamic_fix] Injected opaque stub for unknown type '{tag}'.")
 
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
             if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS:
@@ -212,37 +205,7 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f:
                 f.write('#include "n64_types.h"\n')
 
-    def _inject_ostask_fwd(self, content: str) -> str:
-        """
-        Inject OSTask / OSScTask forward declarations unconditionally (after purge),
-        independent of whether CORE_PRIMITIVES_DEFINED already exists.
-
-        This handles the cached-runner scenario: CORE_PRIMITIVES_DEFINED is already
-        present in n64_types.h from a prior run, so _inject_primitives_block returns
-        early — but OSTASK_FWD_DECLARED was never written by older versions of this
-        script. This method ensures it is injected in every build cycle regardless.
-        """
-        if "OSTASK_FWD_DECLARED" in content:
-            return content
-
-        fwd_block = (
-            "/* OSTask/OSScTask forward decls injected by source_conversion.py */\n"
-            "#ifndef OSTASK_FWD_DECLARED\n"
-            "#define OSTASK_FWD_DECLARED\n"
-            "struct OSTask_s;\n"
-            "typedef struct OSTask_s OSTask;\n"
-            "struct OSScTask_s;\n"
-            "typedef struct OSScTask_s OSScTask;\n"
-            "#endif\n"
-        )
-        if "#pragma once" not in content:
-            content = "#pragma once\n" + content
-        return content.replace("#pragma once", f"#pragma once\n{fwd_block}", 1)
-
     def _inject_primitives_block(self, content: str) -> str:
-        # Idempotency check prevents double-injection of the primitives block only.
-        # OSTask forward decls are handled separately in _inject_ostask_fwd so they
-        # are injected even when this block already exists in a cached file.
         if "CORE_PRIMITIVES_DEFINED" in content:
             return content
 
@@ -278,8 +241,6 @@ int sched_yield(void);
         return re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        # FIX Bug 3: Was r'...' (raw string) — \n was literal backslash-n, not newline.
-        # Now a regular string so re.sub produces actual newlines in the patched output.
         linkage_fix = (
             '#ifdef __cplusplus\n'
             'extern "C" struct OSThread_s *\\1;\n'
@@ -303,30 +264,26 @@ int sched_yield(void);
         original_content = content
 
         if "n64_types.h" in file_path:
-            # 1. FORCE-PURGE any corrupted forward declarations OR struct bodies cached
-            #    in the runner environment from a previous bad cycle.
+            # 1. Cache-Purge: Forcefully rip out ALL corrupted forward decls injected by older iterations
+            content = re.sub(r'/\* OSTask/OSScTask forward decls.*?\n#endif\n?', '', content, flags=re.DOTALL)
+            content = re.sub(r'struct\s+OSTask_s;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
+            content = re.sub(r'struct\s+OSScTask_s;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s*\{[^}]*\}\s*OSTask;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSScTask_s\s*\{[^}]*\}\s*OSScTask;\n?', '', content)
-            content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
-            content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
-            # Also purge any previously injected forward-decl block so it doesn't
-            # accumulate across cycles (the primitives block re-injects it cleanly).
-            content = re.sub(
-                r'#ifndef OSTASK_FWD_DECLARED.*?#endif\n?', '', content, flags=re.DOTALL
-            )
 
-            # _inject_ostask_fwd runs UNCONDITIONALLY — even if CORE_PRIMITIVES_DEFINED
-            # already exists in the cached file. This is the fix for the runner cache
-            # scenario where the primitives block was already present but the forward
-            # decls were never written by older script versions.
-            content = self._inject_ostask_fwd(content)
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
-            # 2. Inject PR/sptask.h so OSTask and OSScTask get their FULL definitions
-            #    (body, not just forward decl) for any code that needs sizeof(OSTask) etc.
+            # 2. Inject PR/sptask.h NATIVELY and EARLY. Placing it immediately after
+            # 'sched_yield(void);' guarantees N64 types are loaded with correct primitive types
+            # BEFORE standard libraries (<array> -> <pthread.h>) accidentally shadow PR/sched.h
             if "#include <PR/sptask.h>" not in content:
-                content += "\n#ifndef SPTASK_INJECTED\n#define SPTASK_INJECTED\n#include <PR/sptask.h>\n#endif\n"
+                if "int sched_yield(void);" in content:
+                    content = content.replace("int sched_yield(void);", "int sched_yield(void);\n#include <PR/sptask.h>\n", 1)
+                else:
+                    content += "\n#include <PR/sptask.h>\n"
 
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content):
@@ -337,7 +294,6 @@ int sched_yield(void);
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
 
-            # FIX Bug 4: Use word-boundary safe check instead of plain `in` substring match.
             for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
                 if not self._global_already_declared(glob_var, content):
                     content += f"\nextern {decl}\n"
