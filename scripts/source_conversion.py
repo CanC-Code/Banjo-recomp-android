@@ -16,8 +16,9 @@ class SourceConverter:
         self.intelligence_level = 3
 
         # Types that the game/SDK natively defines. Auto-scraper MUST NOT stub these.
-        # OSTask and OSScTask are strictly defined natively by <PR/sptask.h> and <PR/sched.h>.
-        self.SDK_DEFINES_THESE = {"Actor", "OSTask", "OSScTask"}
+        # OSScTask is strictly defined natively by <PR/sched.h>, so we protect it.
+        # OSTask has been removed so it generates an opaque body required by PR/sched.h.
+        self.SDK_DEFINES_THESE = {"Actor", "OSScTask"}
 
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -60,6 +61,8 @@ class SourceConverter:
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
+            # Full body defined here to satisfy the internal compiler size checks in <PR/sched.h>
+            "OSTask": "typedef struct OSTask_s { long long int force_align[64]; } OSTask;"
         }
 
         self.PHASE_3_STRUCTS = {
@@ -264,31 +267,24 @@ int sched_yield(void);
         original_content = content
 
         if "n64_types.h" in file_path:
-            # 1. Cache-Purge: Forcefully rip out ALL corrupted forward decls injected by older iterations
-            content = re.sub(r'/\* OSTask/OSScTask forward decls.*?\n#endif\n?', '', content, flags=re.DOTALL)
-            content = re.sub(r'struct\s+OSTask_s;\n?', '', content)
+            # 1. AGGRESSIVE RUNNER CACHE PURGE
+            # Destroys any lingering forward declarations or injected fwd blocks from previous attempts.
+            content = re.sub(r'/\* OSTask/OSScTask forward decls.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
+            content = re.sub(r'#ifndef OSTASK_FWD_DECLARED.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
-            content = re.sub(r'struct\s+OSScTask_s;\n?', '', content)
+            content = re.sub(r'struct\s+OSTask_s;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
-            content = re.sub(r'typedef\s+struct\s+OSTask_s\s*\{[^}]*\}\s*OSTask;\n?', '', content)
-            content = re.sub(r'typedef\s+struct\s+OSScTask_s\s*\{[^}]*\}\s*OSScTask;\n?', '', content)
+            content = re.sub(r'struct\s+OSScTask_s;\n?', '', content)
 
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
-            # 2. Inject PR/sptask.h NATIVELY and EARLY. Placing it immediately after
-            # 'sched_yield(void);' guarantees N64 types are loaded with correct primitive types
-            # BEFORE standard libraries (<array> -> <pthread.h>) accidentally shadow PR/sched.h
-            if "#include <PR/sptask.h>" not in content:
-                if "int sched_yield(void);" in content:
-                    content = content.replace("int sched_yield(void);", "int sched_yield(void);\n#include <PR/sptask.h>\n", 1)
-                else:
-                    content += "\n#include <PR/sptask.h>\n"
-
+            # 2. Safely apply the standard body dict. OSTask is now rebuilt as a full opaque struct here. 
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
+                    
             for tag, body in self.PHASE_3_STRUCTS.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
