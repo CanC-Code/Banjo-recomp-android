@@ -31,6 +31,13 @@ class SourceConverter:
             "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"
         }
 
+        self.POSIX_RESERVED_NAMES = {
+            "close", "open", "read", "write", "send", "recv", "connect", "accept",
+            "bind", "listen", "socket", "select", "poll", "fork", "exec", "wait",
+            "kill", "signal", "alarm", "sleep", "usleep", "creat", "unlink", "stat",
+            "fstat", "lstat", "chmod", "chown", "mkdir", "rmdir", "rename", "truncate"
+        }
+
         # ---------------------------------------------------------------------------
         # Macros & Struct Dicts – FINAL VERSION
         # ---------------------------------------------------------------------------
@@ -70,8 +77,7 @@ class SourceConverter:
             "OSContPad": "typedef struct OSContPad_s { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errno; } OSContPad;",
             "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; OSMesg *msg; } OSMesgQueue;",
 
-            # ── CRITICAL: Named inner struct + union ──
-            # This satisfies BOTH reinterpret_cast (exceptasm.cpp) AND direct .pc access (createthread.c)
+            # CRITICAL: Named inner struct + union for dual compatibility
             "OSThread": """typedef union __OSThreadContext_u {
     struct {
         uint64_t pc;
@@ -153,8 +159,44 @@ typedef struct OSThread_s {
         self.dynamic_categories = defaultdict(set)
 
     # -----------------------------------------------------------------------
-    # (All helper methods unchanged except the two below)
+    # Helper Methods
     # -----------------------------------------------------------------------
+    def read_file(self, file_path: str) -> str:
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
+        except Exception:
+            return ""
+
+    def write_file(self, file_path: str, content: str):
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    def _type_already_defined(self, tag: str, content: str) -> bool:
+        patterns = [
+            rf'typedef .*?\b{tag}\b',
+            rf'struct .*?\b{tag}\b',
+            rf'#define .*?\b{tag}\b'
+        ]
+        return any(re.search(p, content) for p in patterns)
+
+    def _global_already_declared(self, glob_var: str, content: str) -> bool:
+        return bool(re.search(rf'\b{glob_var}\b', content))
+
+    def strip_redefinition(self, content: str, tag: str) -> str:
+        # Aggressive removal of duplicate typedef/struct
+        content = re.sub(rf'typedef\s+struct\s+{tag}_s\s*{{[^}}]*}}\s*{tag};?', '', content)
+        content = re.sub(rf'struct\s+{tag}_s\s*{{[^}}]*}};', '', content)
+        content = re.sub(rf'typedef\s+struct\s+{tag}\s+{tag};?', '', content)
+        return content
+
+    def _inject_primitives_block(self, content: str) -> str:
+        if "#pragma once" not in content:
+            content = "#pragma once\n" + content
+        if "n64_bool" not in content:
+            content += '\n#ifndef n64_bool\n#define n64_bool int\n#endif\n'
+        return content
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
         linkage_fix = (
@@ -181,6 +223,54 @@ typedef struct OSThread_s {
         content = re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
         content = re.sub(r'\{\s*NULL\s*,\s*NULL\s*,\s*NULL\s*,\s*NULL\s*\}', '{NULL, 0, 0.0f}', content)
         return content
+
+    def load_logic(self):
+        """Placeholder – loads rules from logic_dir if files exist (can be extended later)"""
+        self.rules = []  # No external rules yet – all fixes are inline
+        logger.info("Logic loaded (inline rules active)")
+
+    def scrape_logs(self, log_content: str):
+        """Populate dynamic_categories from build log"""
+        self.dynamic_categories = defaultdict(set)
+
+        # Unknown types
+        for m in re.finditer(r"unknown type name ['\"](.*?)['\"]", log_content):
+            typ = m.group(1).strip()
+            if typ not in self.STANDARD_TYPES and typ not in self.SDK_DEFINES_THESE:
+                self.dynamic_categories["missing_types"].add(typ)
+
+        # Undeclared identifiers
+        for m in re.finditer(r"use of undeclared identifier ['\"](.*?)['\"]", log_content):
+            ident = m.group(1).strip()
+            self.dynamic_categories["undeclared_identifiers"].add(ident)
+
+        # Redefinitions
+        for m in re.finditer(r"redefinition of ['\"](.*?)['\"]", log_content):
+            self.dynamic_categories["needs_redef_strip"].add(m.group(1).strip())
+
+        # Float / initializer issues
+        if "initializer element is not a compile-time constant" in log_content or "float" in log_content.lower():
+            self.dynamic_categories["needs_float_fix"].add("particle.c")  # extend as needed
+
+        # POSIX static conflicts
+        for m in re.finditer(r"static declaration of ['\"](.*?)['\"] follows non-static", log_content):
+            func = m.group(1).strip()
+            if func in self.POSIX_RESERVED_NAMES:
+                self.dynamic_categories["posix_reserved_conflict"].add((os.path.basename(log_content.split(":")[0] if ":" in log_content else ""), func))
+
+        logger.info(f"Scraped {sum(len(v) for v in self.dynamic_categories.values())} dynamic issues")
+
+    def apply_dynamic_fixes(self):
+        """Apply scraped fixes to types_header and stubs"""
+        if not os.path.exists(self.types_header):
+            return
+
+        with open(self.types_header, 'a', encoding='utf-8') as f:
+            for typ in self.dynamic_categories.get("missing_types", set()):
+                if typ not in self.N64_OS_STRUCT_BODIES:
+                    f.write(f"\n/* Dynamic opaque: */ typedef struct {typ}_s {typ};\n")
+
+        logger.info("Dynamic fixes applied to types/stubs")
 
     def apply_to_file(self, file_path: str) -> int:
         if not os.path.exists(file_path):
@@ -241,8 +331,8 @@ extern {decl}
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
 
-            # POSIX static renames (unchanged)
-            for target_file, func_name in self.dynamic_categories.get("posix_reserved_conflict", set()):
+            # POSIX static renames
+            for target_file, func_name in list(self.dynamic_categories.get("posix_reserved_conflict", set())):
                 if func_name in self.POSIX_RESERVED_NAMES and (file_path.endswith(target_file) or target_file.endswith(file_path)):
                     prefix = os.path.basename(file_path).split('.')[0]
                     new_name = f"n64_{prefix}_{func_name}"
