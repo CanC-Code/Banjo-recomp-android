@@ -3,7 +3,6 @@ import os
 import re
 import glob
 from collections import defaultdict
-from typing import Dict, Set, List, Tuple, Optional
 
 class SourceConverter:
     def __init__(self, logic_dir="scripts/conversion_logic"):
@@ -342,6 +341,34 @@ typedef void*    OSMesg;
                 content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern long long int {func}();\n#endif\n"
         return content
 
+    def _handle_opensl_es_headers(self, content: str, error_context: str) -> str:
+        if re.search(r"unknown type name '(?:SLEngineItf|SLObjectItf|SLPlayItf|SLVolumeItf|SLAndroidSimpleBufferQueueItf)'", error_context):
+            if '#include <SLES/OpenSLES.h>' not in content:
+                content = f"#include <SLES/OpenSLES.h>\n#include <SLES/OpenSLES_Android.h>\n{content}"
+        return content
+
+    def _handle_pthread_header(self, content: str, error_context: str) -> str:
+        if re.search(r"'pthread_t' was not declared in this scope", error_context):
+            if '#include <pthread.h>' not in content:
+                content = f"#include <pthread.h>\n{content}"
+        return content
+
+    def _handle_jni_header(self, content: str, error_context: str) -> str:
+        if re.search(r"'JNIEnv' was not declared in this scope", error_context):
+            if '#include <jni.h>' not in content:
+                content = f"#include <jni.h>\n{content}"
+        return content
+
+    def _handle_missing_macros(self, content: str, error_context: str) -> str:
+        missing_macros = set()
+        for m in re.finditer(r"'([A-Za-z0-9_]+)' was not declared in this scope", error_context):
+            missing_macros.add(m.group(1))
+        for macro in missing_macros:
+            if macro in {"OEPRESCRIPT", "DANDROID02"}:
+                if f"#define {macro}" not in content:
+                    content += f"\n#ifndef {macro}\n#define {macro} 1\n#endif\n"
+        return content
+
     def _handle_stub_inject(self, sym: str) -> bool:
         if not sym or sym.startswith("_Z") or "vtable" in sym:
             return False
@@ -404,8 +431,12 @@ typedef void*    OSMesg;
             content = self._handle_implicit_functions(content, error_context)
             content = self.repair_unterminated_conditionals(content)
 
-        # Handle POSIX conflicts in source files
+        # Handle OpenSL ES, POSIX, JNI, and missing macros in source files
         if "n64_types.h" not in file_path:
+            content = self._handle_opensl_es_headers(content, error_context)
+            content = self._handle_pthread_header(content, error_context)
+            content = self._handle_jni_header(content, error_context)
+            content = self._handle_missing_macros(content, error_context)
             content = self._handle_posix_conflicts(content, error_context, file_path)
 
         if content != original_content:
