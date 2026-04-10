@@ -79,7 +79,7 @@ typedef struct OSPfs_s {
             "ADPCM_STATE": "typedef struct { long long int force_align[16]; } ADPCM_STATE;",
             "Acmd": "typedef union { long long int force_align; uint32_t words[2]; } Acmd;",
             "Hilite": "typedef struct { int32_t words[2]; } Hilite;",
-            "Light": "typedef struct { int32_t words[2]; } Light;",
+            "Light": "typedef struct { int32_t words[2]; } Hilite;",
             "OSTask": "typedef struct { long long int force_align[64]; } OSTask;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
@@ -302,10 +302,19 @@ float sqrtf(float value);
         return content
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        # Note: The context.status fix was manually patched with reinterpret_cast, 
-        # so we won't rewrite it here to avoid overwriting your correct logic.
-        content = re.sub(r'extern struct OSThread_s \*__osRunQueue;', 'extern "C" struct OSThread_s *__osRunQueue;', content)
-        content = re.sub(r'extern struct OSThread_s \*__osFaultedThread;', 'extern "C" struct OSThread_s *__osFaultedThread;', content)
+        # Wrap linkage overrides in __cplusplus guards to prevent C compiler errors
+        content = re.sub(
+            r'extern struct OSThread_s \*__osRunQueue;', 
+            '#ifdef __cplusplus\\nextern "C" struct OSThread_s *__osRunQueue;\\n#else\\nextern struct OSThread_s *__osRunQueue;\\n#endif', 
+            content
+        )
+        content = re.sub(
+            r'extern struct OSThread_s \*__osFaultedThread;', 
+            '#ifdef __cplusplus\\nextern "C" struct OSThread_s *__osFaultedThread;\\n#else\\nextern struct OSThread_s *__osFaultedThread;\\n#endif', 
+            content
+        )
+        # Fix context.status access (only if it wasn't manually fixed in the source)
+        content = re.sub(r'__osRunningThread->context\\.status', '((uint32_t*)__osRunningThread->context)[0]', content)
         return content
 
     def apply_to_file(self, file_path: str, error_context: str = "") -> int:
@@ -318,7 +327,7 @@ float sqrtf(float value);
 
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
-            content = self._handle_math_conflicts(content) # Added our math fixes block here
+            content = self._handle_math_conflicts(content)
             content = self._inject_macros(content)
             content = self._inject_structs(content)
             content = self._inject_globals(content)
