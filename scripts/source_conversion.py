@@ -16,7 +16,8 @@ class SourceConverter:
         self.intelligence_level = 3
         
         # Types that the game natively defines. Auto-scraper MUST NOT stub these.
-        self.SDK_DEFINES_THESE = {"Actor"}
+        # OSTask and OSScTask restored here. They will be resolved natively via <PR/sptask.h>
+        self.SDK_DEFINES_THESE = {"Actor", "OSTask", "OSScTask"}
 
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -58,9 +59,8 @@ class SourceConverter:
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
-            # Safe forward declarations to avoid redefinition conflicts with PR/sched.h
-            "OSTask": "typedef struct OSTask_s OSTask;",
-            "OSScTask": "typedef struct OSScTask_s OSScTask;"
+            # Notice OSTask and OSScTask are completely removed here. 
+            # We let the real PR/sptask.h header provide the true, full-sized N64 union.
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
@@ -214,6 +214,9 @@ int sched_yield(void);
 #ifdef __cplusplus
 }
 #endif
+
+// Inject standard N64 task definitions safely so PR/gu.h and PR/sched.h have full structural context natively.
+#include <PR/sptask.h>
 
 #endif
 """
