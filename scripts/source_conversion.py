@@ -15,6 +15,9 @@ class SourceConverter:
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
         self.intelligence_level = 3
         
+        # Types that the game natively defines. Auto-scraper MUST NOT stub these.
+        self.SDK_DEFINES_THESE = {"OSTask", "OSScTask", "Actor"}
+
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
             "OS_IM_4": "0x0008", "OS_IM_5": "0x0010", "OS_IM_6": "0x0020", "OS_IM_7": "0x0040",
@@ -52,10 +55,9 @@ class SourceConverter:
             "Acmd": "typedef union { long long int force_align; uint32_t words[2]; } Acmd;",
             "Hilite": "typedef struct { int32_t words[2]; } Hilite;",
             "Light": "typedef struct { int32_t words[2]; } Light;",
-            "OSTask": "typedef struct { long long int force_align[64]; } OSTask;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
-            "sChVegetable": "typedef struct sChVegetable sChVegetable;" # Removed Actor stub to allow prop.h definition
+            "sChVegetable": "typedef struct sChVegetable_s sChVegetable;"
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
@@ -72,6 +74,7 @@ class SourceConverter:
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
         self.rules = []
+        self.dynamic_categories = defaultdict(set)
 
     def read_file(self, filepath: str) -> str:
         try:
@@ -100,17 +103,16 @@ class SourceConverter:
                             })
 
     def _type_already_defined(self, tag: str, content: str) -> bool:
+        if tag in self.SDK_DEFINES_THESE: return True
         if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content): return True
         if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content): return True
         if f"{tag}_DEFINED" in content: return True
         return False
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        """Integrated from old build driver: intelligently strips redundant typedefs to prevent build failures."""
         changed = True
         while changed:
             changed = False
-            # Strip anonymous typedef bodies
             idx = 0
             while True:
                 match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
@@ -133,10 +135,46 @@ class SourceConverter:
                 else:
                     idx = curr_idx + 1
             if changed: continue
-
             c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
             if n > 0: content, changed = c_new, True
         return content
+
+    def scrape_logs(self, log_content: str):
+        """Self-healing engine component: Scrapes build logs to dynamically discover missing types."""
+        for m in re.finditer(r"error:\s+unknown type name '(\w+)'", log_content):
+            self.dynamic_categories["missing_types"].add(m.group(1))
+        
+        for m in re.finditer(r"error:\s+use of undeclared identifier '(\w+)'", log_content):
+            self.dynamic_categories["undeclared_identifiers"].add(m.group(1))
+            
+        for m in re.finditer(r"error:\s+implicit declaration of function '(\w+)'", log_content):
+            self.dynamic_categories["implicit_func_stubs"].add(m.group(1))
+
+    def apply_dynamic_fixes(self):
+        """Self-healing engine component: Injects scraped types into headers dynamically."""
+        if not os.path.exists(self.types_header): return
+        types_content = self.read_file(self.types_header)
+        changed = False
+
+        for tag in self.dynamic_categories.get("missing_types", set()):
+            if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES:
+                continue
+            if not self._type_already_defined(tag, types_content):
+                struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
+                decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
+                changed = True
+
+        for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
+            if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS:
+                continue
+            decl = f"extern long long int {ident};"
+            if decl not in types_content and f"{ident}_DEFINED" not in types_content:
+                types_content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n{decl}\n#endif\n"
+                changed = True
+
+        if changed:
+            self.write_file(self.types_header, types_content)
 
     def bootstrap_n64_types(self, clear_existing=False):
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
@@ -148,10 +186,9 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
-        # Enforce C standard linkage for math and threading before N64 headers are loaded
+        # Enforce C standard linkage for math before N64 headers are loaded to prevent NDK 25 C++ clashes.
         primitives_block = """\
 #include <stdint.h>
-#include <math.h>
 #include <sched.h>
 
 #ifndef CORE_PRIMITIVES_DEFINED
@@ -161,6 +198,17 @@ typedef uint32_t u32; typedef int32_t  s32; typedef uint64_t u64; typedef int64_
 typedef float    f32; typedef double   f64; typedef int      n64_bool;
 typedef int32_t  OSIntMask; typedef uint64_t OSTime; typedef uint32_t OSId;
 typedef int32_t  OSPri; typedef void* OSMesg;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+float cosf(float);
+float sinf(float);
+float sqrtf(float);
+#ifdef __cplusplus
+}
+#endif
+
 #endif
 """
         if "#pragma once" not in content: content = "#pragma once\n" + content
@@ -168,7 +216,6 @@ typedef int32_t  OSPri; typedef void* OSMesg;
         return content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
 
     def _handle_float_initializers(self, content: str) -> str:
-        # Replaces {NULL, NULL} inside arrays with {0.0f, 0.0f} to fix NDK 25 void* -> float compatibility errors
         return re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
@@ -183,13 +230,12 @@ typedef int32_t  OSPri; typedef void* OSMesg;
         content = self.read_file(file_path)
         original_content = content
 
-        # Process N64 Bridge Header
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content): 
-                    content = self.strip_redefinition(content, tag) # Integrated dynamic stripping
+                    content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
             for tag, body in self.PHASE_3_STRUCTS.items():
                 if not self._type_already_defined(tag, content): 
@@ -198,12 +244,10 @@ typedef int32_t  OSPri; typedef void* OSMesg;
             for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
                 if glob_var not in content: content += f"\nextern {decl}\n"
 
-        # Process Game Source Files
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
             
-            # Apply static rules
             for rule in self.rules:
                 if rule['action'] == 'replace':
                     content = content.replace(rule['search'], rule['replace'])
