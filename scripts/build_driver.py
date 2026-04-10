@@ -19,7 +19,9 @@ LOG_FILE        = "Android/full_build_log.txt"
 FAILED_LOG_FILE = "Android/failed_files.log"
 MANIFEST_FILE   = "Android/fixed_files.log"
 TYPES_HEADER    = "Android/app/src/main/cpp/ultra/n64_types.h"
-MAX_STALL       = 5
+
+# 🚀 Fast-Abort Optimization: We don't need 5 cycles. 1 stall prevents 40+ minutes of wasted CI processing.
+MAX_STALL       = 1 
 
 def strip_ansi(text):
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
@@ -104,8 +106,8 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            # Synchronized Omni-Trigger v37 (Includes Vtx)
-            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
+            # Synchronized Omni-Trigger v38 (Includes ALHeap, OSThread, OSMesgQueue)
+            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|OSThread|OSMesgQueue|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq|ALHeap|__SDK_)'|different language linkage|redefinition of 'OSId'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
 
             if re.search(trigger_pattern, log_data):
                 print("🛡️ Master Shield Trigger Detected: Routing to n64_types.h")
