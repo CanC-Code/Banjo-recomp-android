@@ -13,12 +13,12 @@ class SourceConverter:
         self.logic_dir = logic_dir
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
-        self.intelligence_level = 3
 
-        # Types that the game/SDK natively defines. Auto-scraper MUST NOT stub these.
+        # ---------------------------------------------------------------------------
+        # Core Protection Lists
+        # ---------------------------------------------------------------------------
         self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable"}
         
-        # Standard C primitives. Auto-scraper MUST NEVER stub these.
         self.STANDARD_TYPES = {
             "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t", 
             "uint64_t", "int64_t", "size_t", "intptr_t", "uintptr_t", "ptrdiff_t", 
@@ -27,6 +27,36 @@ class SourceConverter:
             "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool"
         }
 
+        self.POSIX_RESERVED_NAMES = {
+            "close", "open", "read", "write", "send", "recv", "connect", "accept", 
+            "bind", "listen", "select", "poll", "dup", "dup2", "fork", "exec", "exit",
+            "stat", "fstat", "lstat", "access", "unlink", "rename", "mkdir", "rmdir", 
+            "chdir", "getcwd", "getpid", "getppid", "getuid", "getgid", "signal", 
+            "raise", "kill", "printf", "fprintf", "sprintf", "snprintf", "scanf", 
+            "fscanf", "sscanf", "time", "clock", "sleep", "usleep", "malloc", "calloc", 
+            "realloc", "free", "memcpy", "memset", "memmove", "memcmp", "strlen", 
+            "strcpy", "strncpy", "strcmp", "strncmp", "strcat", "strncat", "strchr", 
+            "strrchr", "strstr", "atoi", "atol", "atof", "strtol", "strtod", "abs", 
+            "labs", "fabs", "sqrt", "pow", "sin", "cos", "tan", "asin", "acos", "atan", 
+            "atan2", "rand", "srand",
+        }
+
+        self.N64_OS_OPAQUE_TYPES = {
+            "OSPfs", "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue", 
+            "OSThread", "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", 
+            "OSScKiller", "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr",
+            "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
+        }
+
+        self.N64_AUDIO_STATE_TYPES = {
+            "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "INTERLEAVE_STATE", 
+            "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE", 
+            "MIXER_STATE",
+        }
+
+        # ---------------------------------------------------------------------------
+        # Macros & Struct Dicts
+        # ---------------------------------------------------------------------------
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
             "OS_IM_4": "0x0008", "OS_IM_5": "0x0010", "OS_IM_6": "0x0020", "OS_IM_7": "0x0040",
@@ -55,10 +85,12 @@ class SourceConverter:
             "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; void *msg; } OSMesgQueue;",
             "OSThread": "typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; long long int context[67]; } OSThread;",
             "OSMesgHdr": "typedef struct { uint16_t type; uint8_t pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
-            "OSPiHandle": "typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; } OSPiHandle;",
-            "OSIoMesg": "typedef struct OSIoMesg_s { void *hdr; void *dramAddr; uint32_t devAddr; uint32_t size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
+            "__OSBlockInfo": "typedef struct { uint32_t errStatus; void *dramAddr; void *C2Addr; uint32_t sectorSize; uint32_t C1ErrNum; uint32_t C1ErrSector[4]; } __OSBlockInfo;",
+            "__OSTranxInfo": "typedef struct { uint32_t cmdType; uint16_t transferMode; uint16_t blockNum; int32_t sectorNum; uint32_t devAddr; uint32_t bmCtlShadow; uint32_t seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;",
+            "OSPiHandle": "typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; __OSTranxInfo transferInfo; } OSPiHandle;",
+            "OSIoMesg": "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; uint32_t devAddr; uint32_t size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
             "OSDevMgr": "typedef struct OSDevMgr_s { int32_t active; struct OSThread_s *thread; struct OSMesgQueue_s *cmdQueue; struct OSMesgQueue_s *evtQueue; struct OSMesgQueue_s *acsQueue; } OSDevMgr;",
-            "OSPfs": "typedef struct OSPfs_s { int32_t channel; uint8_t activebank; uint8_t banks; } OSPfs;",
+            "OSPfs": "typedef struct OSPfs_s { struct OSIoMesg_s ioMesgBuf; struct OSMesgQueue_s *queue; int32_t channel; uint8_t activebank; uint8_t banks; uint8_t inodeTable[256]; uint8_t dir[256]; uint32_t label[8]; int32_t repairList[256]; uint32_t version; uint32_t checksum; uint32_t inodeCacheIndex; uint8_t inodeCache[256]; } OSPfs;",
             "OSTimer": "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; uint64_t interval; uint64_t value; struct OSMesgQueue_s *mq; void *msg; } OSTimer;",
             "LookAt": "typedef struct { struct { struct { float x, y, z; float pad; } l[2]; } l; } LookAt;",
             "ADPCM_STATE": "typedef struct { long long int force_align[16]; } ADPCM_STATE;",
@@ -140,36 +172,80 @@ class SourceConverter:
         return bool(re.search(rf"\b{re.escape(glob_var)}\b", content))
 
     def strip_redefinition(self, content: str, tag: str) -> str:
+        """Brace-matched removal of any struct/typedef definition for tag."""
         changed = True
         while changed:
             changed = False
+            # Named struct body
+            pattern1 = re.compile(rf"\bstruct\s+{re.escape(tag)}\s*\{{")
+            match = pattern1.search(content)
+            if match:
+                start_idx = match.start()
+                pre = content[:start_idx].rstrip()
+                if pre.endswith("typedef"):
+                    start_idx = pre.rfind("typedef")
+                brace_idx = content.find('{', match.start())
+                open_braces, curr_idx = 1, brace_idx + 1
+                while curr_idx < len(content) and open_braces > 0:
+                    if content[curr_idx] == '{': open_braces += 1
+                    elif content[curr_idx] == '}': open_braces -= 1
+                    curr_idx += 1
+                semi_idx = content.find(';', curr_idx)
+                if semi_idx != -1:
+                    content = content[:start_idx] + f"/* AUTO-STRIPPED RE-DEF: {tag} */\n" + content[semi_idx+1:]
+                    changed = True
+                    continue
+
+            # Anonymous typedef body ending in tag
             idx = 0
             while True:
                 match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
-                if not match:
-                    break
+                if not match: break
                 start_idx = idx + match.start()
                 brace_idx = content.find('{', start_idx)
                 open_braces, curr_idx = 1, brace_idx + 1
                 while curr_idx < len(content) and open_braces > 0:
-                    if content[curr_idx] == '{':
-                        open_braces += 1
-                    elif content[curr_idx] == '}':
-                        open_braces -= 1
+                    if content[curr_idx] == '{': open_braces += 1
+                    elif content[curr_idx] == '}': open_braces -= 1
                     curr_idx += 1
                 semi_idx = content.find(';', curr_idx)
                 if semi_idx != -1:
                     tail = content[curr_idx:semi_idx]
                     if re.search(rf"\b{re.escape(tag)}\b", tail):
-                        content = (content[:start_idx]
-                                   + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n"
-                                   + content[semi_idx + 1:])
+                        content = content[:start_idx] + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n" + content[semi_idx+1:]
                         changed = True
                         break
                     idx = semi_idx + 1
                 else:
-                    break
+                    idx = curr_idx + 1
+            if changed: continue
         return content
+
+    def repair_unterminated_conditionals(self, content: str) -> str:
+        """Scan for #ifndef/#ifdef that are never closed and remove orphaned guards."""
+        lines = content.split('\n')
+        stack = [] 
+        output = list(lines)
+        remove = set()
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if re.match(r'#\s*(?:ifndef|ifdef|if)\b', stripped):
+                stack.append(i)
+            elif re.match(r'#\s*endif\b', stripped):
+                if stack:
+                    stack.pop()
+                    
+        for idx in stack:
+            remove.add(idx)
+            for j in range(idx + 1, min(idx + 4, len(lines))):
+                if lines[j].strip().startswith('#define') or lines[j].strip().startswith('#endif'):
+                    remove.add(j)
+                    break
+
+        if not remove: return content
+        result = [line for i, line in enumerate(output) if i not in remove]
+        return '\n'.join(result)
 
     def scrape_logs(self, log_content: str):
         for m in re.finditer(r"error:\s+unknown type name '(\w+)'", log_content):
@@ -181,32 +257,30 @@ class SourceConverter:
         for m in re.finditer(r"error:\s+implicit declaration of function '(\w+)'", log_content):
             self.dynamic_categories["implicit_func_stubs"].add(m.group(1))
 
-        # Capture files with incompatible float initializers
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+initializing 'f32'", log_content):
-            filepath = m.group(1)
-            self.dynamic_categories["needs_float_fix"].add(filepath)
+            self.dynamic_categories["needs_float_fix"].add(m.group(1))
 
-        # Capture files with strict redefinitions
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+(?:typedef )?redefinition", log_content):
-            filepath = m.group(1)
-            self.dynamic_categories["needs_redef_strip"].add(filepath)
+            self.dynamic_categories["needs_redef_strip"].add(m.group(1))
 
-        # Capture misidentified pointer accesses
         for m in re.finditer(r"error:\s+member reference (?:base )?type '.*?' is not a (?:pointer|structure or union)\n([^\n]+)\n", log_content):
-            snippet = m.group(1)
-            for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', snippet):
+            for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', m.group(1)):
                 self.dynamic_categories["not_a_pointer"].add(mm.group(1))
 
-        # Capture generalized type mismatches (fallback for unrecognized mismatch signatures)
+        # Advanced Categories from Logical Enhancer
         for m in re.finditer(r"error:\s+redefinition of '(\w+)' (?:with a different type|as different kind of symbol)", log_content):
             self.dynamic_categories["type_mismatches"].add(m.group(1))
 
-        # Capture resolvable type mismatches to dynamically learn the correct signature
         for m in re.finditer(r"error:\s+redefinition of '(\w+)' with a different type: '([^']+)'", log_content):
-            var_name = m.group(1)
-            var_type = m.group(2)
-            var_type = re.sub(r"\s*\(aka '[^']+'\)", "", var_type) # Strip aka notes
+            var_name, var_type = m.group(1), m.group(2)
+            var_type = re.sub(r"\s*\(aka '[^']+'\)", "", var_type)
             self.dynamic_categories["type_mismatches_resolved"].add((var_name, var_type))
+
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+static declaration of '(\w+)' follows non-static", log_content):
+            self.dynamic_categories["posix_reserved_conflict"].add((m.group(1), m.group(2)))
+
+        for m in re.finditer(r"undefined reference to `(\w+)'", log_content):
+            self.dynamic_categories["undefined_symbols"].add(m.group(1))
 
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
@@ -214,21 +288,22 @@ class SourceConverter:
         types_content = self.read_file(self.types_header)
         changed = False
 
+        # Advanced Stub Generator
         for tag in self.dynamic_categories.get("missing_types", set()):
             if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES or tag in self.STANDARD_TYPES:
                 continue
             if not self._type_already_defined(tag, types_content):
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
-                decl = (f"struct {struct_tag} {{ long long int force_align[64]; }};\n"
-                        f"typedef struct {struct_tag} {tag};\n")
+                if tag in self.N64_OS_OPAQUE_TYPES or tag in self.N64_AUDIO_STATE_TYPES:
+                    decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
+                else:
+                    decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 changed = True
 
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
             if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS or ident in self.STANDARD_TYPES:
                 continue
-            
-            # Smart Macro Inference vs. Global Inference
             if ident.isupper() or ident.startswith(("G_", "OS_", "PI_", "PFS_", "LEO_", "ADPCM")):
                 decl = f"#define {ident} 0"
             else:
@@ -251,13 +326,11 @@ class SourceConverter:
         for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
             types_content = re.sub(rf'#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\nextern long long int {var_name};\n#endif\n?', '', types_content)
             types_content = re.sub(rf'extern long long int {var_name};\n?', '', types_content)
-            
             decl = f"extern {var_type} {var_name};"
             if decl not in types_content:
                 types_content += f"\n#ifndef {var_name}_DEFINED\n#define {var_name}_DEFINED\n{decl}\n#endif\n"
                 changed = True
 
-        # Strip unresolvable type mismatches to force header fallback
         for mismatch in self.dynamic_categories.get("type_mismatches", set()):
             if not any(m == mismatch for m, _ in self.dynamic_categories.get("type_mismatches_resolved", set())):
                 new_content, n = re.subn(rf'#ifndef {mismatch}_DEFINED\n#define {mismatch}_DEFINED\nextern long long int {mismatch};\n#endif\n?', '', types_content)
@@ -266,7 +339,21 @@ class SourceConverter:
                     types_content = new_content
                     changed = True
 
+        # Undefined Symbols & Implicit functions -> n64_stubs.c
+        stubs_added = False
+        stubs_content = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "n64_types.h"\n\n'
+        for sym in self.dynamic_categories.get("undefined_symbols", set()) | self.dynamic_categories.get("implicit_func_stubs", set()):
+            if isinstance(sym, str) and not sym.startswith("_Z") and "vtable" not in sym:
+                if f" {sym}(" not in stubs_content:
+                    stubs_content += f"long long int {sym}() {{ return 0; }}\n"
+                    stubs_added = True
+        
+        if stubs_added:
+            self.write_file(self.stubs_file, stubs_content)
+
         if changed:
+            # Self-heal any broken ifndef guards before writing
+            types_content = self.repair_unterminated_conditionals(types_content)
             self.write_file(self.types_header, types_content)
 
     def bootstrap_n64_types(self, clear_existing=False):
@@ -350,12 +437,10 @@ int sched_yield(void);
             content = re.sub(r'typedef\s+struct\s+sChVegetable_s\s+sChVegetable;\n?', '', content)
             content = re.sub(r'struct\s+sChVegetable_s;\n?', '', content)
 
-            # Destroys any lingering standard primitive stubs that caused the typedef collisions
             for prim in self.STANDARD_TYPES:
                 content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
                 content = re.sub(rf'struct\s+{prim}_s\s*\{{[^}}]*\}};\n?', '', content)
 
-            # Purge any incorrectly assumed 'long long int' for known globals
             for glob_var in self.N64_KNOWN_GLOBALS:
                 content = re.sub(rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\nextern long long int {glob_var};\n#endif\n?', '', content)
                 content = re.sub(rf'extern long long int {glob_var};\n?', '', content)
@@ -363,7 +448,7 @@ int sched_yield(void);
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
-            # 2. Safely apply the standard body dict. OSTask and Vp are rebuilt as full structs here. 
+            # 2. Safely apply the standard body dict
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
@@ -381,6 +466,17 @@ int sched_yield(void);
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
+
+            # Advanced Local File POSIX Fixes
+            for target_file, func_name in self.dynamic_categories.get("posix_reserved_conflict", set()):
+                if func_name in self.POSIX_RESERVED_NAMES and (file_path.endswith(target_file) or target_file.endswith(file_path)):
+                    prefix = os.path.basename(file_path).split('.')[0]
+                    new_name = f"n64_{prefix}_{func_name}"
+                    define = f"\n/* AUTO: rename POSIX-reserved static '{func_name}' */\n#define {func_name} {new_name}\n"
+                    if define not in content:
+                        includes = list(re.finditer(r'#include\s+.*?\n', content))
+                        idx = includes[-1].end() if includes else 0
+                        content = content[:idx] + define + content[idx:]
 
             for rule in self.rules:
                 if rule['action'] == 'replace':
