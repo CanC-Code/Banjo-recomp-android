@@ -1,4 +1,3 @@
-
 import os
 import subprocess
 import time
@@ -93,8 +92,14 @@ def main():
     cpp_base = "Android/app/src/main/cpp"
     for root, _, files in os.walk(cpp_base):
         for filename in files:
+            filepath = os.path.join(root, filename)
+            
+            # Enforce bridge header for C/C++ files
+            if filename.endswith(('.c', '.cpp')):
+                ensure_bridge_at_top(filepath)
+
+            # Apply logical modifications
             if filename.endswith(('.c', '.cpp', '.h')):
-                filepath = os.path.join(root, filename)
                 fixes_applied = converter.apply_to_file(filepath)
                 if fixes_applied > 0:
                     print(f"🔧 Applied {fixes_applied} fixes to {filepath}")
