@@ -1,4 +1,3 @@
-
 # ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
 REGEX:::Fix_u8:::\bu8\b:::uint8_t
 REGEX:::Fix_s8:::\bs8\b:::int8_t
