@@ -14,7 +14,7 @@ class SourceConverter:
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
         self.intelligence_level = 3
-        
+
         # Types that the game/SDK natively defines. Auto-scraper MUST NOT stub these.
         # OSTask and OSScTask are strictly defined natively by <PR/sptask.h> and <PR/sched.h>.
         self.SDK_DEFINES_THESE = {"Actor", "OSTask", "OSScTask"}
@@ -39,7 +39,7 @@ class SourceConverter:
             "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
             "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
         }
-        
+
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; long long int force_align; } Mtx;",
             "OSContStatus": "typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errno; } OSContStatus;",
@@ -61,13 +61,14 @@ class SourceConverter:
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
         }
-        
+
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
             "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
             "OSViMode": "typedef struct OSViMode_s { uint32_t type; uint32_t comRegs[4]; uint32_t fldRegs[2][7]; } OSViMode;",
             "OSViContext": "typedef struct OSViContext_s { uint16_t state; uint16_t retraceCount; void *framep; struct OSViMode_s *modep; uint32_t control; struct OSMesgQueue_s *msgq; void *msg; } OSViContext;",
         }
+
         self.N64_KNOWN_GLOBALS = {
             "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
             "__osFlashHandle": "struct OSPiHandle_s *__osFlashHandle;",
@@ -81,13 +82,17 @@ class SourceConverter:
 
     def read_file(self, filepath: str) -> str:
         try:
-            with open(filepath, 'r', errors='replace') as f: return f.read()
-        except Exception: return ""
+            with open(filepath, 'r', errors='replace') as f:
+                return f.read()
+        except Exception:
+            return ""
 
     def write_file(self, filepath: str, content: str) -> None:
         try:
-            with open(filepath, 'w') as f: f.write(content)
-        except Exception as e: logger.error(f"Failed to write {filepath}: {e}")
+            with open(filepath, 'w') as f:
+                f.write(content)
+        except Exception as e:
+            logger.error(f"Failed to write {filepath}: {e}")
 
     def load_logic(self):
         self.rules = []
@@ -106,11 +111,19 @@ class SourceConverter:
                             })
 
     def _type_already_defined(self, tag: str, content: str) -> bool:
-        if tag in self.SDK_DEFINES_THESE: return True
-        if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content): return True
-        if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content): return True
-        if f"{tag}_DEFINED" in content: return True
+        if tag in self.SDK_DEFINES_THESE:
+            return True
+        if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content):
+            return True
+        if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content):
+            return True
+        if f"{tag}_DEFINED" in content:
+            return True
         return False
+
+    def _global_already_declared(self, glob_var: str, content: str) -> bool:
+        """Word-boundary safe check for global variable declarations."""
+        return bool(re.search(rf"\b{re.escape(glob_var)}\b", content))
 
     def strip_redefinition(self, content: str, tag: str) -> str:
         changed = True
@@ -119,54 +132,62 @@ class SourceConverter:
             idx = 0
             while True:
                 match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
-                if not match: break
+                if not match:
+                    break
                 start_idx = idx + match.start()
                 brace_idx = content.find('{', start_idx)
                 open_braces, curr_idx = 1, brace_idx + 1
                 while curr_idx < len(content) and open_braces > 0:
-                    if content[curr_idx] == '{': open_braces += 1
-                    elif content[curr_idx] == '}': open_braces -= 1
+                    if content[curr_idx] == '{':
+                        open_braces += 1
+                    elif content[curr_idx] == '}':
+                        open_braces -= 1
                     curr_idx += 1
                 semi_idx = content.find(';', curr_idx)
                 if semi_idx != -1:
                     tail = content[curr_idx:semi_idx]
                     if re.search(rf"\b{re.escape(tag)}\b", tail):
-                        content = content[:start_idx] + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n" + content[semi_idx+1:]
+                        content = (content[:start_idx]
+                                   + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n"
+                                   + content[semi_idx + 1:])
                         changed = True
                         break
                     idx = semi_idx + 1
                 else:
-                    idx = curr_idx + 1
-            if changed: continue
-            c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
-            if n > 0: content, changed = c_new, True
+                    # FIX Bug 2: semi_idx == -1 means malformed input; break to avoid infinite loop.
+                    break
         return content
 
     def scrape_logs(self, log_content: str):
         """Self-healing engine component: Scrapes build logs to dynamically discover missing types."""
         for m in re.finditer(r"error:\s+unknown type name '(\w+)'", log_content):
             self.dynamic_categories["missing_types"].add(m.group(1))
-        
+
         for m in re.finditer(r"error:\s+use of undeclared identifier '(\w+)'", log_content):
             self.dynamic_categories["undeclared_identifiers"].add(m.group(1))
-            
+
         for m in re.finditer(r"error:\s+implicit declaration of function '(\w+)'", log_content):
             self.dynamic_categories["implicit_func_stubs"].add(m.group(1))
 
     def apply_dynamic_fixes(self):
         """Self-healing engine component: Injects scraped types into headers dynamically."""
-        if not os.path.exists(self.types_header): return
+        if not os.path.exists(self.types_header):
+            return
         types_content = self.read_file(self.types_header)
         changed = False
 
         for tag in self.dynamic_categories.get("missing_types", set()):
+            # Skip types owned by SDK or already covered by static struct bodies.
             if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES:
+                logger.info(f"  [dynamic_fix] Skipping '{tag}' — owned by SDK or static bodies dict.")
                 continue
             if not self._type_already_defined(tag, types_content):
                 struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
-                decl = f"struct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {tag};\n"
+                decl = (f"struct {struct_tag} {{ long long int force_align[64]; }};\n"
+                        f"typedef struct {struct_tag} {tag};\n")
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\n{decl}#endif\n"
                 changed = True
+                logger.info(f"  [dynamic_fix] Injected opaque stub for unknown type '{tag}'.")
 
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
             if ident in self.N64_KNOWN_GLOBALS or ident in self.PHASE_3_MACROS:
@@ -181,18 +202,27 @@ class SourceConverter:
 
     def bootstrap_n64_types(self, clear_existing=False):
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
-        if clear_existing and os.path.exists(self.types_header): os.remove(self.types_header)
+        if clear_existing and os.path.exists(self.types_header):
+            os.remove(self.types_header)
         if not os.path.exists(self.types_header):
-            with open(self.types_header, 'w', encoding='utf-8') as f: f.write("#pragma once\n")
+            with open(self.types_header, 'w', encoding='utf-8') as f:
+                f.write("#pragma once\n")
         if not os.path.exists(self.stubs_file):
             os.makedirs(os.path.dirname(self.stubs_file), exist_ok=True)
-            with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
+            with open(self.stubs_file, 'w', encoding='utf-8') as f:
+                f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
         # Idempotency check prevents double-injection
-        if "CORE_PRIMITIVES_DEFINED" in content: 
+        if "CORE_PRIMITIVES_DEFINED" in content:
             return content
 
+        # FIX Bug 1: Forward-declare OSTask and OSScTask here, BEFORE any SDK headers are
+        # pulled in transitively. This resolves gu.h:242 and sched.h:56 regardless of
+        # include order, because n64_types.h is force-included (-include flag) as the
+        # very first thing in every TU.  The actual full struct definitions come later
+        # from <PR/sptask.h> — the forward decl just satisfies pointer/extern references
+        # that appear in gu.h before sptask.h is reached.
         primitives_block = """\
 #include <stdint.h>
 
@@ -203,6 +233,16 @@ typedef uint32_t u32; typedef int32_t  s32; typedef uint64_t u64; typedef int64_
 typedef float    f32; typedef double   f64; typedef int      n64_bool;
 typedef int32_t  OSIntMask; typedef uint64_t OSTime; typedef uint32_t OSId;
 typedef int32_t  OSPri; typedef void* OSMesg;
+
+/* Forward declarations for OSTask / OSScTask so that gu.h and sched.h compile
+   regardless of include order.  Full definitions come from <PR/sptask.h>. */
+#ifndef OSTASK_FWD_DECLARED
+#define OSTASK_FWD_DECLARED
+struct OSTask_s;
+typedef struct OSTask_s OSTask;
+struct OSScTask_s;
+typedef struct OSScTask_s OSScTask;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -217,54 +257,77 @@ int sched_yield(void);
 
 #endif
 """
-        if "#pragma once" not in content: content = "#pragma once\n" + content
+        if "#pragma once" not in content:
+            content = "#pragma once\n" + content
         return content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
 
     def _handle_float_initializers(self, content: str) -> str:
         return re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        linkage_fix = r'#ifdef __cplusplus\nextern "C" struct OSThread_s *\1;\n#else\nextern struct OSThread_s *\1;\n#endif'
+        # FIX Bug 3: Was r'...' (raw string) — \n was literal backslash-n, not newline.
+        # Now a regular string so re.sub produces actual newlines in the patched output.
+        linkage_fix = (
+            '#ifdef __cplusplus\n'
+            'extern "C" struct OSThread_s *\\1;\n'
+            '#else\n'
+            'extern struct OSThread_s *\\1;\n'
+            '#endif'
+        )
         content = re.sub(r'extern struct OSThread_s \*(__osRunQueue);', linkage_fix, content)
         content = re.sub(r'extern struct OSThread_s \*(__osFaultedThread);', linkage_fix, content)
-        content = re.sub(r'__osRunningThread->context\.status', '((uint32_t*)__osRunningThread->context)[0]', content)
+        content = re.sub(
+            r'__osRunningThread->context\.status',
+            '((uint32_t*)__osRunningThread->context)[0]',
+            content
+        )
         return content
 
     def apply_to_file(self, file_path: str) -> int:
-        if not os.path.exists(file_path): return 0
+        if not os.path.exists(file_path):
+            return 0
         content = self.read_file(file_path)
         original_content = content
 
         if "n64_types.h" in file_path:
-            # 1. FORCE-PURGE any corrupted forward declarations OR struct bodies cached in the runner environment
+            # 1. FORCE-PURGE any corrupted forward declarations OR struct bodies cached
+            #    in the runner environment from a previous bad cycle.
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s*\{[^}]*\}\s*OSTask;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSScTask_s\s*\{[^}]*\}\s*OSScTask;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
-            
+            # Also purge any previously injected forward-decl block so it doesn't
+            # accumulate across cycles (the primitives block re-injects it cleanly).
+            content = re.sub(
+                r'#ifndef OSTASK_FWD_DECLARED.*?#endif\n?', '', content, flags=re.DOTALL
+            )
+
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
-            
-            # 2. Inject PR/sptask.h natively so OSTask and OSScTask are natively defined for ALL C files.
-            # We append it bottom-first to ensure SDK primitives execute in the correct order constraint.
+
+            # 2. Inject PR/sptask.h so OSTask and OSScTask get their FULL definitions
+            #    (body, not just forward decl) for any code that needs sizeof(OSTask) etc.
             if "#include <PR/sptask.h>" not in content:
                 content += "\n#ifndef SPTASK_INJECTED\n#define SPTASK_INJECTED\n#include <PR/sptask.h>\n#endif\n"
 
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
-                if not self._type_already_defined(tag, content): 
+                if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
             for tag, body in self.PHASE_3_STRUCTS.items():
-                if not self._type_already_defined(tag, content): 
+                if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
+
+            # FIX Bug 4: Use word-boundary safe check instead of plain `in` substring match.
             for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
-                if glob_var not in content: content += f"\nextern {decl}\n"
+                if not self._global_already_declared(glob_var, content):
+                    content += f"\nextern {decl}\n"
 
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
-            
+
             for rule in self.rules:
                 if rule['action'] == 'replace':
                     content = content.replace(rule['search'], rule['replace'])
