@@ -34,10 +34,6 @@ target_include_directories(bkawrapper PRIVATE
     ${GAME_INC}/2.0L/PR
 )
 
-# Find required libraries
-find_library(log-lib log)
-find_library(opensl-lib OpenSLES)
-
 # Add definitions for macros
 add_definitions(-DOEPRESCRIPT=1 -DDANDROID02=1)
 
@@ -49,6 +45,10 @@ target_compile_options(bkawrapper PRIVATE
     -O2
     -fno-strict-aliasing
 )
+
+# Find required libraries
+find_library(log-lib log)
+find_library(opensl-lib OpenSLES)
 
 # Link libraries
 target_link_libraries(bkawrapper
