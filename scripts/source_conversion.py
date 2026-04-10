@@ -212,17 +212,40 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f:
                 f.write('#include "n64_types.h"\n')
 
+    def _inject_ostask_fwd(self, content: str) -> str:
+        """
+        Inject OSTask / OSScTask forward declarations unconditionally (after purge),
+        independent of whether CORE_PRIMITIVES_DEFINED already exists.
+
+        This handles the cached-runner scenario: CORE_PRIMITIVES_DEFINED is already
+        present in n64_types.h from a prior run, so _inject_primitives_block returns
+        early — but OSTASK_FWD_DECLARED was never written by older versions of this
+        script. This method ensures it is injected in every build cycle regardless.
+        """
+        if "OSTASK_FWD_DECLARED" in content:
+            return content
+
+        fwd_block = (
+            "/* OSTask/OSScTask forward decls injected by source_conversion.py */\n"
+            "#ifndef OSTASK_FWD_DECLARED\n"
+            "#define OSTASK_FWD_DECLARED\n"
+            "struct OSTask_s;\n"
+            "typedef struct OSTask_s OSTask;\n"
+            "struct OSScTask_s;\n"
+            "typedef struct OSScTask_s OSScTask;\n"
+            "#endif\n"
+        )
+        if "#pragma once" not in content:
+            content = "#pragma once\n" + content
+        return content.replace("#pragma once", f"#pragma once\n{fwd_block}", 1)
+
     def _inject_primitives_block(self, content: str) -> str:
-        # Idempotency check prevents double-injection
+        # Idempotency check prevents double-injection of the primitives block only.
+        # OSTask forward decls are handled separately in _inject_ostask_fwd so they
+        # are injected even when this block already exists in a cached file.
         if "CORE_PRIMITIVES_DEFINED" in content:
             return content
 
-        # FIX Bug 1: Forward-declare OSTask and OSScTask here, BEFORE any SDK headers are
-        # pulled in transitively. This resolves gu.h:242 and sched.h:56 regardless of
-        # include order, because n64_types.h is force-included (-include flag) as the
-        # very first thing in every TU.  The actual full struct definitions come later
-        # from <PR/sptask.h> — the forward decl just satisfies pointer/extern references
-        # that appear in gu.h before sptask.h is reached.
         primitives_block = """\
 #include <stdint.h>
 
@@ -233,16 +256,6 @@ typedef uint32_t u32; typedef int32_t  s32; typedef uint64_t u64; typedef int64_
 typedef float    f32; typedef double   f64; typedef int      n64_bool;
 typedef int32_t  OSIntMask; typedef uint64_t OSTime; typedef uint32_t OSId;
 typedef int32_t  OSPri; typedef void* OSMesg;
-
-/* Forward declarations for OSTask / OSScTask so that gu.h and sched.h compile
-   regardless of include order.  Full definitions come from <PR/sptask.h>. */
-#ifndef OSTASK_FWD_DECLARED
-#define OSTASK_FWD_DECLARED
-struct OSTask_s;
-typedef struct OSTask_s OSTask;
-struct OSScTask_s;
-typedef struct OSScTask_s OSScTask;
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -302,6 +315,11 @@ int sched_yield(void);
                 r'#ifndef OSTASK_FWD_DECLARED.*?#endif\n?', '', content, flags=re.DOTALL
             )
 
+            # _inject_ostask_fwd runs UNCONDITIONALLY — even if CORE_PRIMITIVES_DEFINED
+            # already exists in the cached file. This is the fix for the runner cache
+            # scenario where the primitives block was already present but the forward
+            # decls were never written by older script versions.
+            content = self._inject_ostask_fwd(content)
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
