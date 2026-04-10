@@ -16,9 +16,9 @@ class SourceConverter:
         self.intelligence_level = 3
 
         # ---------------------------------------------------------------------------
-        # Core Protection Lists (UPDATED for this build log)
+        # Core Protection Lists (UPDATED)
         # ---------------------------------------------------------------------------
-        self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable", "LetterFloorTile"}
+        self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable", "LetterFloorTile", "MapProgressFlagToDialogID"}
 
         self.STANDARD_TYPES = {
             "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t",
@@ -49,14 +49,8 @@ class SourceConverter:
             "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
         }
 
-        self.N64_AUDIO_STATE_TYPES = {
-            "RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "INTERLEAVE_STATE",
-            "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE",
-            "MIXER_STATE",
-        }
-
         # ---------------------------------------------------------------------------
-        # Macros & Struct Dicts (UPDATED with new fixes from this log)
+        # Macros & Struct Dicts (MAJOR UPDATES FOR THIS LOG)
         # ---------------------------------------------------------------------------
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -77,26 +71,31 @@ class SourceConverter:
             "G_ON": "1", "G_OFF": "0", "G_RM_AA_ZB_OPA_SURF": "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
             "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
             "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
-            # NEW: required by initialize.c and audio
+            "G_CULL_BOTH": "0x00003000", "G_FOG": "0x00010000", "G_LIGHTING": "0x00020000",
+            "G_TEXTURE_GEN": "0x00040000", "G_TEXTURE_GEN_LINEAR": "0x00080000", "G_LOD": "0x00100000",
+            "G_SHADING_SMOOTH": "0x00200000",
             "OS_CLOCK_RATE": "62500000LL",
+            # NEW: required by particle.c GBI calls
+            "OS_APP_NMI_BUFSIZE": "64",
         }
 
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; long long int force_align; } Mtx;",
             "OSContStatus": "typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errno; } OSContStatus;",
             "OSContPad": "typedef struct OSContPad_s { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errno; } OSContPad;",
-            # FIXED: msg must be OSMesg* (void**) to support mq->msg[last] = ... assignments
             "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; OSMesg *msg; } OSMesgQueue;",
-            # UPDATED OSThread: context is now a minimal struct so createthread.c member accesses (pc, a0, sp, ra, sr, rcp, fpcsr) succeed
-            "OSThread": """typedef struct __OSThreadContext_s {
-    uint64_t pc;
-    uint64_t a0;
-    uint64_t sp;
-    uint64_t ra;
-    uint32_t sr;
-    uint32_t rcp;
-    uint32_t fpcsr;
-    long long int force_align[60]; /* keep original 67-word alignment */
+            # FIXED OSThread: context is raw array again (exceptasm.cpp needs reinterpret_cast) + union for member access (createthread.cpp)
+            "OSThread": """typedef union __OSThreadContext_u {
+    struct {
+        uint64_t pc;
+        uint64_t a0;
+        uint64_t sp;
+        uint64_t ra;
+        uint32_t sr;
+        uint32_t rcp;
+        uint32_t fpcsr;
+    } regs;
+    long long int force_align[67];
 } __OSThreadContext;
 typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; __OSThreadContext context; } OSThread;""",
             "OSMesgHdr": "typedef struct { uint16_t type; uint8_t pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
@@ -104,7 +103,6 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
             "__OSTranxInfo": "typedef struct { uint32_t cmdType; uint16_t transferMode; uint16_t blockNum; int32_t sectorNum; uint32_t devAddr; uint32_t bmCtlShadow; uint32_t seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;",
             "OSPiHandle": "typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; __OSTranxInfo transferInfo; } OSPiHandle;",
             "OSIoMesg": "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; uint32_t devAddr; uint32_t size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
-            # FIXED: OSDevMgr now includes dma/edma function pointers required by devmgr.c and pimgr.c
             "OSDevMgr": """typedef struct OSDevMgr_s {
     int32_t active;
     struct OSThread_s *thread;
@@ -125,12 +123,18 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "OSTask": "typedef struct { uint32_t type; uint32_t flags; uint64_t *ucode_boot; uint32_t ucode_boot_size; uint64_t *ucode; uint32_t ucode_size; uint64_t *ucode_data; uint32_t ucode_data_size; uint64_t *dram_stack; uint32_t dram_stack_size; uint64_t *output_buff; uint64_t *output_buff_size; uint64_t *data_ptr; uint32_t data_size; uint64_t *yield_data_ptr; uint32_t yield_data_size; } OSTask_t; typedef union { OSTask_t t; long long int force_structure_alignment[64]; } OSTask;",
             "Vp": "typedef struct { short vscale[4]; short vtrans[4]; } Vp_t; typedef union { Vp_t vp; long long int force_align[8]; } Vp;",
-            # NEW: LetterFloorTile_s with members used in TTC/ma/castle.c (fixes redefinition + member errors)
             "LetterFloorTile": """typedef struct LetterFloorTile_s {
     void *meshId;
     int state;
     float timeDeltaSum;
 } LetterFloorTile;""",
+            # NEW: sChVegetable (still missing in vegetables.c)
+            "sChVegetable": "typedef struct sChVegetable_s { long long int force_align[64]; } sChVegetable;",
+            # NEW: MapProgressFlagToDialogID (fixes progressDialog.c redef + member access)
+            "MapProgressFlagToDialogID": """typedef struct MapProgressFlagToDialogID_s {
+    int16_t key;
+    int16_t value;
+} MapProgressFlagToDialogID;""",
         }
 
         self.PHASE_3_STRUCTS = {
@@ -152,9 +156,12 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
             "osRomBase": "uint32_t osRomBase;",
             "osResetType": "uint32_t osResetType;",
             "osAppNMIBuffer": "uint32_t osAppNMIBuffer[OS_APP_NMI_BUFSIZE];",
-            "osPiRawStartDma": "int32_t osPiRawStartDma(int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);",
-            # NEW: required by seteventmesg.c / core1/os
             "__osEventStateTab": "OSMesg __osEventStateTab[16];",
+            # NEW: function prototypes required by pimgr.c
+            "osPiRawStartDma": "int32_t osPiRawStartDma(int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);",
+            "osEPiRawStartDma": "int32_t osEPiRawStartDma(struct OSPiHandle_s *piHandle, int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);",
+            # NEW: osClockRate type fix (OSTime)
+            "osClockRate": "OSTime osClockRate;",
         }
         self.rules = []
         self.dynamic_categories = defaultdict(set)
@@ -207,11 +214,9 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
         return bool(re.search(rf"\b{re.escape(glob_var)}\b", content))
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        """Brace-matched removal of any struct/typedef definition for tag."""
         changed = True
         while changed:
             changed = False
-            # Named struct body
             pattern1 = re.compile(rf"\bstruct\s+{re.escape(tag)}\s*\{{")
             match = pattern1.search(content)
             if match:
@@ -231,7 +236,6 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
                     changed = True
                     continue
 
-            # Anonymous typedef body ending in tag
             idx = 0
             while True:
                 match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
@@ -257,7 +261,6 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
         return content
 
     def repair_unterminated_conditionals(self, content: str) -> str:
-        """Scan for #ifndef/#ifdef that are never closed and remove orphaned guards."""
         lines = content.split('\n')
         stack = []
         output = list(lines)
@@ -316,9 +319,16 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
         for m in re.finditer(r"undefined reference to `(\w+)'", log_content):
             self.dynamic_categories["undefined_symbols"].add(m.group(1))
 
-        # NEW: catch the exact array subscript error for __osEventStateTab
         for m in re.finditer(r"array subscript is not an integer", log_content):
             self.dynamic_categories["undeclared_identifiers"].add("__osEventStateTab")
+
+        # NEW: catch n64_bool.h include failure
+        for m in re.finditer(r"fatal error: 'n64_bool\.h' file not found", log_content):
+            self.dynamic_categories["missing_types"].add("n64_bool")
+
+        # NEW: catch GBI initializer not constant (macros need to be visible earlier)
+        for m in re.finditer(r"initializer element is not a compile-time constant", log_content):
+            self.dynamic_categories["needs_float_fix"].add("particle.c")  # force macro injection
 
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
@@ -326,7 +336,6 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
         types_content = self.read_file(self.types_header)
         changed = False
 
-        # Advanced Stub Generator (unchanged but now benefits from better struct bodies)
         for tag in self.dynamic_categories.get("missing_types", set()):
             if tag in self.SDK_DEFINES_THESE or tag in self.N64_OS_STRUCT_BODIES or tag in self.STANDARD_TYPES:
                 continue
@@ -370,7 +379,6 @@ extern long long int {ident};
                     types_content = new_types
                     changed = True
 
-        # Resolve type mismatches actively (C++ friendly)
         for var_name, var_type in self.dynamic_categories.get("type_mismatches_resolved", set()):
             if self._is_known_global(var_name):
                 continue
@@ -406,7 +414,6 @@ extern {var_type} {var_name};
                     types_content = new_content
                     changed = True
 
-        # Undefined Symbols & Implicit functions -> n64_stubs.c
         stubs_added = False
         stubs_content = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "n64_types.h"\n\n'
         for sym in self.dynamic_categories.get("undefined_symbols", set()) | self.dynamic_categories.get("implicit_func_stubs", set()):
@@ -467,7 +474,10 @@ int sched_yield(void);
         return content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
 
     def _handle_float_initializers(self, content: str) -> str:
-        return re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
+        content = re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
+        # NEW: castle.c has 4-NULL initializer for LetterFloorTile
+        content = re.sub(r'\{\s*NULL\s*,\s*NULL\s*,\s*NULL\s*,\s*NULL\s*\}', '{NULL, 0, 0.0f}', content)
+        return content
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
         linkage_fix = (
@@ -479,9 +489,10 @@ int sched_yield(void);
         )
         content = re.sub(r'extern struct OSThread_s \*(__osRunQueue);', linkage_fix, content)
         content = re.sub(r'extern struct OSThread_s \*(__osFaultedThread);', linkage_fix, content)
+        # NEW: exceptasm.cpp now uses context.regs (union) for member access, but raw cast still works on force_align
         content = re.sub(
-            r'__osRunningThread->context\.status',
-            '((uint32_t*)__osRunningThread->context)[0]',
+            r'\(\s*\(\s*uint32_t\s*\*\s*\)\s*__osRunningThread->context\s*\)',
+            '((uint32_t*)&__osRunningThread->context.force_align[0])',
             content
         )
         return content
@@ -493,7 +504,7 @@ int sched_yield(void);
         original_content = content
 
         if "n64_types.h" in file_path:
-            # 1. AGGRESSIVE RUNNER CACHE PURGE (expanded for new errors)
+            # AGGRESSIVE PURGE
             content = re.sub(r'/\* OSTask/OSScTask forward decls.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'#ifndef OSTASK_FWD_DECLARED.*?(?=#endif)#endif\n?', '', content, flags=re.DOTALL)
             content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
@@ -504,12 +515,13 @@ int sched_yield(void);
             content = re.sub(r'struct\s+sChVegetable_s;\n?', '', content)
             content = re.sub(r'typedef\s+struct\s+LetterFloorTile_s\s+LetterFloorTile;\n?', '', content)
             content = re.sub(r'struct\s+LetterFloorTile_s;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+MapProgressFlagToDialogID_s\s+MapProgressFlagToDialogID;\n?', '', content)
+            content = re.sub(r'struct\s+MapProgressFlagToDialogID_s;\n?', '', content)
 
             for prim in self.STANDARD_TYPES:
                 content = re.sub(rf'typedef\s+struct\s+{prim}_s\s+{prim};\n?', '', content)
                 content = re.sub(rf'struct\s+{prim}_s\s*\{{[^}}]*\}};\n?', '', content)
 
-            # Purge globals carefully (accounting for the new extern "C" blocks and volatile qualifiers)
             for glob_var in self.N64_KNOWN_GLOBALS:
                 content = re.sub(
                     rf'#ifndef {glob_var}_DEFINED\n#define {glob_var}_DEFINED\n(?:#ifdef __cplusplus\nextern "C" {{\n#endif\n)?extern [^\n]*\b{glob_var}\b[^\n]*;\n(?:#ifdef __cplusplus\n}}\n#endif\n)?#endif\n?',
@@ -523,7 +535,6 @@ int sched_yield(void);
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
 
-            # 2. Safely apply the standard body dict (now includes all fixes)
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content):
                     content = self.strip_redefinition(content, tag)
@@ -534,7 +545,6 @@ int sched_yield(void);
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
 
-            # Re-inject known globals with C++ safety
             for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
                 if not self._global_already_declared(glob_var, content):
                     wrapped_decl = f"""#ifdef __cplusplus
@@ -551,7 +561,6 @@ extern {decl}
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
 
-            # Advanced Local File POSIX Fixes
             for target_file, func_name in self.dynamic_categories.get("posix_reserved_conflict", set()):
                 if func_name in self.POSIX_RESERVED_NAMES and (file_path.endswith(target_file) or target_file.endswith(file_path)):
                     prefix = os.path.basename(file_path).split('.')[0]
