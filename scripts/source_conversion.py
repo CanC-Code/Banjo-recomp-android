@@ -1,4 +1,3 @@
-
 import os
 import re
 import glob
@@ -189,7 +188,7 @@ typedef int32_t  OSIntMask;
 typedef uint64_t OSTime;
 typedef uint32_t OSId;
 typedef int32_t  OSPri;
-typedef void*    OSMesg;
+typedef void* OSMesg;
 #endif
 """
         if "#pragma once" not in content:
@@ -252,10 +251,25 @@ typedef void*    OSMesg;
         return False
 
     def _handle_missing_functions(self, content: str) -> str:
+        sched_yield_decl = """
+#ifndef sched_yield_DEFINED
+#define sched_yield_DEFINED
+#ifdef __cplusplus
+extern "C" {
+#endif
+void sched_yield(void);
+#ifdef __cplusplus
+}
+#endif
+#endif
+"""
+        if "sched_yield_DEFINED" not in content:
+            content += f"\n{sched_yield_decl}\n"
+
         missing_functions = {
             "osCreateThread": "void osCreateThread(void* thread, void* func, void* arg) {}",
             "osDestroyThread": "void osDestroyThread(void* thread) {}",
-            "sched_yield": "void sched_yield() {}",
+            "sched_yield": "void sched_yield(void) {}",
         }
         stubs_content = ""
         if os.path.exists(self.stubs_file):
@@ -268,22 +282,30 @@ typedef void*    OSMesg;
         return content
 
     def _handle_math_conflicts(self, content: str) -> str:
-        math_conflicts = {
-            "cosf": "extern \"C\" float cosf(float angle);",
-            "sinf": "extern \"C\" float sinf(float angle);",
-            "sqrtf": "extern \"C\" float sqrtf(float value);",
-        }
-        for func, decl in math_conflicts.items():
-            if f"extern \"C\" {func}" not in content:
-                content = re.sub(rf"extern\s+float\s+{func}\s*\([^;]*;", f"{decl}", content)
+        math_block = """
+// Override math.h declarations to match PR/gu.h
+#ifdef __cplusplus
+extern "C" {
+#endif
+float cosf(float angle);
+float sinf(float angle);
+float sqrtf(float value);
+#ifdef __cplusplus
+}
+#endif
+"""
+        if "float cosf(float angle);" not in content:
+            if "#pragma once" in content:
+                content = content.replace("#pragma once", f"#pragma once\n{math_block}", 1)
+            else:
+                content = math_block + content
         return content
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        # Fix __osRunQueue and __osFaultedThread linkage
+        # Note: The context.status fix was manually patched with reinterpret_cast, 
+        # so we won't rewrite it here to avoid overwriting your correct logic.
         content = re.sub(r'extern struct OSThread_s \*__osRunQueue;', 'extern "C" struct OSThread_s *__osRunQueue;', content)
         content = re.sub(r'extern struct OSThread_s \*__osFaultedThread;', 'extern "C" struct OSThread_s *__osFaultedThread;', content)
-        # Fix context.status access
-        content = re.sub(r'__osRunningThread->context\.status', '((uint32_t*)__osRunningThread->context)[0]', content)
         return content
 
     def apply_to_file(self, file_path: str, error_context: str = "") -> int:
@@ -296,12 +318,12 @@ typedef void*    OSMesg;
 
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
+            content = self._handle_math_conflicts(content) # Added our math fixes block here
             content = self._inject_macros(content)
             content = self._inject_structs(content)
             content = self._inject_globals(content)
             content = self._handle_missing_macros(content)
             content = self._handle_missing_functions(content)
-            content = self._handle_math_conflicts(content)
             content = self._handle_exceptasm_fixes(content)
 
         if "n64_types.h" not in file_path:
