@@ -18,7 +18,10 @@ class SourceConverter:
         # ---------------------------------------------------------------------------
         # Core Protection Lists (UPDATED)
         # ---------------------------------------------------------------------------
-        self.SDK_DEFINES_THESE = {"Actor", "OSScTask", "sChVegetable", "LetterFloorTile", "MapProgressFlagToDialogID"}
+        self.SDK_DEFINES_THESE = {
+            "Actor", "OSScTask", "sChVegetable", "LetterFloorTile",
+            "MapProgressFlagToDialogID", "n64_bool"
+        }
 
         self.STANDARD_TYPES = {
             "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t",
@@ -42,15 +45,8 @@ class SourceConverter:
             "atan2", "rand", "srand",
         }
 
-        self.N64_OS_OPAQUE_TYPES = {
-            "OSPfs", "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue",
-            "OSThread", "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient",
-            "OSScKiller", "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr",
-            "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
-        }
-
         # ---------------------------------------------------------------------------
-        # Macros & Struct Dicts (MAJOR UPDATES FOR THIS LOG)
+        # Macros & Struct Dicts (EXTENDED FOR CURRENT FAILURES)
         # ---------------------------------------------------------------------------
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
@@ -70,12 +66,11 @@ class SourceConverter:
             "PI_BSD_DOM2_PGS_REG": "0x0460002C", "PI_BSD_DOM2_RLS_REG": "0x04600030",
             "G_ON": "1", "G_OFF": "0", "G_RM_AA_ZB_OPA_SURF": "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
             "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
-            "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
-            "G_CULL_BOTH": "0x00003000", "G_FOG": "0x00010000", "G_LIGHTING": "0x00020000",
-            "G_TEXTURE_GEN": "0x00040000", "G_TEXTURE_GEN_LINEAR": "0x00080000", "G_LOD": "0x00100000",
-            "G_SHADING_SMOOTH": "0x00200000",
+            "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CULL_BOTH": "0x00003000",
+            "G_FOG": "0x00010000", "G_LIGHTING": "0x00020000", "G_TEXTURE_GEN": "0x00040000",
+            "G_TEXTURE_GEN_LINEAR": "0x00080000", "G_LOD": "0x00100000", "G_SHADING_SMOOTH": "0x00200000",
+            "G_CC_SHADE": "0x00000000",
             "OS_CLOCK_RATE": "62500000LL",
-            # NEW: required by particle.c GBI calls
             "OS_APP_NMI_BUFSIZE": "64",
         }
 
@@ -84,7 +79,7 @@ class SourceConverter:
             "OSContStatus": "typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errno; } OSContStatus;",
             "OSContPad": "typedef struct OSContPad_s { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errno; } OSContPad;",
             "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; OSMesg *msg; } OSMesgQueue;",
-            # FIXED OSThread: context is raw array again (exceptasm.cpp needs reinterpret_cast) + union for member access (createthread.cpp)
+            # CRITICAL FIX: Anonymous struct inside union so .pc / .a0 etc. work directly (createthread.c) AND reinterpret_cast works (exceptasm.cpp)
             "OSThread": """typedef union __OSThreadContext_u {
     struct {
         uint64_t pc;
@@ -94,7 +89,7 @@ class SourceConverter:
         uint32_t sr;
         uint32_t rcp;
         uint32_t fpcsr;
-    } regs;
+    };
     long long int force_align[67];
 } __OSThreadContext;
 typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; __OSThreadContext context; } OSThread;""",
@@ -128,9 +123,7 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
     int state;
     float timeDeltaSum;
 } LetterFloorTile;""",
-            # NEW: sChVegetable (still missing in vegetables.c)
             "sChVegetable": "typedef struct sChVegetable_s { long long int force_align[64]; } sChVegetable;",
-            # NEW: MapProgressFlagToDialogID (fixes progressDialog.c redef + member access)
             "MapProgressFlagToDialogID": """typedef struct MapProgressFlagToDialogID_s {
     int16_t key;
     int16_t value;
@@ -157,10 +150,8 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
             "osResetType": "uint32_t osResetType;",
             "osAppNMIBuffer": "uint32_t osAppNMIBuffer[OS_APP_NMI_BUFSIZE];",
             "__osEventStateTab": "OSMesg __osEventStateTab[16];",
-            # NEW: function prototypes required by pimgr.c
             "osPiRawStartDma": "int32_t osPiRawStartDma(int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);",
             "osEPiRawStartDma": "int32_t osEPiRawStartDma(struct OSPiHandle_s *piHandle, int32_t direction, uint32_t devAddr, void *dramAddr, uint32_t size);",
-            # NEW: osClockRate type fix (OSTime)
             "osClockRate": "OSTime osClockRate;",
         }
         self.rules = []
@@ -322,13 +313,15 @@ typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OS
         for m in re.finditer(r"array subscript is not an integer", log_content):
             self.dynamic_categories["undeclared_identifiers"].add("__osEventStateTab")
 
-        # NEW: catch n64_bool.h include failure
         for m in re.finditer(r"fatal error: 'n64_bool\.h' file not found", log_content):
             self.dynamic_categories["missing_types"].add("n64_bool")
 
-        # NEW: catch GBI initializer not constant (macros need to be visible earlier)
         for m in re.finditer(r"initializer element is not a compile-time constant", log_content):
-            self.dynamic_categories["needs_float_fix"].add("particle.c")  # force macro injection
+            self.dynamic_categories["needs_float_fix"].add("particle.c")
+
+        # Catch the exact reinterpret_cast failure in exceptasm.cpp
+        for m in re.finditer(r"reinterpret_cast from '__OSThreadContext'", log_content):
+            self.dynamic_categories["needs_float_fix"].add("exceptasm.cpp")
 
     def apply_dynamic_fixes(self):
         if not os.path.exists(self.types_header):
@@ -475,7 +468,6 @@ int sched_yield(void);
 
     def _handle_float_initializers(self, content: str) -> str:
         content = re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
-        # NEW: castle.c has 4-NULL initializer for LetterFloorTile
         content = re.sub(r'\{\s*NULL\s*,\s*NULL\s*,\s*NULL\s*,\s*NULL\s*\}', '{NULL, 0, 0.0f}', content)
         return content
 
@@ -489,7 +481,8 @@ int sched_yield(void);
         )
         content = re.sub(r'extern struct OSThread_s \*(__osRunQueue);', linkage_fix, content)
         content = re.sub(r'extern struct OSThread_s \*(__osFaultedThread);', linkage_fix, content)
-        # NEW: exceptasm.cpp now uses context.regs (union) for member access, but raw cast still works on force_align
+
+        # FIX reinterpret_cast in exceptasm.cpp (now works with anonymous struct in union)
         content = re.sub(
             r'\(\s*\(\s*uint32_t\s*\*\s*\)\s*__osRunningThread->context\s*\)',
             '((uint32_t*)&__osRunningThread->context.force_align[0])',
@@ -560,6 +553,14 @@ extern {decl}
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
+
+            # Specific fix for createthread.c (now uses anonymous struct so .pc etc. work)
+            if "createthread.c" in file_path:
+                content = re.sub(
+                    r't->context\.pc\s*=',
+                    't->context.pc =',
+                    content
+                )  # already handled by anonymous struct
 
             for target_file, func_name in self.dynamic_categories.get("posix_reserved_conflict", set()):
                 if func_name in self.POSIX_RESERVED_NAMES and (file_path.endswith(target_file) or target_file.endswith(file_path)):
