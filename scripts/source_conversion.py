@@ -2,7 +2,12 @@
 import os
 import re
 import glob
+import logging
 from collections import defaultdict
+from typing import Dict, Set, List, Tuple, Optional
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger("N64_RECOMP_ENGINE")
 
 class SourceConverter:
     def __init__(self, logic_dir="scripts/conversion_logic"):
@@ -21,24 +26,19 @@ class SourceConverter:
             "PI_DOMAIN1": "0", "PI_DOMAIN2": "1",
         }
         self.PHASE_2_MACROS = {**self.PHASE_1_MACROS, **{
-            "DEVICE_TYPE_64DD": "0x06", "LEO_CMD_TYPE_0": "0", "LEO_CMD_TYPE_1": "1",
-            "LEO_CMD_TYPE_2": "2", "LEO_SECTOR_MODE": "1", "LEO_TRACK_MODE": "2",
-            "LEO_BM_CTL": "0x05000510", "LEO_BM_CTL_RESET": "0", "LEO_ERROR_29": "29",
-            "OS_READ": "0", "OS_WRITE": "1", "OS_MESG_NOBLOCK": "0", "OS_MESG_BLOCK": "1",
-            "PI_STATUS_REG": "0x04600010", "PI_DRAM_ADDR_REG": "0x04600000",
-            "PI_CART_ADDR_REG": "0x04600004", "PI_RD_LEN_REG": "0x04600008",
-            "PI_WR_LEN_REG": "0x0460000C", "PI_STATUS_DMA_BUSY": "0x01",
-            "PI_STATUS_IO_BUSY": "0x02", "PI_STATUS_ERROR": "0x04",
-            "PI_STATUS_INTERRUPT": "0x08", "PI_BSD_DOM1_LAT_REG": "0x04600014",
-            "PI_BSD_DOM1_PWD_REG": "0x04600018", "PI_BSD_DOM1_PGS_REG": "0x0460001C",
-            "PI_BSD_DOM1_RLS_REG": "0x04600020", "PI_BSD_DOM2_LAT_REG": "0x04600024",
-            "PI_BSD_DOM2_PWD_REG": "0x04600028", "PI_BSD_DOM2_PGS_REG": "0x0460002C",
-            "PI_BSD_DOM2_RLS_REG": "0x04600030",
+            "DEVICE_TYPE_64DD": "0x06", "LEO_CMD_TYPE_0": "0", "LEO_CMD_TYPE_1": "1", "LEO_CMD_TYPE_2": "2",
+            "LEO_SECTOR_MODE": "1", "LEO_TRACK_MODE": "2", "LEO_BM_CTL": "0x05000510", "LEO_BM_CTL_RESET": "0",
+            "LEO_ERROR_29": "29", "OS_READ": "0", "OS_WRITE": "1", "OS_MESG_NOBLOCK": "0", "OS_MESG_BLOCK": "1",
+            "PI_STATUS_REG": "0x04600010", "PI_DRAM_ADDR_REG": "0x04600000", "PI_CART_ADDR_REG": "0x04600004",
+            "PI_RD_LEN_REG": "0x04600008", "PI_WR_LEN_REG": "0x0460000C", "PI_STATUS_DMA_BUSY": "0x01",
+            "PI_STATUS_IO_BUSY": "0x02", "PI_STATUS_ERROR": "0x04", "PI_STATUS_INTERRUPT": "0x08",
+            "PI_BSD_DOM1_LAT_REG": "0x04600014", "PI_BSD_DOM1_PWD_REG": "0x04600018", "PI_BSD_DOM1_PGS_REG": "0x0460001C",
+            "PI_BSD_DOM1_RLS_REG": "0x04600020", "PI_BSD_DOM2_LAT_REG": "0x04600024", "PI_BSD_DOM2_PWD_REG": "0x04600028",
+            "PI_BSD_DOM2_PGS_REG": "0x0460002C", "PI_BSD_DOM2_RLS_REG": "0x04600030",
         }}
         self.PHASE_3_MACROS = {**self.PHASE_2_MACROS, **{
-            "G_ON": "1", "G_OFF": "0", "G_RM_AA_ZB_OPA_SURF": "0x00000000",
-            "G_RM_AA_ZB_OPA_SURF2": "0x00000000", "G_RM_AA_ZB_XLU_SURF": "0x00000000",
-            "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
+            "G_ON": "1", "G_OFF": "0", "G_RM_AA_ZB_OPA_SURF": "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
+            "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
             "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
         }}
         self.N64_OS_STRUCT_BODIES = {
@@ -84,6 +84,12 @@ typedef struct OSPfs_s {
             "OSTimer": "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; uint64_t interval; uint64_t value; struct OSMesgQueue_s *mq; void *msg; } OSTimer;",
             "LookAt": "typedef struct { struct { struct { float x, y, z; float pad; } l[2]; } l; } LookAt;",
         }
+        self.PHASE_3_STRUCTS = {
+            "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
+            "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
+            "OSViMode": "typedef struct OSViMode_s { uint32_t type; uint32_t comRegs[4]; uint32_t fldRegs[2][7]; } OSViMode;",
+            "OSViContext": "typedef struct OSViContext_s { uint16_t state; uint16_t retraceCount; void *framep; struct OSViMode_s *modep; uint32_t control; struct OSMesgQueue_s *msgq; void *msg; } OSViContext;",
+        }
         self.N64_PRIMITIVES = {"u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64", "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"}
         self.N64_OS_OPAQUE_TYPES = {"OSPfs", "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue", "OSThread", "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller", "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr", "OSPfsState", "OSPfsFile", "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg"}
         self.N64_AUDIO_STATE_TYPES = {"RESAMPLE_STATE", "POLEF_STATE", "ENVMIX_STATE", "INTERLEAVE_STATE", "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE"}
@@ -99,6 +105,27 @@ typedef struct OSPfs_s {
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
         self.SDK_DEFINES_THESE = {"OSTask", "OSScTask"}
+
+    def read_file(self, filepath: str) -> str:
+        try:
+            with open(filepath, 'r', errors='replace') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Failed to read {filepath}: {e}")
+            return ""
+
+    def write_file(self, filepath: str, content: str) -> None:
+        try:
+            with open(filepath, 'w') as f:
+                f.write(content)
+        except Exception as e:
+            logger.error(f"Failed to write {filepath}: {e}")
+
+    def normalize_path(self, filepath: str) -> str:
+        for marker in ["Banjo-recomp-android/", "Android/app/"]:
+            if marker in filepath:
+                return filepath.split(marker)[-1]
+        return filepath.lstrip("/") if filepath.startswith("/") else filepath
 
     def repair_unterminated_conditionals(self, content: str) -> str:
         lines = content.split('\n')
@@ -290,9 +317,10 @@ typedef void*    OSMesg;
         for tag in missing_types:
             if tag in self.N64_PRIMITIVES:
                 continue
-            elif tag in self.N64_OS_STRUCT_BODIES:
+            elif tag in {**self.N64_OS_STRUCT_BODIES, **self.PHASE_3_STRUCTS}:
                 if not self._type_already_defined(tag, content):
-                    content += f"\n{self.N64_OS_STRUCT_BODIES[tag]}\n"
+                    body = self.N64_OS_STRUCT_BODIES.get(tag, self.PHASE_3_STRUCTS.get(tag, ""))
+                    content += f"\n{body}\n"
             elif tag in self.N64_OS_OPAQUE_TYPES:
                 if not self._type_already_defined(tag, content):
                     content += f"\n{self._opaque_stub(tag)}\n"
@@ -319,9 +347,10 @@ typedef void*    OSMesg;
         for ident in undeclared_idents:
             if ident in self.N64_KNOWN_GLOBALS:
                 continue
-            if ident in self.PHASE_3_MACROS:
+            if ident in {**self.PHASE_1_MACROS, **self.PHASE_2_MACROS, **self.PHASE_3_MACROS}:
                 if f"#define {ident}" not in content:
-                    content += f"\n#ifndef {ident}\n#define {ident} {self.PHASE_3_MACROS[ident]}\n#endif\n"
+                    macro_dict = {**self.PHASE_1_MACROS, **self.PHASE_2_MACROS, **self.PHASE_3_MACROS}
+                    content += f"\n#ifndef {ident}\n#define {ident} {macro_dict[ident]}\n#endif\n"
             elif ident.isupper() or ident.startswith(("G_", "OS_", "PI_", "PFS_", "LEO_", "ADPCM", "UNITY", "MAX_")):
                 if f"#define {ident}" not in content:
                     content += f"\n#ifndef {ident}\n#define {ident} 0 /* AUTO-INJECTED UNDECLARED IDENTIFIER */\n#endif\n"
@@ -342,7 +371,7 @@ typedef void*    OSMesg;
         return content
 
     def _handle_opensl_es_headers(self, content: str, error_context: str) -> str:
-        if re.search(r"unknown type name '(?:SLEngineItf|SLObjectItf|SLPlayItf|SLVolumeItf|SLAndroidSimpleBufferQueueItf)'", error_context):
+        if re.search(r"unknown type name '(?:SLEngineItf|SLObjectItf|SLPlayItf|SLAndroidSimpleBufferQueueItf)'", error_context):
             if '#include <SLES/OpenSLES.h>' not in content:
                 content = f"#include <SLES/OpenSLES.h>\n#include <SLES/OpenSLES_Android.h>\n{content}"
         return content
@@ -383,6 +412,16 @@ typedef void*    OSMesg;
             return True
         return False
 
+    def _handle_missing_structs(self, content: str, error_context: str) -> str:
+        missing_structs = set()
+        for m in re.finditer(r"unknown type name '([A-Za-z0-9_]+)'", error_context):
+            missing_structs.add(m.group(1))
+        for struct_name in missing_structs:
+            if struct_name in {"OSThread", "OSMesgQueue"}:
+                if not self._type_already_defined(struct_name, content):
+                    content += f"\ntypedef struct {struct_name}_s {{ long long int force_align[64]; }} {struct_name};\n"
+        return content
+
     def apply_to_file(self, file_path: str, error_context: str = "") -> int:
         if not os.path.exists(file_path):
             return 0
@@ -391,7 +430,6 @@ typedef void*    OSMesg;
         original_content = content
         changes = 0
 
-        # Apply logic rules
         for rule in self.rules:
             try:
                 if rule["action"] == "REGEX":
@@ -405,8 +443,7 @@ typedef void*    OSMesg;
                     if "n64_types.h" in file_path and re.search(rule["search"], error_context):
                         rule_marker = f"/* Rule: {rule['name']} */"
                         if rule_marker not in content:
-                            new_header_data = f"{content}\n{rule_marker}\n{rule['replace']}\n"
-                            content = self.repair_unterminated_conditionals(new_header_data)
+                            content = f"{content}\n{rule_marker}\n{rule['replace']}\n"
                             changes += 1
                 elif rule["action"] == "STUB_INJECT":
                     match = re.search(rule["search"], error_context)
@@ -415,7 +452,6 @@ typedef void*    OSMesg;
             except re.error:
                 continue
 
-        # Apply progressive fixes if this is n64_types.h
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
             if self.intelligence_level >= 1:
@@ -425,18 +461,19 @@ typedef void*    OSMesg;
                 content = self._inject_structs(content, self.N64_OS_STRUCT_BODIES)
             if self.intelligence_level >= 3:
                 content = self._inject_macros(content, self.PHASE_3_MACROS)
+                content = self._inject_structs(content, self.PHASE_3_STRUCTS)
             content = self._inject_globals(content)
             content = self._handle_missing_types(content, error_context)
             content = self._handle_undeclared_identifiers(content, error_context)
             content = self._handle_implicit_functions(content, error_context)
             content = self.repair_unterminated_conditionals(content)
 
-        # Handle OpenSL ES, POSIX, JNI, and missing macros in source files
         if "n64_types.h" not in file_path:
             content = self._handle_opensl_es_headers(content, error_context)
             content = self._handle_pthread_header(content, error_context)
             content = self._handle_jni_header(content, error_context)
             content = self._handle_missing_macros(content, error_context)
+            content = self._handle_missing_structs(content, error_context)
             content = self._handle_posix_conflicts(content, error_context, file_path)
 
         if content != original_content:
