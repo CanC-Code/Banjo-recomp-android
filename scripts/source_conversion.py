@@ -15,8 +15,8 @@ class SourceConverter:
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
         self.intelligence_level = 3
         
-        # Types that the game natively defines. Auto-scraper MUST NOT stub these.
-        # OSTask and OSScTask restored here. They will be resolved natively via <PR/sptask.h>
+        # Types that the game/SDK natively defines. Auto-scraper MUST NOT stub these.
+        # OSTask and OSScTask are strictly defined natively by <PR/sptask.h> and <PR/sched.h>.
         self.SDK_DEFINES_THESE = {"Actor", "OSTask", "OSScTask"}
 
         self.PHASE_3_MACROS = {
@@ -39,6 +39,7 @@ class SourceConverter:
             "G_RM_AA_ZB_XLU_SURF": "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000", "G_ZBUFFER": "0x00000001",
             "G_SHADE": "0x00000004", "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
         }
+        
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; long long int force_align; } Mtx;",
             "OSContStatus": "typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errno; } OSContStatus;",
@@ -59,9 +60,8 @@ class SourceConverter:
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
-            # Notice OSTask and OSScTask are completely removed here. 
-            # We let the real PR/sptask.h header provide the true, full-sized N64 union.
         }
+        
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
             "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
@@ -189,7 +189,7 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
-        # Idempotency check prevents double-injection and removes the need for dangerous regex stripping
+        # Idempotency check prevents double-injection
         if "CORE_PRIMITIVES_DEFINED" in content: 
             return content
 
@@ -215,9 +215,6 @@ int sched_yield(void);
 }
 #endif
 
-// Inject standard N64 task definitions safely so PR/gu.h and PR/sched.h have full structural context natively.
-#include <PR/sptask.h>
-
 #endif
 """
         if "#pragma once" not in content: content = "#pragma once\n" + content
@@ -239,8 +236,20 @@ int sched_yield(void);
         original_content = content
 
         if "n64_types.h" in file_path:
+            # 1. FORCE-PURGE any corrupted forward declarations OR struct bodies cached in the runner environment
+            content = re.sub(r'typedef\s+struct\s+OSTask_s\s*\{[^}]*\}\s*OSTask;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+OSScTask_s\s*\{[^}]*\}\s*OSScTask;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+OSTask_s\s+OSTask;\n?', '', content)
+            content = re.sub(r'typedef\s+struct\s+OSScTask_s\s+OSScTask;\n?', '', content)
+            
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
+            
+            # 2. Inject PR/sptask.h natively so OSTask and OSScTask are natively defined for ALL C files.
+            # We append it bottom-first to ensure SDK primitives execute in the correct order constraint.
+            if "#include <PR/sptask.h>" not in content:
+                content += "\n#ifndef SPTASK_INJECTED\n#define SPTASK_INJECTED\n#include <PR/sptask.h>\n#endif\n"
+
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content): 
                     content = self.strip_redefinition(content, tag)
