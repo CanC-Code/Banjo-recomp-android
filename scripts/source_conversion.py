@@ -14,6 +14,7 @@ class SourceConverter:
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
         self.intelligence_level = 3
+        
         self.PHASE_3_MACROS = {
             "OS_IM_NONE": "0x0000", "OS_IM_1": "0x0001", "OS_IM_2": "0x0002", "OS_IM_3": "0x0004",
             "OS_IM_4": "0x0008", "OS_IM_5": "0x0010", "OS_IM_6": "0x0020", "OS_IM_7": "0x0040",
@@ -54,9 +55,7 @@ class SourceConverter:
             "OSTask": "typedef struct { long long int force_align[64]; } OSTask;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
-            # Opaque stubs for missing game-specific types
-            "Actor": "typedef struct Actor_s Actor;",
-            "sChVegetable": "typedef struct sChVegetable_s sChVegetable;"
+            "sChVegetable": "typedef struct sChVegetable sChVegetable;" # Removed Actor stub to allow prop.h definition
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
@@ -101,11 +100,43 @@ class SourceConverter:
                             })
 
     def _type_already_defined(self, tag: str, content: str) -> bool:
-        # Detects typedef aliases at end of block or named tags after keyword
         if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content): return True
         if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content): return True
         if f"{tag}_DEFINED" in content: return True
         return False
+
+    def strip_redefinition(self, content: str, tag: str) -> str:
+        """Integrated from old build driver: intelligently strips redundant typedefs to prevent build failures."""
+        changed = True
+        while changed:
+            changed = False
+            # Strip anonymous typedef bodies
+            idx = 0
+            while True:
+                match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
+                if not match: break
+                start_idx = idx + match.start()
+                brace_idx = content.find('{', start_idx)
+                open_braces, curr_idx = 1, brace_idx + 1
+                while curr_idx < len(content) and open_braces > 0:
+                    if content[curr_idx] == '{': open_braces += 1
+                    elif content[curr_idx] == '}': open_braces -= 1
+                    curr_idx += 1
+                semi_idx = content.find(';', curr_idx)
+                if semi_idx != -1:
+                    tail = content[curr_idx:semi_idx]
+                    if re.search(rf"\b{re.escape(tag)}\b", tail):
+                        content = content[:start_idx] + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n" + content[semi_idx+1:]
+                        changed = True
+                        break
+                    idx = semi_idx + 1
+                else:
+                    idx = curr_idx + 1
+            if changed: continue
+
+            c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
+            if n > 0: content, changed = c_new, True
+        return content
 
     def bootstrap_n64_types(self, clear_existing=False):
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
@@ -117,8 +148,12 @@ class SourceConverter:
             with open(self.stubs_file, 'w', encoding='utf-8') as f: f.write('#include "n64_types.h"\n')
 
     def _inject_primitives_block(self, content: str) -> str:
+        # Enforce C standard linkage for math and threading before N64 headers are loaded
         primitives_block = """\
 #include <stdint.h>
+#include <math.h>
+#include <sched.h>
+
 #ifndef CORE_PRIMITIVES_DEFINED
 #define CORE_PRIMITIVES_DEFINED
 typedef uint8_t  u8; typedef int8_t   s8; typedef uint16_t u16; typedef int16_t  s16;
@@ -133,7 +168,7 @@ typedef int32_t  OSPri; typedef void* OSMesg;
         return content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
 
     def _handle_float_initializers(self, content: str) -> str:
-        # Replaces {NULL, NULL} inside arrays with 0.0f to fix NDK 25 float initialization errors
+        # Replaces {NULL, NULL} inside arrays with {0.0f, 0.0f} to fix NDK 25 void* -> float compatibility errors
         return re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
@@ -153,18 +188,22 @@ typedef int32_t  OSPri; typedef void* OSMesg;
             content = self._inject_primitives_block(content)
             content = self._handle_exceptasm_fixes(content)
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
-                if not self._type_already_defined(tag, content): content += f"\n{body}\n"
+                if not self._type_already_defined(tag, content): 
+                    content = self.strip_redefinition(content, tag) # Integrated dynamic stripping
+                    content += f"\n{body}\n"
             for tag, body in self.PHASE_3_STRUCTS.items():
-                if not self._type_already_defined(tag, content): content += f"\n{body}\n"
-            for glob, decl in self.N64_KNOWN_GLOBALS.items():
-                if glob not in content: content += f"\nextern {decl}\n"
+                if not self._type_already_defined(tag, content): 
+                    content = self.strip_redefinition(content, tag)
+                    content += f"\n{body}\n"
+            for glob_var, decl in self.N64_KNOWN_GLOBALS.items():
+                if glob_var not in content: content += f"\nextern {decl}\n"
 
         # Process Game Source Files
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
             content = self._handle_float_initializers(content)
             
-            # Apply rules from conversion_logic/*.txt
+            # Apply static rules
             for rule in self.rules:
                 if rule['action'] == 'replace':
                     content = content.replace(rule['search'], rule['replace'])
