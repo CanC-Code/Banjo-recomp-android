@@ -52,14 +52,26 @@ def run_build():
 def resolve_cpp_path(file_path):
     if os.path.exists(file_path):
         return file_path
-    cpp_base = "Android/app/src/main/cpp"
-    attempt = os.path.join(cpp_base, file_path)
-    if os.path.exists(attempt):
-        return attempt
+        
+    # Strip potential absolute paths from runner logs
+    if "Banjo-recomp-android/" in file_path:
+        file_path = file_path.split("Banjo-recomp-android/")[-1]
+        if os.path.exists(file_path):
+            return file_path
+
+    search_bases = ["Android/app/src/main/cpp", "src"]
+    for base in search_bases:
+        attempt = os.path.join(base, file_path)
+        if os.path.exists(attempt):
+            return attempt
+            
     filename = os.path.basename(file_path)
-    for root, _, files in os.walk(cpp_base):
-        if filename in files:
-            return os.path.join(root, filename)
+    for base in search_bases:
+        if not os.path.exists(base): 
+            continue
+        for root, _, files in os.walk(base):
+            if filename in files:
+                return os.path.join(root, filename)
     return file_path
 
 def ensure_bridge_at_top(file_path):
@@ -82,33 +94,72 @@ def main():
     converter.bootstrap_n64_types(clear_existing=True)
     converter.load_logic()
 
-    print(f"\n{'='*40}\n--- Applying Fixes ---\n{'='*40}")
+    print(f"\n{'='*40}\n--- Applying Initial Fixes ---\n{'='*40}")
 
-    # Apply fixes to n64_types.h
     fixes_applied = converter.apply_to_file(TYPES_HEADER)
     print(f"🔧 Applied {fixes_applied} fixes to n64_types.h")
 
-    # Apply fixes to all source files
-    cpp_base = "Android/app/src/main/cpp"
-    for root, _, files in os.walk(cpp_base):
-        for filename in files:
-            filepath = os.path.join(root, filename)
+    # Sweep BOTH the Android wrapper AND the core game src folder
+    source_dirs = ["Android/app/src/main/cpp", "src"]
+    for base_dir in source_dirs:
+        if not os.path.exists(base_dir):
+            continue
+        for root, _, files in os.walk(base_dir):
+            for filename in files:
+                filepath = os.path.join(root, filename)
+
+                if filename.endswith(('.c', '.cpp')):
+                    ensure_bridge_at_top(filepath)
+
+                if filename.endswith(('.c', '.cpp', '.h')):
+                    file_fixes = converter.apply_to_file(filepath)
+                    if file_fixes > 0:
+                        print(f"🔧 Applied {file_fixes} fixes to {filepath}")
+
+    # The Iterative Build Loop (Self-Healing Core)
+    max_iterations = 4
+    for iteration in range(1, max_iterations + 1):
+        if run_build():
+            print("\n✅ Build Successful!")
+            break
+        else:
+            print(f"\n❌ Build Failed (Iteration {iteration}/{max_iterations}). Analyzing logs...")
             
-            # Enforce bridge header for C/C++ files
-            if filename.endswith(('.c', '.cpp')):
-                ensure_bridge_at_top(filepath)
+            if iteration == max_iterations:
+                print("🛑 Maximum build iterations reached. Halting.")
+                break
 
-            # Apply logical modifications
-            if filename.endswith(('.c', '.cpp', '.h')):
-                fixes_applied = converter.apply_to_file(filepath)
-                if fixes_applied > 0:
-                    print(f"🔧 Applied {fixes_applied} fixes to {filepath}")
+            with open(LOG_FILE, 'r', errors='replace') as f:
+                log_content = f.read()
 
-    # Run build once
-    if run_build():
-        print("\n✅ Build Successful!")
-    else:
-        print("\n❌ Build Failed. Check logs for details.")
+            # Scrape logs using the newly repurposed log scraper logic
+            converter.scrape_logs(log_content)
+            
+            # Gather files needing dynamic intervention
+            targeted_files = set()
+            if hasattr(converter, 'dynamic_categories'):
+                if "needs_float_fix" in converter.dynamic_categories:
+                    targeted_files.update(converter.dynamic_categories["needs_float_fix"])
+                if "needs_redef_strip" in converter.dynamic_categories:
+                    targeted_files.update(converter.dynamic_categories["needs_redef_strip"])
+            
+            # Always check the main types header during self-healing
+            targeted_files.add(TYPES_HEADER)
+
+            print("\n🛠️ Applying Dynamic Self-Healing Fixes...")
+            fixed_count = 0
+            for file_path in targeted_files:
+                resolved_path = resolve_cpp_path(file_path)
+                if os.path.exists(resolved_path):
+                    if resolved_path.endswith(('.c', '.cpp')):
+                        ensure_bridge_at_top(resolved_path)
+                    fixes = converter.apply_to_file(resolved_path)
+                    if fixes > 0:
+                        print(f"    🔧 Dynamically fixed: {resolved_path}")
+                        fixed_count += fixes
+            
+            # Inject opaque bodies for unknown structs discovered in the log
+            converter.apply_dynamic_fixes()
 
 if __name__ == "__main__":
     main()
