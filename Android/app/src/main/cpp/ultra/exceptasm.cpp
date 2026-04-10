@@ -39,10 +39,11 @@ OSThread* __osPopThread(OSThread** queue) {
 // Switch context to the next thread in the queue
 void __osDispatchThread() {
     __osRunningThread = __osPopThread(&__osRunQueue);
-    
+
     // N64 logic: Status register bit 0 is the global interrupt enable (IE)
     // We simulate "enabling interrupts" when a thread starts.
-    __osRunningThread->context.status |= 0x0001; 
+    // Cast the context array (long long[67]) to a uint32_t pointer to set the status bit.
+    *(reinterpret_cast<uint32_t*>(__osRunningThread->context)) |= 0x0001; 
 }
 
 void __osEnqueueAndYield(OSThread** queue) {
