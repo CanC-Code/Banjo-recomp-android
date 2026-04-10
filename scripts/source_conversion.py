@@ -16,7 +16,6 @@ class SourceConverter:
         self.intelligence_level = 3
         
         # Types that the game natively defines. Auto-scraper MUST NOT stub these.
-        # OSTask and OSScTask removed so the Android wrapper generates opaque fallbacks.
         self.SDK_DEFINES_THESE = {"Actor"}
 
         self.PHASE_3_MACROS = {
@@ -59,8 +58,9 @@ class SourceConverter:
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
             "sChVegetable": "typedef struct sChVegetable_s sChVegetable;",
-            "OSTask": "typedef struct OSTask_s { long long int force_align[64]; } OSTask;",
-            "OSScTask": "typedef struct OSScTask_s { long long int force_align[64]; } OSScTask;"
+            # Safe forward declarations to avoid redefinition conflicts with PR/sched.h
+            "OSTask": "typedef struct OSTask_s OSTask;",
+            "OSScTask": "typedef struct OSScTask_s OSScTask;"
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
