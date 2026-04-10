@@ -1,9 +1,7 @@
 import os
 import subprocess
-import time
 import re
-from source_conversion import SourceConverter
-from error_parser import generate_failed_log, generate_error_summary, read_file
+from source_conversion import SourceConverter   # your latest SourceConverter
 
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "8"
 if "NINJAJOBS" in os.environ:
@@ -16,8 +14,6 @@ GRADLE_CMD = [
 ]
 
 LOG_FILE        = "Android/full_build_log.txt"
-FAILED_LOG_FILE = "Android/failed_files.log"
-MANIFEST_FILE   = "Android/fixed_files.log"
 TYPES_HEADER    = "Android/app/src/main/cpp/ultra/n64_types.h"
 
 def strip_ansi(text):
@@ -52,22 +48,18 @@ def run_build():
 def resolve_cpp_path(file_path):
     if os.path.exists(file_path):
         return file_path
-        
-    # Strip potential absolute paths from runner logs
     if "Banjo-recomp-android/" in file_path:
         file_path = file_path.split("Banjo-recomp-android/")[-1]
         if os.path.exists(file_path):
             return file_path
-
     search_bases = ["Android/app/src/main/cpp", "src"]
     for base in search_bases:
         attempt = os.path.join(base, file_path)
         if os.path.exists(attempt):
             return attempt
-            
     filename = os.path.basename(file_path)
     for base in search_bases:
-        if not os.path.exists(base): 
+        if not os.path.exists(base):
             continue
         for root, _, files in os.walk(base):
             if filename in files:
@@ -91,15 +83,23 @@ def ensure_bridge_at_top(file_path):
 def main():
     converter = SourceConverter()
     print("🧹 Performing Initial Cleanse...")
-    converter.bootstrap_n64_types(clear_existing=True)
+
+    # === FRESH n64_types.h (replaces the missing bootstrap_n64_types) ===
+    if os.path.exists(TYPES_HEADER):
+        os.remove(TYPES_HEADER)
+    os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
+    with open(TYPES_HEADER, 'w', encoding='utf-8') as f:
+        f.write("#pragma once\n")
+
     converter.load_logic()
 
     print(f"\n{'='*40}\n--- Applying Initial Fixes ---\n{'='*40}")
 
+    # Apply to types header first
     fixes_applied = converter.apply_to_file(TYPES_HEADER)
     print(f"🔧 Applied {fixes_applied} fixes to n64_types.h")
 
-    # Sweep BOTH the Android wrapper AND the core game src folder
+    # Sweep source files
     source_dirs = ["Android/app/src/main/cpp", "src"]
     for base_dir in source_dirs:
         if not os.path.exists(base_dir):
@@ -107,16 +107,14 @@ def main():
         for root, _, files in os.walk(base_dir):
             for filename in files:
                 filepath = os.path.join(root, filename)
-
                 if filename.endswith(('.c', '.cpp')):
                     ensure_bridge_at_top(filepath)
-
                 if filename.endswith(('.c', '.cpp', '.h')):
                     file_fixes = converter.apply_to_file(filepath)
                     if file_fixes > 0:
                         print(f"🔧 Applied {file_fixes} fixes to {filepath}")
 
-    # The Iterative Build Loop (Self-Healing Core)
+    # === Iterative self-healing loop ===
     max_iterations = 4
     for iteration in range(1, max_iterations + 1):
         if run_build():
@@ -124,7 +122,7 @@ def main():
             break
         else:
             print(f"\n❌ Build Failed (Iteration {iteration}/{max_iterations}). Analyzing logs...")
-            
+
             if iteration == max_iterations:
                 print("🛑 Maximum build iterations reached. Halting.")
                 break
@@ -132,18 +130,13 @@ def main():
             with open(LOG_FILE, 'r', errors='replace') as f:
                 log_content = f.read()
 
-            # Scrape logs using the newly repurposed log scraper logic
             converter.scrape_logs(log_content)
-            
-            # Gather files needing dynamic intervention
+
             targeted_files = set()
             if hasattr(converter, 'dynamic_categories'):
-                if "needs_float_fix" in converter.dynamic_categories:
-                    targeted_files.update(converter.dynamic_categories["needs_float_fix"])
-                if "needs_redef_strip" in converter.dynamic_categories:
-                    targeted_files.update(converter.dynamic_categories["needs_redef_strip"])
-            
-            # Always check the main types header during self-healing
+                targeted_files.update(converter.dynamic_categories.get("needs_float_fix", set()))
+                targeted_files.update(converter.dynamic_categories.get("needs_redef_strip", set()))
+
             targeted_files.add(TYPES_HEADER)
 
             print("\n🛠️ Applying Dynamic Self-Healing Fixes...")
@@ -157,8 +150,7 @@ def main():
                     if fixes > 0:
                         print(f"    🔧 Dynamically fixed: {resolved_path}")
                         fixed_count += fixes
-            
-            # Inject opaque bodies for unknown structs discovered in the log
+
             converter.apply_dynamic_fixes()
 
 if __name__ == "__main__":
