@@ -54,6 +54,9 @@ class SourceConverter:
             "OSTask": "typedef struct { long long int force_align[64]; } OSTask;",
             "uSprite": "typedef struct { long long int force_align[64]; } uSprite;",
             "CPUState": "typedef struct { long long int force_align[64]; } CPUState;",
+            # Opaque stubs for missing game-specific types
+            "Actor": "typedef struct Actor_s Actor;",
+            "sChVegetable": "typedef struct sChVegetable_s sChVegetable;"
         }
         self.PHASE_3_STRUCTS = {
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
@@ -69,6 +72,7 @@ class SourceConverter:
             "__osRunQueue": "struct OSThread_s *__osRunQueue;",
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
+        self.rules = []
 
     def read_file(self, filepath: str) -> str:
         try:
@@ -97,16 +101,10 @@ class SourceConverter:
                             })
 
     def _type_already_defined(self, tag: str, content: str) -> bool:
-        # Improved regex to handle 'typedef struct { ... } Tag;' AND 'typedef struct Tag Tag;'
-        # Matches the alias at the end of the typedef block
-        if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content):
-            return True
-        # Matches the tag name immediately after the keyword
-        if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content):
-            return True
-        # Check for manual definitions or guards
-        if f"{tag}_DEFINED" in content:
-            return True
+        # Detects typedef aliases at end of block or named tags after keyword
+        if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content): return True
+        if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content): return True
+        if f"{tag}_DEFINED" in content: return True
         return False
 
     def bootstrap_n64_types(self, clear_existing=False):
@@ -134,42 +132,14 @@ typedef int32_t  OSPri; typedef void* OSMesg;
         content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
         return content.replace("#pragma once", f"#pragma once\n{primitives_block}", 1)
 
-    def _handle_math_conflicts(self, content: str) -> str:
-        math_block = """
-#ifdef __cplusplus
-extern "C" {
-#endif
-float cosf(float angle); float sinf(float angle); float sqrtf(float value);
-#ifdef __cplusplus
-}
-#endif
-"""
-        if "float cosf(float angle);" not in content:
-            content = content.replace("#pragma once", f"#pragma once\n{math_block}", 1)
-        return content
-
-    def _handle_missing_functions(self, content: str) -> str:
-        sched_yield_decl = """
-#ifndef sched_yield_DEFINED
-#define sched_yield_DEFINED
-#ifdef __cplusplus
-extern "C" {
-#endif
-void sched_yield(void);
-#ifdef __cplusplus
-}
-#endif
-#endif
-"""
-        if "sched_yield_DEFINED" not in content: content += f"\n{sched_yield_decl}\n"
-        return content
+    def _handle_float_initializers(self, content: str) -> str:
+        # Replaces {NULL, NULL} inside arrays with 0.0f to fix NDK 25 float initialization errors
+        return re.sub(r'\{\s*NULL\s*,\s*NULL\s*\}', '{0.0f, 0.0f}', content)
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        # Protect extern "C" with __cplusplus guards to handle .c files (like bss_pad.c)
         linkage_fix = r'#ifdef __cplusplus\nextern "C" struct OSThread_s *\1;\n#else\nextern struct OSThread_s *\1;\n#endif'
         content = re.sub(r'extern struct OSThread_s \*(__osRunQueue);', linkage_fix, content)
         content = re.sub(r'extern struct OSThread_s \*(__osFaultedThread);', linkage_fix, content)
-        # Fix context.status access
         content = re.sub(r'__osRunningThread->context\.status', '((uint32_t*)__osRunningThread->context)[0]', content)
         return content
 
@@ -178,12 +148,10 @@ void sched_yield(void);
         content = self.read_file(file_path)
         original_content = content
 
+        # Process N64 Bridge Header
         if "n64_types.h" in file_path:
             content = self._inject_primitives_block(content)
-            content = self._handle_math_conflicts(content)
-            content = self._handle_missing_functions(content)
             content = self._handle_exceptasm_fixes(content)
-            # Inject structure bodies only if the alias/name is truly missing
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content): content += f"\n{body}\n"
             for tag, body in self.PHASE_3_STRUCTS.items():
@@ -191,8 +159,17 @@ void sched_yield(void);
             for glob, decl in self.N64_KNOWN_GLOBALS.items():
                 if glob not in content: content += f"\nextern {decl}\n"
 
+        # Process Game Source Files
         if file_path.endswith(('.c', '.cpp')):
             content = self._handle_exceptasm_fixes(content)
+            content = self._handle_float_initializers(content)
+            
+            # Apply rules from conversion_logic/*.txt
+            for rule in self.rules:
+                if rule['action'] == 'replace':
+                    content = content.replace(rule['search'], rule['replace'])
+                elif rule['action'] == 'regex':
+                    content = re.sub(rule['search'], rule['replace'], content)
 
         if content != original_content:
             self.write_file(file_path, content)
