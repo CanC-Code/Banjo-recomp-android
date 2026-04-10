@@ -79,50 +79,32 @@ def ensure_bridge_at_top(file_path):
     return True
 
 def main():
-    stall_count = 0
     converter = SourceConverter()
     print("🧹 Performing Initial Cleanse...")
     converter.bootstrap_n64_types(clear_existing=True)
     converter.load_logic()
 
-    for cycle in range(1, 401):
-        print(f"\n{'='*40}\n--- Cycle {cycle} (Intelligence Level: {converter.intelligence_level}) ---\n{'='*40}")
+    print(f"\n{'='*40}\n--- Applying Fixes ---\n{'='*40}")
 
-        if run_build():
-            print("\n✅ Build Successful!")
-            return
+    # Apply fixes to n64_types.h
+    fixes_applied = converter.apply_to_file(TYPES_HEADER)
+    print(f"🔧 Applied {fixes_applied} fixes to n64_types.h")
 
-        log_data = read_file(LOG_FILE)
-        failed_files = generate_failed_log(log_data, FAILED_LOG_FILE)
+    # Apply fixes to all source files
+    cpp_base = "Android/app/src/main/cpp"
+    for root, _, files in os.walk(cpp_base):
+        for filename in files:
+            if filename.endswith(('.c', '.cpp', '.h')):
+                filepath = os.path.join(root, filename)
+                fixes_applied = converter.apply_to_file(filepath)
+                if fixes_applied > 0:
+                    print(f"🔧 Applied {fixes_applied} fixes to {filepath}")
 
-        total_fixes_this_cycle = 0
-        if failed_files:
-            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|OSThread|OSMesgQueue|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq|ALHeap|__SDK_)'|different language linkage|redefinition of 'OSId'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
-
-            if re.search(trigger_pattern, log_data):
-                print("🛡️ Master Shield Trigger Detected: Routing to n64_types.h")
-                fixes_applied = converter.apply_to_file(TYPES_HEADER, error_context=log_data)
-                total_fixes_this_cycle += fixes_applied
-
-            for raw_path in failed_files:
-                file_path = resolve_cpp_path(raw_path)
-                if file_path != TYPES_HEADER:
-                    bridge_added = ensure_bridge_at_top(file_path)
-                    fixes_applied = converter.apply_to_file(file_path, error_context=log_data)
-                    total_fixes_this_cycle += fixes_applied + (1 if bridge_added else 0)
-
-        if total_fixes_this_cycle == 0:
-            stall_count += 1
-            if stall_count >= MAX_STALL:
-                print(f"\n🛑 Loop halted: No fixable patterns found. Escalating intelligence level...")
-                converter.escalate_intelligence()
-                stall_count = 0
-                if converter.intelligence_level > 3:
-                    print(f"\n🛑 Maximum intelligence level reached. Aborting.")
-                    break
-        else:
-            stall_count = 0
-        time.sleep(1)
+    # Run build once
+    if run_build():
+        print("\n✅ Build Successful!")
+    else:
+        print("\n❌ Build Failed. Check logs for details.")
 
 if __name__ == "__main__":
     main()
