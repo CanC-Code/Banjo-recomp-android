@@ -5,7 +5,6 @@ import re
 from source_conversion import SourceConverter
 from error_parser import generate_failed_log, generate_error_summary, read_file
 
-# THE FIX: Unleash parallel processing so we can patch hundreds of files in one cycle
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "8"
 if "NINJAJOBS" in os.environ:
     del os.environ["NINJAJOBS"]
@@ -31,7 +30,6 @@ def get_ninja_cmd():
         for hash_dir in os.listdir(base_dir):
             ninja_dir = os.path.join(base_dir, hash_dir, "arm64-v8a")
             if os.path.exists(os.path.join(ninja_dir, "build.ninja")):
-                # THE FIX: -k 0 forces Ninja to keep going and gather ALL failing files at once
                 return ["/usr/local/lib/android/sdk/cmake/3.22.1/bin/ninja", "-C", ninja_dir, "-k", "0", "bkawrapper"]
     return GRADLE_CMD
 
@@ -53,7 +51,6 @@ def run_build():
             return False
 
 def resolve_cpp_path(file_path):
-    """Resolves relative compiler paths to absolute source tree paths."""
     if os.path.exists(file_path):
         return file_path
     
@@ -70,7 +67,6 @@ def resolve_cpp_path(file_path):
     return file_path
 
 def ensure_bridge_at_top(file_path):
-    """Forces the Master Shield bridge to Line 1 so SDK headers don't crash."""
     if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
         return False
 
@@ -79,7 +75,7 @@ def ensure_bridge_at_top(file_path):
 
     bridge = '#include "ultra/n64_types.h"'
     if content.strip().startswith(bridge):
-        return False
+        return False 
 
     content = re.sub(r'#include\s+["<](?:ultra/)?n64_types\.h[">]\n?', '', content)
 
@@ -108,7 +104,8 @@ def main():
 
         total_fixes_this_cycle = 0
         if failed_files:
-            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
+            # Synchronized Omni-Trigger v37 (Includes Vtx)
+            trigger_pattern = r"unknown type name '(?:OSMesg|OSTime|OSPri|OSId|OSTask|Mtx|Gfx|Vtx|Acmd|ADPCM_STATE|u32|u16|u8|s32|f32|f64|ALFilter|ALCmdHandler|ALSeq|ALCSeq)'|undeclared identifier '(?:m|l)'|expected '\(' for function-style cast"
 
             if re.search(trigger_pattern, log_data):
                 print("🛡️ Master Shield Trigger Detected: Routing to n64_types.h")
