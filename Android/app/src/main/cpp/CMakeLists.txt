@@ -14,6 +14,7 @@ file(GLOB_RECURSE TOOLS_SRC "tools/*.cpp")
 file(GLOB_RECURSE MENU_SRC "menu/*.cpp")
 file(GLOB_RECURSE GAME_CORE "${GAME_SRC}/*.c")
 
+# Add library
 add_library(bkawrapper SHARED
     ${EMULATOR_SRC}
     ${ULTRA_SRC}
@@ -34,28 +35,26 @@ target_include_directories(bkawrapper PRIVATE
 )
 
 # Find required libraries
+find_library(log-lib log)
 find_library(opensl-lib OpenSLES)
-find_library(pthread-lib pthread)
-find_library(jni-lib log)
 
 # Add definitions for macros
 add_definitions(-DOEPRESCRIPT=1 -DDANDROID02=1)
 
+# Compile options
 target_compile_options(bkawrapper PRIVATE
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    -w          # Suppress legacy warnings
-    -fcommon    # Allow multiple definitions of global variables (common in old C)
-    -O2         # Optimization level
-    -fno-strict-aliasing # Crucial for N64 type-punned pointer logic
+    -w
+    -fcommon
+    -O2
+    -fno-strict-aliasing
 )
 
 # Link libraries
 target_link_libraries(bkawrapper
     android
-    log
+    ${log-lib}
+    ${opensl-lib}
     GLESv3
     EGL
-    ${opensl-lib}
-    ${pthread-lib}
-    ${jni-lib}
 )
