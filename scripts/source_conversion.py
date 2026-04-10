@@ -97,7 +97,17 @@ class SourceConverter:
                             })
 
     def _type_already_defined(self, tag: str, content: str) -> bool:
-        return bool(re.search(rf"\btypedef\s+(?:struct|union|union)\s+{re.escape(tag)}", content)) or f"{tag}_DEFINED" in content
+        # Improved regex to handle 'typedef struct { ... } Tag;' AND 'typedef struct Tag Tag;'
+        # Matches the alias at the end of the typedef block
+        if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content):
+            return True
+        # Matches the tag name immediately after the keyword
+        if re.search(rf"\btypedef\s+(?:struct|union|enum)\s+{re.escape(tag)}\b", content):
+            return True
+        # Check for manual definitions or guards
+        if f"{tag}_DEFINED" in content:
+            return True
+        return False
 
     def bootstrap_n64_types(self, clear_existing=False):
         os.makedirs(os.path.dirname(self.types_header), exist_ok=True)
@@ -155,7 +165,7 @@ void sched_yield(void);
         return content
 
     def _handle_exceptasm_fixes(self, content: str) -> str:
-        # Protect extern "C" with __cplusplus guards for .c files
+        # Protect extern "C" with __cplusplus guards to handle .c files (like bss_pad.c)
         linkage_fix = r'#ifdef __cplusplus\nextern "C" struct OSThread_s *\1;\n#else\nextern struct OSThread_s *\1;\n#endif'
         content = re.sub(r'extern struct OSThread_s \*(__osRunQueue);', linkage_fix, content)
         content = re.sub(r'extern struct OSThread_s \*(__osFaultedThread);', linkage_fix, content)
@@ -173,7 +183,7 @@ void sched_yield(void);
             content = self._handle_math_conflicts(content)
             content = self._handle_missing_functions(content)
             content = self._handle_exceptasm_fixes(content)
-            # Inject structure bodies if missing
+            # Inject structure bodies only if the alias/name is truly missing
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not self._type_already_defined(tag, content): content += f"\n{body}\n"
             for tag, body in self.PHASE_3_STRUCTS.items():
