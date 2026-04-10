@@ -20,7 +20,6 @@ LOG_FILE        = "Android/full_build_log.txt"
 FAILED_LOG_FILE = "Android/failed_files.log"
 MANIFEST_FILE   = "Android/fixed_files.log"
 TYPES_HEADER    = "Android/app/src/main/cpp/ultra/n64_types.h"
-MAX_STALL       = 1
 
 def strip_ansi(text):
     return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', text)
