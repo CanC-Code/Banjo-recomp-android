@@ -13,21 +13,63 @@ class SourceConverter:
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
         
-        # Track dynamic findings from logs
         self.dynamic_categories = defaultdict(set)
 
-        # Core N64 OS types that must exist
+        # Map common N64 primitives to standard C types to prevent bit-field errors
+        self.N64_PRIMITIVE_MAP = {
+            "u8": "uint8_t",
+            "u16": "uint16_t",
+            "u32": "uint32_t",
+            "u64": "uint64_t",
+            "s8": "int8_t",
+            "s16": "int16_t",
+            "s32": "int32_t",
+            "s64": "int64_t",
+            "f32": "float",
+            "f64": "double",
+            "b32": "int32_t",
+            "f32": "float"
+        }
+
+        # Core N64 OS types. Note the order and use of proper typedefs.
         self.N64_OS_STRUCT_BODIES = {
-            "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; OSMesg *msg; } OSMesgQueue;",
-            "OSThread": """typedef union __OSThreadContext_u { struct { uint64_t pc; uint64_t a0; uint64_t sp; uint64_t ra; uint32_t sr; uint32_t rcp; uint32_t fpcsr; } regs; long long int force_align[67]; } __OSThreadContext; typedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; __OSThreadContext context; } OSThread;""",
+            "OSThread": """
+typedef union __OSThreadContext_u {
+    struct {
+        uint64_t pc; uint64_t a0; uint64_t sp; uint64_t ra;
+        uint32_t sr; uint32_t rcp; uint32_t fpcsr;
+    } regs;
+    long long int force_align[67];
+} __OSThreadContext;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    int32_t priority;
+    struct OSThread_s **queue;
+    struct OSThread_s *tlnext;
+    uint16_t state;
+    uint16_t flags;
+    uint64_t id;
+    int fp;
+    __OSThreadContext context;
+} OSThread;""",
+            "OSMesg": "typedef void *OSMesg;",
+            "OSTime": "typedef uint64_t OSTime;",
+            "OSMesgQueue": """
+typedef struct OSMesgQueue_s {
+    struct OSThread_s *mtqueue;
+    struct OSThread_s *fullqueue;
+    int32_t validCount;
+    int32_t first;
+    int32_t msgCount;
+    OSMesg *msg;
+} OSMesgQueue;""",
             "OSMesgHdr": "typedef struct { uint16_t type; uint8_t pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
             "OSPiHandle": "typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; } OSPiHandle;",
         }
 
     def load_logic(self):
-        """Required by build_driver.py: Initializes internal rules."""
         logger.info("🛠️ Loading conversion logic (internal rules active)")
-        # If you add external JSON/YAML rules later, they get loaded here.
         return True
 
     def read_file(self, file_path: str) -> str:
@@ -43,21 +85,14 @@ class SourceConverter:
             f.write(content)
 
     def scrape_logs(self, log_content: str):
-        """Analyzes build log for missing types and identifiers."""
         self.dynamic_categories = defaultdict(set)
-        
-        # Find unknown types
         for m in re.finditer(r"unknown type name ['\"](.*?)['\"]", log_content):
             self.dynamic_categories["missing_types"].add(m.group(1).strip())
-            
-        # Find undeclared identifiers
         for m in re.finditer(r"use of undeclared identifier ['\"](.*?)['\"]", log_content):
             self.dynamic_categories["undeclared_identifiers"].add(m.group(1).strip())
-        
-        logger.info(f"📊 Scraped {len(self.dynamic_categories['missing_types'])} missing types from log.")
+        logger.info(f"📊 Scraped {len(self.dynamic_categories['missing_types'])} missing types.")
 
     def apply_dynamic_fixes(self):
-        """Injects findings from scrape_logs into the types header."""
         if not os.path.exists(self.types_header):
             return
 
@@ -65,8 +100,14 @@ class SourceConverter:
         updated = False
 
         for typ in self.dynamic_categories.get("missing_types", set()):
-            if typ not in content and typ not in ["uint64_t", "int32_t", "uint16_t", "uint8_t"]:
-                content += f"\ntypedef void* {typ}; /* Dynamically fixed */"
+            # Use word boundary check to avoid redundant definitions
+            if not re.search(rf"\b{typ}\b", content):
+                if typ in self.N64_PRIMITIVE_MAP:
+                    content += f"\ntypedef {self.N64_PRIMITIVE_MAP[typ]} {typ};"
+                else:
+                    # Default unknown types to opaque structs instead of void*
+                    # This is safer for pointers but still avoids bit-field issues
+                    content += f"\ntypedef struct {typ}_s {typ};"
                 updated = True
         
         if updated:
@@ -74,22 +115,23 @@ class SourceConverter:
             logger.info("🩹 Applied dynamic fixes to n64_types.h")
 
     def _inject_essentials(self, content: str) -> str:
-        """Ensures standard headers and basic N64 primitives exist."""
-        essentials = [
+        """Prepends standard headers to the top of the file."""
+        headers = [
             "#include <stdint.h>",
             "#include <stdbool.h>",
-            "#include <stddef.h>",
-            "typedef void* OSMesg;",
-            "typedef uint64_t OSTime;",
-            "typedef int32_t s32;",
-            "typedef uint32_t u32;"
+            "#include <stddef.h>"
         ]
         
-        for item in essentials:
-            # Check for the type/include without getting tripped up by similar names
-            pattern = rf"{re.escape(item)}"
-            if not re.search(pattern, content):
-                content = content.strip() + f"\n{item}\n"
+        # Insert after #pragma once if it exists, otherwise at the top
+        insert_pos = 0
+        pragma_match = re.search(r"#pragma\s+once", content)
+        if pragma_match:
+            insert_pos = pragma_match.end()
+
+        for header in reversed(headers):
+            if header not in content:
+                content = content[:insert_pos] + f"\n{header}" + content[insert_pos:]
+        
         return content
 
     def apply_to_file(self, file_path: str) -> int:
@@ -99,15 +141,20 @@ class SourceConverter:
         content = self.read_file(file_path)
         original = content
 
-        # Special handling for the core types header
         if "n64_types.h" in file_path:
             content = self._inject_essentials(content)
             
+            # Inject N64 Primitives first
+            for short, full in self.N64_PRIMITIVE_MAP.items():
+                if not re.search(rf"\b{short}\b", content):
+                    content += f"\ntypedef {full} {short};"
+
+            # Inject core OS structs using whole-word matching
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
-                if tag not in content:
+                # Check for tag as a whole word (e.g., 'OSThread')
+                if not re.search(rf"\b{tag}\b", content):
                     content += f"\n{body}\n"
 
-        # Apply specific fixes for ASM/Register access in source files
         if file_path.endswith(('.c', '.cpp')):
             # Fix context register access
             content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
