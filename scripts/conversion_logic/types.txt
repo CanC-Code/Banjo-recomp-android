@@ -1,5 +1,5 @@
-OSContStatus = typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errno; } OSContStatus;
-OSContPad = typedef struct OSContPad_s { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errno; } OSContPad;
+OSContStatus = typedef struct OSContStatus_s { uint16_t type; uint8_t status; uint8_t errnum; } OSContStatus;
+OSContPad = typedef struct OSContPad_s { uint16_t button; int8_t stick_x; int8_t stick_y; uint8_t errnum; } OSContPad;
 OSMesgQueue = typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; int32_t validCount; int32_t first; int32_t msgCount; void* *msg; } OSMesgQueue;
 OSMesgHdr = typedef struct { uint16_t type; uint8_t pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;
 OSIoMesg = typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; uint32_t devAddr; uint32_t size; struct OSPiHandle_s *piHandle; } OSIoMesg;
@@ -9,4 +9,6 @@ OSTimer = typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *p
 LookAt = typedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;
 OSViMode = typedef struct OSViMode_s { uint32_t type; uint32_t comRegs[4]; uint32_t fldRegs[2][7]; } OSViMode;
 OSViContext = typedef struct OSViContext_s { uint16_t state; uint16_t retraceCount; void *framep; struct OSViMode_s *modep; uint32_t control; struct OSMesgQueue_s *msgq; void* msg; } OSViContext;
-OSPiHandle = typedef struct { uint32_t errStatus; void *dramAddr; void *C2Addr; uint32_t sectorSize; uint32_t C1ErrNum; uint32_t C1ErrSector[4]; } __OSBlockInfo; typedef struct { uint32_t cmdType; uint16_t transferMode; uint16_t blockNum; int32_t sectorNum; uint32_t devAddr; uint32_t bmCtlShadow; uint32_t seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo; typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; __OSTranxInfo transferInfo; } OSPiHandle;
+__OSBlockInfo = typedef struct { uint32_t errStatus; void *dramAddr; void *C2Addr; uint32_t sectorSize; uint32_t C1ErrNum; uint32_t C1ErrSector[4]; } __OSBlockInfo;
+__OSTranxInfo = typedef struct { uint32_t cmdType; uint16_t transferMode; uint16_t blockNum; int32_t sectorNum; uint32_t devAddr; uint32_t bmCtlShadow; uint32_t seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;
+OSPiHandle = typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; __OSTranxInfo transferInfo; } OSPiHandle;
