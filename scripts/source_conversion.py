@@ -15,7 +15,7 @@ class SourceConverter:
         self.dynamic_categories = defaultdict(set)
 
         # ---------------------------------------------------------------------------
-        # Core N64 Primitives - PROTECTED from scraper stubs
+        # Core N64 Primitives
         # ---------------------------------------------------------------------------
         self.N64_PRIMITIVES = {
             "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
@@ -102,7 +102,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             self.dynamic_categories["implicit_functions"].add(m.group(1).strip())
 
     def apply_dynamic_fixes(self):
-        """Apply fixes to n64_types.h with aggressive body promotion."""
+        """Apply fixes to n64_types.h and n64_stubs.c."""
         if not os.path.exists(self.types_header): return
         content = self.read_file(self.types_header)
         stubs = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "ultra/n64_types.h"\n'
@@ -110,24 +110,24 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
         updated_types = False
         updated_stubs = False
 
-        # 1. Cleanse previous bad pointer stubs for primitives (fixes bit-fields)
-        for short in self.N64_PRIMITIVES.keys():
-            content = re.sub(rf"typedef\s+void\s*\*\s*{short}\s*;\n?", "", content)
-
-        # 2. Promote incomplete types to full bodies if we have them
+        # 1. Promote incomplete types to full bodies if we have them
         for tag in self.dynamic_categories.get("need_body", set()):
             if tag in self.N64_OS_STRUCT_BODIES:
                 content = self.strip_redefinition(content, tag)
-                content += f"\n{self.N64_OS_STRUCT_BODIES[tag]}\n"
-                updated_types = True
+                # Inject right after headers to ensure it is defined before usage
+                injection_point = content.find("#include <stddef.h>")
+                if injection_point != -1:
+                    injection_point = content.find("\n", injection_point) + 1
+                    content = content[:injection_point] + f"\n{self.N64_OS_STRUCT_BODIES[tag]}\n" + content[injection_point:]
+                    updated_types = True
 
-        # 3. Handle missing opaque types
+        # 2. Handle missing opaque types
         for typ in self.dynamic_categories.get("missing_types", set()):
             if not re.search(rf"\b{typ}\b", content):
                 content += f"\ntypedef struct {typ}_s {typ};"
                 updated_types = True
 
-        # 4. Handle implicit function stubs
+        # 3. Handle implicit function stubs
         for func in self.dynamic_categories.get("implicit_functions", set()):
             if f"{func}_DEFINED" not in content:
                 content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern int {func}();\n#endif"
@@ -136,7 +136,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
                 stubs += f"\nint {func}() {{ return 0; }}"
                 updated_stubs = True
 
-        # 5. Handle globals with linkage guards
+        # 4. Handle globals with linkage guards
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
             if ident in self.N64_KNOWN_GLOBALS and f"{ident}_DEFINED" not in content:
                 content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#ifdef __cplusplus\n}}\n#endif\n#endif"
@@ -171,23 +171,23 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
         original = content
 
         if "n64_types.h" in file_path:
-            # Absolute Bootstrap Header Injection
-            if "#include <stdint.h>" not in content:
-                content = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n" + content.replace("#pragma once", "")
-            
-            # Use a targeted injection point after the bootstrap
-            injection_point = content.find("#include <stddef.h>")
-            if injection_point != -1:
-                injection_point = content.find("\n", injection_point) + 1
-            else:
-                injection_point = 0
+            # 1. Force the bootstrap header to the absolute top of the file!
+            bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
+            content = content.replace("#include <stdint.h>", "")
+            content = content.replace("#include <stdbool.h>", "")
+            content = content.replace("#include <stddef.h>", "")
+            content = content.replace("#pragma once", "")
+            content = bootstrap + content
 
-            # Build injection block for primitives and core structs
+            # 2. Build core definitions right after the headers
+            injection_point = content.find("#include <stddef.h>") + len("#include <stddef.h>\n")
+            
             injection = "\n/* --- CORE DEFINITIONS --- */\n"
+            
+            # Aggressive cleansing for primitive stubs
             for short, full in self.N64_PRIMITIVES.items():
-                if not re.search(rf"\btypedef\s+{full}\s+{short}\b", content):
-                    content = re.sub(rf"\btypedef\s+.*?\s+{short}\s*;", "", content)
-                    injection += f"typedef {full} {short};\n"
+                content = re.sub(rf"typedef\s+.*?\s+{short}\s*;", "", content) # Strips bad 'void*' mappings
+                injection += f"typedef {full} {short};\n"
             
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not re.search(rf"\b{tag}\b", content) or "force_align" not in content:
@@ -201,7 +201,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             if "osAppNMIBuffer" in self.dynamic_categories["redefinitions"]:
                 content = re.sub(r'^(uint32_t\s+osAppNMIBuffer\s*=.*?;)', r'/* REDEF-FIX: \1 */', content, flags=re.M)
 
-            # Actor Context Injection (Critical for Banjo)
+            # Actor Context Injection
             if "this" in content and "Actor *actor =" not in content and "actor->" in content:
                 content = re.sub(r'(\w+::\w+\(.*\)\s*(?:const\s+)?\{)', r'\1\n    Actor *actor = (Actor *)this;', content)
 
