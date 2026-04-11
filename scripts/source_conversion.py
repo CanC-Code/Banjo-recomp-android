@@ -18,13 +18,13 @@ class SourceConverter:
         self.MACROS = {}
         self.OPAQUE_TYPES = set()
 
-        # Core Protected Primitives
+        # Core Protected Primitives (USING RAW C TYPES TO BYPASS BROKEN <stdint.h>)
         self.N64_PRIMITIVES = {
-            "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
-            "s8": "int8_t", "s16": "int16_t", "s32": "int32_t", "s64": "int64_t",
-            "f32": "float", "f64": "double", "b32": "int32_t", "n64_bool": "int",
-            "OSIntMask": "uint32_t", "OSTime": "uint64_t", "OSId": "uint32_t",
-            "OSPri": "int32_t", "OSMesg": "void*"
+            "u8": "unsigned char", "u16": "unsigned short", "u32": "unsigned int", "u64": "unsigned long long",
+            "s8": "signed char", "s16": "short", "s32": "int", "s64": "long long",
+            "f32": "float", "f64": "double", "b32": "int", "n64_bool": "int",
+            "OSIntMask": "unsigned int", "OSTime": "unsigned long long", "OSId": "unsigned int",
+            "OSPri": "int", "OSMesg": "void*"
         }
 
         # BLACKLIST: Prevent standard types from being dynamically stubbed out
@@ -32,7 +32,8 @@ class SourceConverter:
             "uint8_t", "uint16_t", "uint32_t", "uint64_t",
             "int8_t", "int16_t", "int32_t", "int64_t",
             "size_t", "ssize_t", "intptr_t", "uintptr_t", "bool",
-            "float", "double", "char", "int", "short", "long", "void"
+            "float", "double", "char", "int", "short", "long", "void",
+            "unsigned"
         }
 
         # Base Globals (Expanded dynamically by globals.txt)
@@ -43,8 +44,14 @@ class SourceConverter:
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
 
-        # Base Structs (Expanded dynamically by types.txt)
-        self.N64_OS_STRUCT_BODIES = {}
+        # Base Structs (Hardcoded core to prevent missing definitions, expanded by types.txt)
+        self.N64_OS_STRUCT_BODIES = {
+            "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { short mi[4][4]; short pad; } i; } Mtx;",
+            "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
+            "Gfx": "typedef struct { unsigned int words[2]; } Gfx;",
+            "Acmd": "typedef long long int Acmd;",
+            "OSThread": "typedef union __OSThreadContext_u { struct { unsigned long long pc; unsigned long long a0; unsigned long long sp; unsigned long long ra; unsigned int sr; unsigned int rcp; unsigned int fpcsr; } regs; long long int force_align[67]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; unsigned short state; unsigned short flags; unsigned long long id; int fp; __OSThreadContext context; } OSThread;"
+        }
 
     def load_logic(self):
         """Dynamically loads N64 definitions from logic directory text files."""
@@ -59,6 +66,15 @@ class SourceConverter:
                 for line in lines:
                     if "=" in line:
                         k, v = line.split("=", 1)
+                        # AUTO-UPGRADE stdint types to raw C types in memory
+                        v = re.sub(r'\buint8_t\b', 'unsigned char', v)
+                        v = re.sub(r'\buint16_t\b', 'unsigned short', v)
+                        v = re.sub(r'\buint32_t\b', 'unsigned int', v)
+                        v = re.sub(r'\buint64_t\b', 'unsigned long long', v)
+                        v = re.sub(r'\bint8_t\b', 'signed char', v)
+                        v = re.sub(r'\bint16_t\b', 'short', v)
+                        v = re.sub(r'\bint32_t\b', 'int', v)
+                        v = re.sub(r'\bint64_t\b', 'long long', v)
                         self.N64_OS_STRUCT_BODIES[k.strip()] = v.strip()
             elif "macros" in filename:
                 for line in lines:
@@ -77,14 +93,20 @@ class SourceConverter:
                     if ":::" in line:
                         pat, rep = line.split(":::", 1)
                         pat, rep = pat.strip(), rep.strip()
+                        # AUTO-UPGRADE regex replacements to raw types
+                        rep = re.sub(r'\buint8_t\b', 'unsigned char', rep)
+                        rep = re.sub(r'\buint16_t\b', 'unsigned short', rep)
+                        rep = re.sub(r'\buint32_t\b', 'unsigned int', rep)
+                        rep = re.sub(r'\buint64_t\b', 'unsigned long long', rep)
+                        rep = re.sub(r'\bint8_t\b', 'signed char', rep)
+                        rep = re.sub(r'\bint16_t\b', 'short', rep)
+                        rep = re.sub(r'\bint32_t\b', 'int', rep)
+                        rep = re.sub(r'\bint64_t\b', 'long long', rep)
+
                         if pat:
                             try:
-                                # CRITICAL GUARD: Prevent patterns that match empty strings
-                                # This fixes the infinite '0errno -> ->errnum' corruption bug!
                                 if not re.match(pat, ""):
                                     self.custom_replacements.append((pat, rep))
-                                else:
-                                    logger.warning(f"⚠️ Skipped dangerous empty-matching pattern: '{pat}'")
                             except Exception as e:
                                 logger.error(f"⚠️ Failed to compile regex '{pat}': {e}")
             elif "stubs" in filename:
@@ -149,7 +171,6 @@ class SourceConverter:
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
                 tail = content[curr_idx:semi_idx]
-                # Ensure the target tag is cleanly referenced at the end of the typedef/struct
                 if re.search(rf"\b{re.escape(tag)}\b", tail):
                     content = content[:start_idx] + f"/* STRIPPED CONFLICT: {tag} */\n" + content[semi_idx+1:]
                     idx = 0 
@@ -169,18 +190,6 @@ class SourceConverter:
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdarg.h>
-
-#ifndef _STDINT_H_DECLARED
-#define _STDINT_H_DECLARED
-typedef unsigned char      uint8_t;
-typedef unsigned short     uint16_t;
-typedef unsigned int       uint32_t;
-typedef unsigned long long uint64_t;
-typedef signed char        int8_t;
-typedef short              int16_t;
-typedef int                int32_t;
-typedef long long          int64_t;
-#endif
 
 /* --- CORE DEFINITIONS --- */
 """
@@ -209,6 +218,10 @@ typedef long long          int64_t;
         elif file_path.endswith(('.c', '.cpp', '.h')):
             content = original
             
+            # BRUTE FORCE STRIP PROBLEMATIC STRUCTS
+            content = re.sub(r'typedef\s+struct\s*\{[^}]*\}\s*__OSBlockInfo\s*;\n?', '/* BRUTE-STRIPPED: __OSBlockInfo */\n', content)
+            content = re.sub(r'typedef\s+struct\s*\{[^}]*\}\s*__OSTranxInfo\s*;\n?', '/* BRUTE-STRIPPED: __OSTranxInfo */\n', content)
+
             # 1. STRIP REDEFINITIONS FROM OTHER HEADERS (Using Dynamic Set)
             for tag in list(self.N64_OS_STRUCT_BODIES.keys()):
                 content = self.strip_redefinition(content, tag)
@@ -217,9 +230,6 @@ typedef long long          int64_t;
                 if tag == "Vtx": content = self.strip_redefinition(content, "Vtx_t")
                 if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
                 if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
-                if tag == "OSPiHandle": 
-                    content = self.strip_redefinition(content, "__OSBlockInfo")
-                    content = self.strip_redefinition(content, "__OSTranxInfo")
 
             # 2. STRIP PRIMITIVES TO AVOID C++ CONFLICTS
             for tag in list(self.N64_PRIMITIVES.keys()):
