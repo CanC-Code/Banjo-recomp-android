@@ -27,6 +27,14 @@ class SourceConverter:
             "OSPri": "int32_t", "OSMesg": "void*"
         }
 
+        # BLACKLIST: Prevent standard types from being dynamically stubbed out as opaque structs
+        self.STANDARD_TYPES = {
+            "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+            "int8_t", "int16_t", "int32_t", "int64_t",
+            "size_t", "ssize_t", "intptr_t", "uintptr_t", "bool",
+            "float", "double", "char", "int", "short", "long", "void"
+        }
+
         self.N64_KNOWN_GLOBALS = {
             "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
             "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
@@ -88,7 +96,9 @@ class SourceConverter:
         self.dynamic_categories = defaultdict(set)
         for m in re.finditer(r"unknown type name ['\"](.*?)['\"]", log_content):
             tag = m.group(1).strip()
-            if tag not in self.N64_PRIMITIVES: self.dynamic_categories["missing_types"].add(tag)
+            # CRITICAL: Prevent compiler standard types from becoming structs
+            if tag not in self.N64_PRIMITIVES and tag not in self.STANDARD_TYPES: 
+                self.dynamic_categories["missing_types"].add(tag)
         for m in re.finditer(r"incomplete (?:element )?type ['\"](?:struct )?(.*?)['\"]", log_content):
             self.dynamic_categories["need_body"].add(m.group(1).strip())
         for m in re.finditer(r"use of undeclared identifier ['\"](.*?)['\"]", log_content):
@@ -107,22 +117,13 @@ class SourceConverter:
         if updated_stubs: self.write_file(self.stubs_file, stubs)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", "", content)
-        content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", content)
-        pattern = re.compile(rf"\b(?:typedef\s+)?(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{")
-        match = pattern.search(content)
-        if match:
-            start_idx = match.start()
-            brace_idx = content.find('{', start_idx)
-            open_braces, curr_idx = 1, brace_idx + 1
-            while curr_idx < len(content) and open_braces > 0:
-                if content[curr_idx] == '{': open_braces += 1
-                elif content[curr_idx] == '}': open_braces -= 1
-                curr_idx += 1
-            semi_idx = content.find(';', curr_idx)
-            if semi_idx != -1:
-                content = content[:start_idx] + f"/* STRIPPED CONFLICT: {tag} */" + content[semi_idx+1:]
+        # Strip simple typedefs (e.g. typedef unsigned long u32;)
+        content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", f"/* STRIPPED PRIM: {tag} */\n", content)
+        
+        # Strip forward declarations (e.g. struct Vtx_s;)
+        content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", f"/* STRIPPED FWD: {tag} */\n", content)
 
+        # Strip full body structs
         idx = 0
         while True:
             match = re.search(r"\btypedef\s+(?:struct|union)\s*(?:[A-Za-z0-9_]+\s*)?\{", content[idx:])
@@ -148,7 +149,6 @@ class SourceConverter:
             else:
                 idx = curr_idx + 1
 
-        content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;", f"/* STRIPPED FALLBACK: {tag} */", content)
         return content
 
     def apply_to_file(self, file_path: str) -> int:
@@ -181,7 +181,7 @@ typedef long long          int64_t;
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 injection += f"{body}\n"
             for typ in self.dynamic_categories.get("missing_types", set()) | self.OPAQUE_TYPES:
-                if typ not in self.N64_PRIMITIVES and typ not in self.N64_OS_STRUCT_BODIES:
+                if typ not in self.N64_PRIMITIVES and typ not in self.N64_OS_STRUCT_BODIES and typ not in self.STANDARD_TYPES:
                     struct_tag = f"{typ}_s" if not typ.endswith("_s") else typ
                     injection += f"\n#ifndef {typ}_DEFINED\n#define {typ}_DEFINED\nstruct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {typ};\n#endif\n"
             for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
@@ -200,7 +200,7 @@ typedef long long          int64_t;
         elif file_path.endswith(('.c', '.cpp', '.h')):
             content = original
             
-            # STRIP REDEFINITIONS FROM OTHER HEADERS
+            # 1. STRIP REDEFINITIONS FROM OTHER HEADERS
             for tag in list(self.N64_OS_STRUCT_BODIES.keys()):
                 content = self.strip_redefinition(content, tag)
                 if tag == "Vtx": content = self.strip_redefinition(content, "Vtx_t")
@@ -209,6 +209,10 @@ typedef long long          int64_t;
                     content = self.strip_redefinition(content, "__OSTranxInfo")
                 if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
                 if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
+
+            # 2. STRIP PRIMITIVES TO AVOID C++ CONFLICTS
+            for tag in list(self.N64_PRIMITIVES.keys()):
+                content = self.strip_redefinition(content, tag)
 
             content = re.sub(r'(?<!extern\s)\b(?:u32|uint32_t)\s+osAppNMIBuffer\b[^;]*;', r'/* REDEF-FIX: osAppNMIBuffer definition stripped */', content)
 
