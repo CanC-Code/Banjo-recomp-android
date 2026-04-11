@@ -158,10 +158,13 @@ class SourceConverter:
         if updated_stubs: self.write_file(self.stubs_file, stubs)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        """Removes existing definitions to prevent redefinition errors."""
-        content = re.sub(rf"typedef\s+[^;]*?\b{re.escape(tag)}\b\s*;\n?", "", content)
-        content = re.sub(rf"struct\s+{re.escape(tag)}_s;\n?", "", content)
-        pattern = re.compile(rf"\b(?:typedef\s+)?struct\s+{re.escape(tag)}(?:_s)?\s*\{{")
+        """Fully aggressive removal of ANY typedef, struct, or union block for a specific tag."""
+        # 1. Strip simple typedefs without braces
+        content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", "", content)
+        content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", content)
+        
+        # 2. Brace-matched removal of named structs/unions
+        pattern = re.compile(rf"\b(?:typedef\s+)?(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{")
         match = pattern.search(content)
         if match:
             start_idx = match.start()
@@ -173,7 +176,31 @@ class SourceConverter:
                 curr_idx += 1
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
-                return content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
+                content = content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
+        
+        # 3. Brace-matched removal of anonymous typedef structs/unions
+        idx = 0
+        while True:
+            match = re.search(r"\btypedef\s+(?:struct|union)\s*(?:[A-Za-z0-9_]+\s*)?\{", content[idx:])
+            if not match: break
+            start_idx = idx + match.start()
+            brace_idx = content.find('{', start_idx)
+            open_braces, curr_idx = 1, brace_idx + 1
+            while curr_idx < len(content) and open_braces > 0:
+                if content[curr_idx] == '{': open_braces += 1
+                elif content[curr_idx] == '}': open_braces -= 1
+                curr_idx += 1
+            semi_idx = content.find(';', curr_idx)
+            if semi_idx != -1:
+                tail = content[curr_idx:semi_idx]
+                if re.search(rf"\b{re.escape(tag)}\b", tail):
+                    content = content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
+                    idx = 0 # reset because string changed
+                    continue
+                idx = semi_idx + 1
+            else:
+                idx = curr_idx + 1
+
         return content
 
     def apply_to_file(self, file_path: str) -> int:
@@ -187,12 +214,23 @@ class SourceConverter:
             bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdarg.h>\n\n"
             
             injection = "/* --- CORE DEFINITIONS --- */\n"
+            
+            # Primitives
             for short, full in self.N64_PRIMITIVES.items():
                 content = re.sub(rf"typedef\s+[^;]+?\b{short}\b\s*;\n?", "", content)
                 injection += f"typedef {full} {short};\n"
             
+            # Structs
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 content = self.strip_redefinition(content, tag)
+                # Ensure nested dependencies are also cleanly stripped before injection
+                if tag == "Vtx": content = self.strip_redefinition(content, "Vtx_t")
+                if tag == "OSPiHandle": 
+                    content = self.strip_redefinition(content, "__OSBlockInfo")
+                    content = self.strip_redefinition(content, "__OSTranxInfo")
+                if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
+                if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
+                
                 injection += f"{body}\n"
 
             content = bootstrap + injection + "\n" + content.lstrip()
