@@ -15,7 +15,7 @@ class SourceConverter:
         self.dynamic_categories = defaultdict(set)
 
         # ---------------------------------------------------------------------------
-        # Core N64 Primitives - PROTECTED
+        # Core N64 Primitives
         # ---------------------------------------------------------------------------
         self.N64_PRIMITIVES = {
             "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
@@ -40,15 +40,19 @@ class SourceConverter:
         }
 
         # ---------------------------------------------------------------------------
-        # Core OS Structs (Full Bodies) - Sorted by dependency
+        # Core OS Structs (Full Bodies)
         # ---------------------------------------------------------------------------
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; } Mtx;",
             "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
             "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
+            "Acmd": "typedef long long int Acmd;",
             "LookAt": "typedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;",
             "OSMesg": "typedef void *OSMesg;",
             "OSTime": "typedef uint64_t OSTime;",
+            "OSContStatus": "typedef struct { u16 type; u8 status; u8 errno; } OSContStatus;",
+            "OSContPad": "typedef struct { u16 button; s8 stick_x; s8 stick_y; u8 errno; } OSContPad;",
+            "OSMesgHdr": "typedef struct { uint16_t type; uint8_t pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
             "CPUState": "typedef struct CPUState_s { uint64_t regs[32]; uint64_t lo, hi; uint32_t sr, pc, cause, badvaddr, rcp; uint32_t fpcsr; uint64_t fpregs[32]; } CPUState;",
             "OSThread": """
 typedef union __OSThreadContext_u {
@@ -98,32 +102,40 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             self.dynamic_categories["implicit_functions"].add(m.group(1).strip())
 
     def apply_dynamic_fixes(self):
-        """Apply fixes to n64_types.h with cleansing and linkage protection."""
+        """Apply fixes to n64_types.h and n64_stubs.c."""
         if not os.path.exists(self.types_header): return
         content = self.read_file(self.types_header)
+        stubs = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "ultra/n64_types.h"\n'
         
-        # 1. Cleanse bad primitive stubs (fix the 'void*' bit-field error)
-        for short in self.N64_PRIMITIVES.keys():
-            content = re.sub(rf"typedef\s+void\s*\*\s*{short}\s*;\n?", "", content)
+        updated_types = False
+        updated_stubs = False
 
-        updated = False
-        # 2. Inject bodies for types that were incomplete in the log
-        for tag in self.dynamic_categories.get("need_body", set()):
-            if tag in self.N64_OS_STRUCT_BODIES:
-                content = self.strip_redefinition(content, tag)
-                content += f"\n{self.N64_OS_STRUCT_BODIES[tag]}\n"
-                updated = True
+        # Handle missing opaque types
+        for typ in self.dynamic_categories.get("missing_types", set()):
+            if not re.search(rf"\b{typ}\b", content):
+                content += f"\ntypedef struct {typ}_s {typ};"
+                updated_types = True
 
-        # 3. Handle identifiers and globals with extern "C" linkage
+        # Handle implicit function stubs
+        for func in self.dynamic_categories.get("implicit_functions", set()):
+            if f"{func}_DEFINED" not in content:
+                content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern int {func}();\n#endif"
+                updated_types = True
+            if f"int {func}()" not in stubs:
+                stubs += f"\nint {func}() {{ return 0; }}"
+                updated_stubs = True
+
+        # Handle globals
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
             if ident in self.N64_KNOWN_GLOBALS and f"{ident}_DEFINED" not in content:
-                content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#ifdef __cplusplus\n}}\n#endif\n#endif"
-                updated = True
+                content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#endif"
+                updated_types = True
 
-        if updated: self.write_file(self.types_header, content)
+        if updated_types: self.write_file(self.types_header, content)
+        if updated_stubs: self.write_file(self.stubs_file, stubs)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        """Brace-matched removal of existing declarations to prevent redefinition errors."""
+        """Brace-matched removal of any existing struct/typedef definition."""
         content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}_s\s+{re.escape(tag)};\n?", "", content)
         content = re.sub(rf"struct\s+{re.escape(tag)}_s;\n?", "", content)
         
@@ -139,7 +151,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
                 curr_idx += 1
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
-                content = content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
+                return content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
         return content
 
     def apply_to_file(self, file_path: str) -> int:
@@ -148,33 +160,47 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
         original = content
 
         if "n64_types.h" in file_path:
-            # 1. Bootstrap standard headers before any N64 types
+            # Absolute Bootstrap Block
             if "#include <stdint.h>" not in content:
                 content = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n" + content.replace("#pragma once", "")
             
-            # 2. Re-inject primitives with correct integer types
+            # Injection point (right after headers)
+            injection_point = content.find("#include <stddef.h>")
+            if injection_point != -1:
+                injection_point = content.find("\n", injection_point) + 1
+            else:
+                injection_point = content.find("\n") + 1
+
+            # Build injection block
+            injection = "\n/* --- CORE DEFINITIONS --- */\n"
             for short, full in self.N64_PRIMITIVES.items():
                 if not re.search(rf"\btypedef\s+{full}\s+{short}\b", content):
                     content = re.sub(rf"\btypedef\s+.*?\s+{short}\s*;", "", content)
-                    content += f"\ntypedef {full} {short};"
+                    injection += f"typedef {full} {short};\n"
             
-            # 3. Inject missing full OS bodies
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not re.search(rf"\b{tag}\b", content) or "force_align" not in content:
                     content = self.strip_redefinition(content, tag)
-                    content += f"\n{body}\n"
+                    injection += f"{body}\n"
+
+            content = content[:injection_point] + injection + content[injection_point:]
 
         if file_path.endswith(('.c', '.cpp')):
-            # POSIX renaming to prevent system library conflicts
+            # POSIX renaming
             for name in self.POSIX_RESERVED_NAMES:
                 if f" {name}(" in content and f"#define {name}" not in content:
                     prefix = os.path.basename(file_path).split('.')[0]
                     content = f'#define {name} n64_{prefix}_{name}\n' + content
 
-            # Fix casting in exceptasm.cpp for register access
+            # Actor Injection (Required for Banjo source)
+            if "this" in content and "Actor *actor =" not in content and "actor->" in content:
+                content = re.sub(r'(\w+::\w+\(.*\)\s*\{)', r'\1\n    Actor *actor = (Actor *)this;', content)
+
+            # Register Access Fixes
+            content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
             content = re.sub(
-                r'\*(reinterpret_cast<uint32_t\*>\(__osRunningThread->context\))',
-                '*(reinterpret_cast<uint32_t*>(&__osRunningThread->context))',
+                r'\(\s*uint32_t\s*\*\s*\)__osRunningThread->context',
+                '((uint32_t*)&__osRunningThread->context.force_align[0])',
                 content
             )
 
