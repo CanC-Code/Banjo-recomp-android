@@ -1,4 +1,0 @@
-# ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-# The Master_Bulletproof_Shield block and GLOBAL_INJECT actions have been DELETED.
-# Struct redefinitions and primitive linkage are now dynamically handled by SourceConverter.
-# Do NOT re-add manual header injections here, as they will conflict with the auto-generated n64_types.h.
