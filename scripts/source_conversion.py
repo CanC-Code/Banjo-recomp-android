@@ -46,7 +46,7 @@ class SourceConverter:
         }
 
     def load_logic(self):
-        """Loads all static rules from the logic directory."""
+        """Loads rules. Uses ::: for replacements to avoid pattern conflicts."""
         if not os.path.exists(self.logic_dir):
             os.makedirs(self.logic_dir, exist_ok=True)
             logger.info(f"📂 Created empty logic directory at {self.logic_dir}")
@@ -56,7 +56,7 @@ class SourceConverter:
         for filename in os.listdir(self.logic_dir):
             path = os.path.join(self.logic_dir, filename)
             content = self.read_file(path)
-            lines = [l for l in content.splitlines() if l.strip() and not l.strip().startswith("//") and not l.strip().startswith("#")]
+            lines = [l.strip() for l in content.splitlines() if l.strip() and not l.startswith(("#", "//"))]
 
             if "types" in filename:
                 for line in lines:
@@ -72,7 +72,7 @@ class SourceConverter:
 
             elif "opaque" in filename:
                 for line in lines:
-                    self.OPAQUE_TYPES.add(line.strip())
+                    self.OPAQUE_TYPES.add(line)
 
             elif "globals" in filename:
                 for line in lines:
@@ -88,7 +88,7 @@ class SourceConverter:
 
             elif "stubs" in filename:
                 for line in lines:
-                    self.dynamic_categories["implicit_functions"].add(line.strip())
+                    self.dynamic_categories["implicit_functions"].add(line)
 
         return True
 
@@ -201,6 +201,9 @@ class SourceConverter:
             else:
                 idx = curr_idx + 1
 
+        # 4. Brute-force fallback for stubborn anonymous structs without nested braces
+        content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;", f"/* STRIPPED FALLBACK: {tag} */", content)
+
         return content
 
     def apply_to_file(self, file_path: str) -> int:
@@ -209,6 +212,7 @@ class SourceConverter:
         original = content
 
         if "n64_types.h" in file_path:
+            # Rebuild the compatibility header from scratch
             content = re.sub(r'#include\s*[<"][^>"]+h[>"]\n?', '', content)
             content = re.sub(r'#pragma once\n?', '', content)
             bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdarg.h>\n\n"
@@ -235,15 +239,17 @@ class SourceConverter:
 
             content = bootstrap + injection + "\n" + content.lstrip()
 
-        if file_path.endswith(('.c', '.cpp')):
+        elif file_path.endswith(('.c', '.cpp', '.h')):
             content = re.sub(r'(?<!extern\s)\b(?:u32|uint32_t)\s+osAppNMIBuffer\b[^;]*;', r'/* REDEF-FIX: osAppNMIBuffer definition stripped */', content)
 
+            # Apply custom replacements (like errno -> errnum)
             for pat, rep in self.custom_replacements:
                 content = re.sub(pat, rep, content)
 
             if "this" in content and "Actor *actor =" not in content and "actor->" in content:
                 content = re.sub(r'(\w+::\w+\(.*\)\s*(?:const\s+)?\{)', r'\1\n    Actor *actor = (Actor *)this;', content)
 
+            # Context fix for Banjo-Kazooie's specific thread handling
             content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
             content = re.sub(r'reinterpret_cast<\s*uint32_t\s*\*\s*>\(\s*__osRunningThread->context\s*\)', 'reinterpret_cast<uint32_t*>(&__osRunningThread->context)', content)
 
