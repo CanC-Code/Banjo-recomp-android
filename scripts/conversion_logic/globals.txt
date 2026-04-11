@@ -1,0 +1,2 @@
+__osFlashHandle = struct OSPiHandle_s *__osFlashHandle;
+__osSfHandle = struct OSPiHandle_s *__osSfHandle;
