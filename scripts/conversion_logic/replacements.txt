@@ -8,3 +8,5 @@
 \bs64\b -> int64_t
 \bf32\b -> float
 \bf64\b -> double
+->errno -> ->errnum
+\.errno -> .errnum
