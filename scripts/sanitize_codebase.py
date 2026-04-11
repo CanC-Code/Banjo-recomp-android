@@ -58,7 +58,7 @@ def wrap_shadow_headers(content, filename):
     return content
 
 def fix_decompiler_artifacts(content, filename):
-    # 1. Fix shadowed variable names
+    # 1. Fix shadowed variable names (e.g., u8 u8[10]; -> u8 buffer_u8[10];)
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
@@ -78,11 +78,13 @@ def fix_decompiler_artifacts(content, filename):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
         final_name = f"buffer_{name}" if dtype == name else name
-        
-        # CRITICAL FIX: Cast raw initializer lists as C99 compound literals
+
+        # ENHANCEMENT: C++ Compiler Compatibility 
+        # If it's a literal initialization bracket { }, we keep it as standard C++ array initialization.
         if src.startswith('{') and src.endswith('}'):
-            src = f"({dtype}[]){src}"
-            
+            return f"{indent}{dtype} {final_name}[{size}] = {src};"
+
+        # Otherwise, if it's assigning an existing pointer to an array, we safely use n64_memcpy.
         return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
@@ -92,7 +94,8 @@ def fix_decompiler_artifacts(content, filename):
     is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
 
     if is_tmp_used and not is_tmp_declared:
-        tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\nstatic __thread u8 tmp[1024] = {0};\n"
+        # Changed to thread_local for better C++ standard compliance instead of GNU __thread
+        tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\n#ifdef __cplusplus\nstatic thread_local u8 tmp[1024] = {0};\n#else\nstatic _Thread_local u8 tmp[1024] = {0};\n#endif\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
             pos = includes[-1].end()
@@ -155,10 +158,10 @@ def sanitize_codebase(root_path):
 
                 # 1. Safely replace tokens (ignores strings and comments)
                 content = safe_token_replacement(original_content)
-                
+
                 # 2. Fix array assignments and uninitialized tmp variables
                 content = fix_decompiler_artifacts(content, filename)
-                
+
                 # 3. Fix static/non-static conflicts
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
@@ -171,7 +174,7 @@ def sanitize_codebase(root_path):
                         f.write(content)
                     patch_count += 1
                     print(f"  [Sanitized] {filepath}")
-                    
+
     print(f"✅ Sanitization Complete! {patch_count} files modified.")
 
 if __name__ == "__main__":
