@@ -15,8 +15,28 @@ class SourceConverter:
         self.dynamic_categories = defaultdict(set)
 
         # ---------------------------------------------------------------------------
-        # Core N64 OS types — TOPOLOGICALLY SORTED
+        # Core Maps & POSIX Protection
         # ---------------------------------------------------------------------------
+        self.N64_PRIMITIVES = {
+            "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
+            "s8": "int8_t", "s16": "int16_t", "s32": "int32_t", "s64": "int64_t",
+            "f32": "float", "f64": "double", "b32": "int32_t"
+        }
+
+        self.POSIX_RESERVED_NAMES = {
+            "close", "open", "read", "write", "send", "recv", "stat", 
+            "rename", "mkdir", "rmdir", "unlink", "chmod", "chown"
+        }
+
+        self.N64_KNOWN_GLOBALS = {
+            "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
+            "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
+            "__osRunQueue": "struct OSThread_s *__osRunQueue;",
+            "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
+            "osTvType": "uint32_t osTvType;",
+            "osRomBase": "uint32_t osRomBase;"
+        }
+
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; } Mtx;",
             "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
@@ -39,14 +59,8 @@ typedef struct { uint32_t cmdType; uint16_t transferMode; uint16_t blockNum; int
 typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t latency; uint8_t pageSize; uint8_t relDuration; uint8_t pulse; uint8_t domain; uint32_t baseAddress; uint32_t speed; __OSTranxInfo transferInfo; } OSPiHandle;"""
         }
 
-        self.N64_PRIMITIVES = {
-            "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
-            "s8": "int8_t", "s16": "int16_t", "s32": "int32_t", "s64": "int64_t",
-            "f32": "float", "f64": "double"
-        }
-
     def load_logic(self):
-        logger.info("🛠️ Loading logic (advanced techniques active)")
+        logger.info("🛠️ Loading logic (dynamic self-healing enabled)")
         return True
 
     def read_file(self, file_path: str) -> str:
@@ -61,29 +75,68 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             f.write(content)
 
     def scrape_logs(self, log_content: str):
-        """Analyzes build log for missing types and identifiers."""
+        """Deep analysis of build logs to categorize errors."""
         self.dynamic_categories = defaultdict(set)
+        
+        # 1. Unknown types
         for m in re.finditer(r"unknown type name ['\"](.*?)['\"]", log_content):
             self.dynamic_categories["missing_types"].add(m.group(1).strip())
+            
+        # 2. Undeclared identifiers (macros/globals)
         for m in re.finditer(r"use of undeclared identifier ['\"](.*?)['\"]", log_content):
             self.dynamic_categories["undeclared_identifiers"].add(m.group(1).strip())
-        logger.info(f"📊 Scraped {len(self.dynamic_categories['missing_types'])} missing types.")
+            
+        # 3. Implicit function declarations
+        for m in re.finditer(r"implicit declaration of function ['\"](.*?)['\"]", log_content):
+            self.dynamic_categories["implicit_functions"].add(m.group(1).strip())
+
+        # 4. POSIX static conflicts
+        for m in re.finditer(r"static declaration of ['\"](.*?)['\"] follows non-static", log_content):
+            self.dynamic_categories["posix_conflict"].add(m.group(1).strip())
+
+        logger.info(f"📊 Scraped {sum(len(v) for v in self.dynamic_categories.values())} issues from log.")
 
     def apply_dynamic_fixes(self):
-        """Injects findings from scrape_logs into the types header."""
+        """Apply scraped fixes to n64_types.h and n64_stubs.c."""
         if not os.path.exists(self.types_header): return
-        content = self.read_file(self.types_header)
-        updated = False
+        
+        types_content = self.read_file(self.types_header)
+        stubs_content = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "n64_types.h"\n'
+        
+        updated_types = False
+        updated_stubs = False
+
+        # Fix missing types
         for typ in self.dynamic_categories.get("missing_types", set()):
-            if not re.search(rf"\b{typ}\b", content):
+            if not re.search(rf"\b{typ}\b", types_content):
                 if typ in self.N64_PRIMITIVES:
-                    content += f"\ntypedef {self.N64_PRIMITIVES[typ]} {typ};"
+                    types_content += f"\ntypedef {self.N64_PRIMITIVES[typ]} {typ};"
                 else:
-                    content += f"\ntypedef struct {typ}_s {typ};"
-                updated = True
-        if updated:
-            self.write_file(self.types_header, content)
-            logger.info("🩹 Applied dynamic fixes to n64_types.h")
+                    types_content += f"\ntypedef struct {typ}_s {typ};"
+                updated_types = True
+
+        # Fix implicit functions (Prototypes in header, stubs in .c)
+        for func in self.dynamic_categories.get("implicit_functions", set()):
+            if f"{func}_DEFINED" not in types_content:
+                types_content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern int {func}();\n#endif"
+                updated_types = True
+            if f"int {func}()" not in stubs_content:
+                stubs_content += f"\nint {func}() {{ return 0; }}"
+                updated_stubs = True
+
+        # Fix undeclared identifiers (check for known globals first)
+        for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
+            if ident in self.N64_KNOWN_GLOBALS:
+                if f"{ident}_DEFINED" not in types_content:
+                    types_content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#endif"
+                    updated_types = True
+            elif ident.isupper(): # Likely a macro
+                if f"#define {ident}" not in types_content:
+                    types_content += f"\n#ifndef {ident}\n#define {ident} 0\n#endif"
+                    updated_types = True
+
+        if updated_types: self.write_file(self.types_header, types_content)
+        if updated_stubs: self.write_file(self.stubs_file, stubs_content)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
         """Brace-matched removal of any struct/typedef definition for tag."""
@@ -108,7 +161,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
         original = content
 
         if "n64_types.h" in file_path:
-            # Bootstrap standard types first
+            # Bootstrap standard types
             if "#include <stdint.h>" not in content:
                 content = content.replace("#pragma once", "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>")
             
@@ -122,9 +175,18 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
                     content += f"\n{body}\n"
 
         if file_path.endswith(('.c', '.cpp')):
-            # Fix context register access
+            # 1. POSIX Renaming for functions that clash with Android headers
+            for name in self.POSIX_RESERVED_NAMES:
+                if f" {name}(" in content and f"#define {name}" not in content:
+                    prefix = os.path.basename(file_path).split('.')[0]
+                    content = f'#define {name} n64_{prefix}_{name}\n' + content
+
+            # 2. Actor context injection
+            if "this" in content and "Actor *actor =" not in content and "actor->" in content:
+                content = re.sub(r'(\w+::\w+\(.*\)\s*\{)', r'\1\n    Actor *actor = (Actor *)this;', content)
+
+            # 3. Context register access fixes
             content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
-            # Fix raw memory casts for registers
             content = re.sub(
                 r'\(\s*uint32_t\s*\*\s*\)__osRunningThread->context',
                 '((uint32_t*)&__osRunningThread->context.force_align[0])',
