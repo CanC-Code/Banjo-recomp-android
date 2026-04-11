@@ -13,12 +13,12 @@ class SourceConverter:
         self.types_header = "Android/app/src/main/cpp/ultra/n64_types.h"
         self.stubs_file = "Android/app/src/main/cpp/ultra/n64_stubs.c"
         self.dynamic_categories = defaultdict(set)
-        
+
         # Dynamic Data Storage (Populated by Logic Files)
         self.custom_replacements = [] 
         self.MACROS = {}
         self.OPAQUE_TYPES = set()
-        
+
         # Core Protected Primitives
         self.N64_PRIMITIVES = {
             "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
@@ -51,19 +51,19 @@ class SourceConverter:
             os.makedirs(self.logic_dir, exist_ok=True)
             logger.info(f"📂 Created empty logic directory at {self.logic_dir}")
             return True
-        
+
         logger.info(f"📂 Loading logic files from {self.logic_dir}...")
         for filename in os.listdir(self.logic_dir):
             path = os.path.join(self.logic_dir, filename)
             content = self.read_file(path)
             lines = [l for l in content.splitlines() if l.strip() and not l.strip().startswith("//") and not l.strip().startswith("#")]
-            
+
             if "types" in filename:
                 for line in lines:
                     if "=" in line:
                         k, v = line.split("=", 1)
                         self.N64_OS_STRUCT_BODIES[k.strip()] = v.strip()
-            
+
             elif "macros" in filename:
                 for line in lines:
                     if "=" in line:
@@ -79,13 +79,13 @@ class SourceConverter:
                     if "=" in line:
                         k, v = line.split("=", 1)
                         self.N64_KNOWN_GLOBALS[k.strip()] = v.strip()
-            
+
             elif "replacements" in filename:
                 for line in lines:
-                    if "->" in line:
-                        pat, rep = line.split("->", 1)
+                    if ":::" in line:
+                        pat, rep = line.split(":::", 1)
                         self.custom_replacements.append((pat.strip(), rep.strip()))
-            
+
             elif "stubs" in filename:
                 for line in lines:
                     self.dynamic_categories["implicit_functions"].add(line.strip())
@@ -122,7 +122,7 @@ class SourceConverter:
         if not os.path.exists(self.types_header): return
         content = self.read_file(self.types_header)
         stubs = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "ultra/n64_types.h"\n'
-        
+
         updated_types = False
         updated_stubs = False
 
@@ -162,7 +162,7 @@ class SourceConverter:
         # 1. Strip simple typedefs without braces
         content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", "", content)
         content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", content)
-        
+
         # 2. Brace-matched removal of named structs/unions
         pattern = re.compile(rf"\b(?:typedef\s+)?(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{")
         match = pattern.search(content)
@@ -177,7 +177,7 @@ class SourceConverter:
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
                 content = content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
-        
+
         # 3. Brace-matched removal of anonymous typedef structs/unions
         idx = 0
         while True:
@@ -212,14 +212,14 @@ class SourceConverter:
             content = re.sub(r'#include\s*[<"][^>"]+h[>"]\n?', '', content)
             content = re.sub(r'#pragma once\n?', '', content)
             bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdarg.h>\n\n"
-            
+
             injection = "/* --- CORE DEFINITIONS --- */\n"
-            
+
             # Primitives
             for short, full in self.N64_PRIMITIVES.items():
                 content = re.sub(rf"typedef\s+[^;]+?\b{short}\b\s*;\n?", "", content)
                 injection += f"typedef {full} {short};\n"
-            
+
             # Structs
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 content = self.strip_redefinition(content, tag)
@@ -230,7 +230,7 @@ class SourceConverter:
                     content = self.strip_redefinition(content, "__OSTranxInfo")
                 if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
                 if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
-                
+
                 injection += f"{body}\n"
 
             content = bootstrap + injection + "\n" + content.lstrip()
