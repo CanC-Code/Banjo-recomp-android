@@ -115,7 +115,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             if tag in self.N64_OS_STRUCT_BODIES:
                 content = self.strip_redefinition(content, tag)
                 # Inject right after headers to ensure it is defined before usage
-                injection_point = content.find("#include <stddef.h>")
+                injection_point = content.find("#include <stdarg.h>")
                 if injection_point != -1:
                     injection_point = content.find("\n", injection_point) + 1
                     content = content[:injection_point] + f"\n{self.N64_OS_STRUCT_BODIES[tag]}\n" + content[injection_point:]
@@ -172,21 +172,23 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
 
         if "n64_types.h" in file_path:
             # 1. Force the bootstrap header to the absolute top of the file!
-            bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
+            bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdarg.h>\n"
             content = content.replace("#include <stdint.h>", "")
             content = content.replace("#include <stdbool.h>", "")
             content = content.replace("#include <stddef.h>", "")
+            content = content.replace("#include <stdarg.h>", "")
             content = content.replace("#pragma once", "")
-            content = bootstrap + content
+            content = bootstrap + content.lstrip()
 
             # 2. Build core definitions right after the headers
-            injection_point = content.find("#include <stddef.h>") + len("#include <stddef.h>\n")
+            injection_point = content.find("#include <stdarg.h>") + len("#include <stdarg.h>\n")
             
             injection = "\n/* --- CORE DEFINITIONS --- */\n"
             
-            # Aggressive cleansing for primitive stubs
+            # Aggressive cleansing for primitive stubs (handles both #define and typedef corruptions)
             for short, full in self.N64_PRIMITIVES.items():
-                content = re.sub(rf"typedef\s+.*?\s+{short}\s*;", "", content) # Strips bad 'void*' mappings
+                content = re.sub(rf"typedef\s+[^;]+?\b{short}\s*;", "", content)
+                content = re.sub(rf"#define\s+{short}\b.*?\n", "\n", content)
                 injection += f"typedef {full} {short};\n"
             
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
@@ -197,9 +199,8 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             content = content[:injection_point] + injection + content[injection_point:]
 
         if file_path.endswith(('.c', '.cpp')):
-            # Fix conflicting osAppNMIBuffer definitions
-            if "osAppNMIBuffer" in self.dynamic_categories["redefinitions"]:
-                content = re.sub(r'^(uint32_t\s+osAppNMIBuffer\s*=.*?;)', r'/* REDEF-FIX: \1 */', content, flags=re.M)
+            # Fix conflicting osAppNMIBuffer definitions explicitly (catches `u32` now)
+            content = re.sub(r'(?<!extern\s)\b(?:u32|uint32_t)\s+osAppNMIBuffer\b[^;]*;', r'/* REDEF-FIX: osAppNMIBuffer definition stripped */', content)
 
             # Actor Context Injection
             if "this" in content and "Actor *actor =" not in content and "actor->" in content:
@@ -207,6 +208,13 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
 
             # Register Access and Casting Fixes
             content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
+            
+            # exceptasm.cpp explicit C++ casting fix
+            content = re.sub(
+                r'reinterpret_cast<\s*uint32_t\s*\*\s*>\(\s*__osRunningThread->context\s*\)',
+                'reinterpret_cast<uint32_t*>(&__osRunningThread->context)',
+                content
+            )
             content = re.sub(
                 r'\(\s*uint32_t\s*\*\s*\)__osRunningThread->context',
                 '((uint32_t*)&__osRunningThread->context.force_align[0])',
