@@ -46,7 +46,7 @@ class SourceConverter:
         }
 
     def load_logic(self):
-        """Loads rules. Uses ::: for replacements to avoid pattern conflicts."""
+        """Loads static rules from the logic directory."""
         if not os.path.exists(self.logic_dir):
             os.makedirs(self.logic_dir, exist_ok=True)
             logger.info(f"📂 Created empty logic directory at {self.logic_dir}")
@@ -63,45 +63,37 @@ class SourceConverter:
                     if "=" in line:
                         k, v = line.split("=", 1)
                         self.N64_OS_STRUCT_BODIES[k.strip()] = v.strip()
-
             elif "macros" in filename:
                 for line in lines:
                     if "=" in line:
                         k, v = line.split("=", 1)
                         self.MACROS[k.strip()] = v.strip()
-
             elif "opaque" in filename:
                 for line in lines:
                     self.OPAQUE_TYPES.add(line)
-
             elif "globals" in filename:
                 for line in lines:
                     if "=" in line:
                         k, v = line.split("=", 1)
                         self.N64_KNOWN_GLOBALS[k.strip()] = v.strip()
-
             elif "replacements" in filename:
                 for line in lines:
                     if ":::" in line:
                         pat, rep = line.split(":::", 1)
                         self.custom_replacements.append((pat.strip(), rep.strip()))
-
             elif "stubs" in filename:
                 for line in lines:
                     self.dynamic_categories["implicit_functions"].add(line)
-
         return True
 
     def read_file(self, file_path: str) -> str:
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read()
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f: return f.read()
         except Exception: return ""
 
     def write_file(self, file_path: str, content: str):
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+        with open(file_path, 'w', encoding='utf-8') as f: f.write(content)
 
     def scrape_logs(self, log_content: str):
         """Dynamically learns from compiler errors."""
@@ -118,142 +110,89 @@ class SourceConverter:
             self.dynamic_categories["implicit_functions"].add(m.group(1).strip())
 
     def apply_dynamic_fixes(self):
-        """Applies learned/logic rules to stubs and types."""
-        if not os.path.exists(self.types_header): return
-        content = self.read_file(self.types_header)
-        stubs = self.read_file(self.stubs_file) if os.path.exists(self.stubs_file) else '#include "ultra/n64_types.h"\n'
-
-        updated_types = False
+        """Applies dynamic stubs generated from logs."""
+        if not os.path.exists(self.stubs_file): return
+        stubs = self.read_file(self.stubs_file)
         updated_stubs = False
-
-        # Missing opaque types / missing types
-        for typ in self.dynamic_categories.get("missing_types", set()) | self.OPAQUE_TYPES:
-            if typ not in self.N64_PRIMITIVES and typ not in self.N64_OS_STRUCT_BODIES:
-                if not re.search(rf"\b{typ}\b", content):
-                    struct_tag = f"{typ}_s" if not typ.endswith("_s") else typ
-                    content += f"\n#ifndef {typ}_DEFINED\n#define {typ}_DEFINED\nstruct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {typ};\n#endif\n"
-                    updated_types = True
-
-        # Implicit function stubs
+        
         for func in self.dynamic_categories.get("implicit_functions", set()):
-            if f"{func}_DEFINED" not in content:
-                content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern int {func}();\n#endif"
-                updated_types = True
             if f"int {func}()" not in stubs:
                 stubs += f"\nint {func}() {{ return 0; }}"
                 updated_stubs = True
 
-        # Handle globals vs macros
-        for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
-            if ident in self.MACROS:
-                if f"#define {ident}" not in content:
-                    content += f"\n#ifndef {ident}\n#define {ident} {self.MACROS[ident]}\n#endif\n"
-                    updated_types = True
-            elif ident in self.N64_KNOWN_GLOBALS:
-                if f"{ident}_DEFINED" not in content:
-                    content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#ifdef __cplusplus\n}}\n#endif\n#endif"
-                    updated_types = True
-
-        if updated_types: self.write_file(self.types_header, content)
         if updated_stubs: self.write_file(self.stubs_file, stubs)
-
-    def strip_redefinition(self, content: str, tag: str) -> str:
-        """Fully aggressive removal of ANY typedef, struct, or union block for a specific tag."""
-        # 1. Strip simple typedefs without braces
-        content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", "", content)
-        content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", "", content)
-
-        # 2. Brace-matched removal of named structs/unions
-        pattern = re.compile(rf"\b(?:typedef\s+)?(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{")
-        match = pattern.search(content)
-        if match:
-            start_idx = match.start()
-            brace_idx = content.find('{', start_idx)
-            open_braces, curr_idx = 1, brace_idx + 1
-            while curr_idx < len(content) and open_braces > 0:
-                if content[curr_idx] == '{': open_braces += 1
-                elif content[curr_idx] == '}': open_braces -= 1
-                curr_idx += 1
-            semi_idx = content.find(';', curr_idx)
-            if semi_idx != -1:
-                content = content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
-
-        # 3. Brace-matched removal of anonymous typedef structs/unions
-        idx = 0
-        while True:
-            match = re.search(r"\btypedef\s+(?:struct|union)\s*(?:[A-Za-z0-9_]+\s*)?\{", content[idx:])
-            if not match: break
-            start_idx = idx + match.start()
-            brace_idx = content.find('{', start_idx)
-            open_braces, curr_idx = 1, brace_idx + 1
-            while curr_idx < len(content) and open_braces > 0:
-                if content[curr_idx] == '{': open_braces += 1
-                elif content[curr_idx] == '}': open_braces -= 1
-                curr_idx += 1
-            semi_idx = content.find(';', curr_idx)
-            if semi_idx != -1:
-                tail = content[curr_idx:semi_idx]
-                if re.search(rf"\b{re.escape(tag)}\b", tail):
-                    content = content[:start_idx] + f"/* STRIPPED: {tag} */" + content[semi_idx+1:]
-                    idx = 0 # reset because string changed
-                    continue
-                idx = semi_idx + 1
-            else:
-                idx = curr_idx + 1
-
-        # 4. Brute-force fallback for stubborn anonymous structs without nested braces
-        content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;", f"/* STRIPPED FALLBACK: {tag} */", content)
-
-        return content
 
     def apply_to_file(self, file_path: str) -> int:
         if not os.path.exists(file_path): return 0
-        content = self.read_file(file_path)
-        original = content
+        original = self.read_file(file_path)
 
         if "n64_types.h" in file_path:
-            # Rebuild the compatibility header from scratch
-            content = re.sub(r'#include\s*[<"][^>"]+h[>"]\n?', '', content)
-            content = re.sub(r'#pragma once\n?', '', content)
-            bootstrap = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdarg.h>\n\n"
+            # 1. We completely rebuild the compatibility header from scratch
+            # 2. We inject bulletproof definitions of uint64_t etc. to bypass broken stdint.h headers
+            bootstrap = """#pragma once
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdarg.h>
 
-            injection = "/* --- CORE DEFINITIONS --- */\n"
+/* GUARANTEED STDINT FALLBACK */
+#ifndef _STDINT_H_DECLARED
+#define _STDINT_H_DECLARED
+typedef unsigned char      uint8_t;
+typedef unsigned short     uint16_t;
+typedef unsigned int       uint32_t;
+typedef unsigned long long uint64_t;
+typedef signed char        int8_t;
+typedef short              int16_t;
+typedef int                int32_t;
+typedef long long          int64_t;
+#endif
 
+/* --- CORE DEFINITIONS --- */
+"""
+            injection = bootstrap
+            
             # Primitives
             for short, full in self.N64_PRIMITIVES.items():
-                content = re.sub(rf"typedef\s+[^;]+?\b{short}\b\s*;\n?", "", content)
                 injection += f"typedef {full} {short};\n"
-
+            
             # Structs
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
-                content = self.strip_redefinition(content, tag)
-                # Ensure nested dependencies are also cleanly stripped before injection
-                if tag == "Vtx": content = self.strip_redefinition(content, "Vtx_t")
-                if tag == "OSPiHandle": 
-                    content = self.strip_redefinition(content, "__OSBlockInfo")
-                    content = self.strip_redefinition(content, "__OSTranxInfo")
-                if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
-                if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
-
                 injection += f"{body}\n"
 
-            content = bootstrap + injection + "\n" + content.lstrip()
+            # Dynamic fixes injected purely in-memory
+            for typ in self.dynamic_categories.get("missing_types", set()) | self.OPAQUE_TYPES:
+                if typ not in self.N64_PRIMITIVES and typ not in self.N64_OS_STRUCT_BODIES:
+                    struct_tag = f"{typ}_s" if not typ.endswith("_s") else typ
+                    injection += f"\n#ifndef {typ}_DEFINED\n#define {typ}_DEFINED\nstruct {struct_tag} {{ long long int force_align[64]; }};\ntypedef struct {struct_tag} {typ};\n#endif\n"
+
+            for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
+                if ident in self.MACROS:
+                    injection += f"\n#ifndef {ident}\n#define {ident} {self.MACROS[ident]}\n#endif\n"
+                elif ident in self.N64_KNOWN_GLOBALS:
+                    injection += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#ifdef __cplusplus\n}}\n#endif\n#endif\n"
+
+            for func in self.dynamic_categories.get("implicit_functions", set()):
+                injection += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern int {func}();\n#ifdef __cplusplus\n}}\n#endif\n#endif\n"
+
+            if injection != original:
+                self.write_file(file_path, injection)
+                return 1
+            return 0
 
         elif file_path.endswith(('.c', '.cpp', '.h')):
+            content = original
             content = re.sub(r'(?<!extern\s)\b(?:u32|uint32_t)\s+osAppNMIBuffer\b[^;]*;', r'/* REDEF-FIX: osAppNMIBuffer definition stripped */', content)
 
-            # Apply custom replacements (like errno -> errnum)
             for pat, rep in self.custom_replacements:
                 content = re.sub(pat, rep, content)
 
             if "this" in content and "Actor *actor =" not in content and "actor->" in content:
                 content = re.sub(r'(\w+::\w+\(.*\)\s*(?:const\s+)?\{)', r'\1\n    Actor *actor = (Actor *)this;', content)
 
-            # Context fix for Banjo-Kazooie's specific thread handling
             content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
             content = re.sub(r'reinterpret_cast<\s*uint32_t\s*\*\s*>\(\s*__osRunningThread->context\s*\)', 'reinterpret_cast<uint32_t*>(&__osRunningThread->context)', content)
 
-        if content != original:
-            self.write_file(file_path, content)
-            return 1
+            if content != original:
+                self.write_file(file_path, content)
+                return 1
         return 0
