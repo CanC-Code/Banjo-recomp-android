@@ -27,7 +27,7 @@ class SourceConverter:
             "OSPri": "int32_t", "OSMesg": "void*"
         }
 
-        # BLACKLIST: Prevent standard types from being dynamically stubbed out as opaque structs
+        # BLACKLIST: Prevent standard types from being dynamically stubbed out
         self.STANDARD_TYPES = {
             "uint8_t", "uint16_t", "uint32_t", "uint64_t",
             "int8_t", "int16_t", "int32_t", "int64_t",
@@ -35,6 +35,7 @@ class SourceConverter:
             "float", "double", "char", "int", "short", "long", "void"
         }
 
+        # Base Globals (Expanded dynamically by globals.txt)
         self.N64_KNOWN_GLOBALS = {
             "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
             "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
@@ -42,16 +43,13 @@ class SourceConverter:
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
 
-        self.N64_OS_STRUCT_BODIES = {
-            "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; } Mtx;",
-            "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
-            "Gfx": "typedef struct { uint32_t words[2]; } Gfx;",
-            "Acmd": "typedef long long int Acmd;",
-            "OSThread": "typedef union __OSThreadContext_u { struct { uint64_t pc; uint64_t a0; uint64_t sp; uint64_t ra; uint32_t sr; uint32_t rcp; uint32_t fpcsr; } regs; long long int force_align[67]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int32_t priority; struct OSThread_s **queue; struct OSThread_s *tlnext; uint16_t state; uint16_t flags; uint64_t id; int fp; __OSThreadContext context; } OSThread;"
-        }
+        # Base Structs (Expanded dynamically by types.txt)
+        self.N64_OS_STRUCT_BODIES = {}
 
     def load_logic(self):
+        """Dynamically loads N64 definitions from logic directory text files."""
         if not os.path.exists(self.logic_dir): return True
+        
         for filename in os.listdir(self.logic_dir):
             path = os.path.join(self.logic_dir, filename)
             content = self.read_file(path)
@@ -78,7 +76,17 @@ class SourceConverter:
                 for line in lines:
                     if ":::" in line:
                         pat, rep = line.split(":::", 1)
-                        self.custom_replacements.append((pat.strip(), rep.strip()))
+                        pat, rep = pat.strip(), rep.strip()
+                        if pat:
+                            try:
+                                # CRITICAL GUARD: Prevent patterns that match empty strings
+                                # This fixes the infinite '0errno -> ->errnum' corruption bug!
+                                if not re.match(pat, ""):
+                                    self.custom_replacements.append((pat, rep))
+                                else:
+                                    logger.warning(f"⚠️ Skipped dangerous empty-matching pattern: '{pat}'")
+                            except Exception as e:
+                                logger.error(f"⚠️ Failed to compile regex '{pat}': {e}")
             elif "stubs" in filename:
                 for line in lines: self.dynamic_categories["implicit_functions"].add(line)
         return True
@@ -96,7 +104,6 @@ class SourceConverter:
         self.dynamic_categories = defaultdict(set)
         for m in re.finditer(r"unknown type name ['\"](.*?)['\"]", log_content):
             tag = m.group(1).strip()
-            # CRITICAL: Prevent compiler standard types from becoming structs
             if tag not in self.N64_PRIMITIVES and tag not in self.STANDARD_TYPES: 
                 self.dynamic_categories["missing_types"].add(tag)
         for m in re.finditer(r"incomplete (?:element )?type ['\"](?:struct )?(.*?)['\"]", log_content):
@@ -117,32 +124,34 @@ class SourceConverter:
         if updated_stubs: self.write_file(self.stubs_file, stubs)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        # Strip simple typedefs (e.g. typedef unsigned long u32;)
+        # Strip simple typedefs and forward declarations
         content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", f"/* STRIPPED PRIM: {tag} */\n", content)
-        
-        # Strip forward declarations (e.g. struct Vtx_s;)
         content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", f"/* STRIPPED FWD: {tag} */\n", content)
 
-        # Strip full body structs
+        # Strip full body structs gracefully using brace-matching
         idx = 0
         while True:
-            match = re.search(r"\btypedef\s+(?:struct|union)\s*(?:[A-Za-z0-9_]+\s*)?\{", content[idx:])
+            match = re.search(r"\b(?:typedef\s+)?(?:struct|union)\s*(?:[A-Za-z0-9_]+\s*)?\{", content[idx:])
             if not match: break
+            
             start_idx = idx + match.start()
             brace_idx = content.find('{', start_idx)
             if brace_idx == -1: 
                 idx = start_idx + 1
                 continue
+                
             open_braces, curr_idx = 1, brace_idx + 1
             while curr_idx < len(content) and open_braces > 0:
                 if content[curr_idx] == '{': open_braces += 1
                 elif content[curr_idx] == '}': open_braces -= 1
                 curr_idx += 1
+                
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
                 tail = content[curr_idx:semi_idx]
+                # Ensure the target tag is cleanly referenced at the end of the typedef/struct
                 if re.search(rf"\b{re.escape(tag)}\b", tail):
-                    content = content[:start_idx] + f"/* STRIPPED CONFLICT: {tag} */" + content[semi_idx+1:]
+                    content = content[:start_idx] + f"/* STRIPPED CONFLICT: {tag} */\n" + content[semi_idx+1:]
                     idx = 0 
                     continue
                 idx = semi_idx + 1
@@ -200,15 +209,17 @@ typedef long long          int64_t;
         elif file_path.endswith(('.c', '.cpp', '.h')):
             content = original
             
-            # 1. STRIP REDEFINITIONS FROM OTHER HEADERS
+            # 1. STRIP REDEFINITIONS FROM OTHER HEADERS (Using Dynamic Set)
             for tag in list(self.N64_OS_STRUCT_BODIES.keys()):
                 content = self.strip_redefinition(content, tag)
+                
+                # Check for known sub-dependencies
                 if tag == "Vtx": content = self.strip_redefinition(content, "Vtx_t")
+                if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
+                if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
                 if tag == "OSPiHandle": 
                     content = self.strip_redefinition(content, "__OSBlockInfo")
                     content = self.strip_redefinition(content, "__OSTranxInfo")
-                if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
-                if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
 
             # 2. STRIP PRIMITIVES TO AVOID C++ CONFLICTS
             for tag in list(self.N64_PRIMITIVES.keys()):
@@ -216,8 +227,12 @@ typedef long long          int64_t;
 
             content = re.sub(r'(?<!extern\s)\b(?:u32|uint32_t)\s+osAppNMIBuffer\b[^;]*;', r'/* REDEF-FIX: osAppNMIBuffer definition stripped */', content)
 
+            # 3. APPLY CUSTOM REPLACEMENTS SAFELY
             for pat, rep in self.custom_replacements:
-                content = re.sub(pat, rep, content)
+                try:
+                    content = re.sub(pat, rep, content)
+                except Exception as e:
+                    logger.error(f"Failed regex {pat}: {e}")
 
             if "this" in content and "Actor *actor =" not in content and "actor->" in content:
                 content = re.sub(r'(\w+::\w+\(.*\)\s*(?:const\s+)?\{)', r'\1\n    Actor *actor = (Actor *)this;', content)
