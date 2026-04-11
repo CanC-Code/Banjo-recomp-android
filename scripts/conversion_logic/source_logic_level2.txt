@@ -1,3 +1,0 @@
-# ACTION:::NAME:::SEARCH_PATTERN:::REPLACEMENT
-# All HEADER_INJECT and STUB_INJECT logic has been moved to the Python SourceConverter native engine.
-# This file is reserved for safe, static text 'replace' or 'regex' rules only.
