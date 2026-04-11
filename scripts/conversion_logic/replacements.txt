@@ -1,11 +1,11 @@
-\bu8\b ::: uint8_t
-\bs8\b ::: int8_t
-\bu16\b ::: uint16_t
-\bs16\b ::: int16_t
-\bu32\b ::: uint32_t
-\bs32\b ::: int32_t
-\bu64\b ::: uint64_t
-\bs64\b ::: int64_t
+\bu8\b ::: unsigned char
+\bs8\b ::: signed char
+\bu16\b ::: unsigned short
+\bs16\b ::: short
+\bu32\b ::: unsigned int
+\bs32\b ::: int
+\bu64\b ::: unsigned long long
+\bs64\b ::: long long
 \bf32\b ::: float
 \bf64\b ::: double
 ->errno ::: ->errnum
