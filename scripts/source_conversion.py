@@ -27,7 +27,6 @@ class SourceConverter:
             "OSPri": "int", "OSMesg": "void*"
         }
 
-        # BLACKLIST: Prevent standard types from being dynamically stubbed out
         self.STANDARD_TYPES = {
             "uint8_t", "uint16_t", "uint32_t", "uint64_t",
             "int8_t", "int16_t", "int32_t", "int64_t",
@@ -36,7 +35,6 @@ class SourceConverter:
             "unsigned"
         }
 
-        # Base Globals (Expanded dynamically by globals.txt)
         self.N64_KNOWN_GLOBALS = {
             "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
             "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
@@ -44,17 +42,16 @@ class SourceConverter:
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
 
-        # Base Structs (Hardcoded core to prevent missing definitions, expanded by types.txt)
-        self.N64_OS_STRUCT_BODIES = {
-            "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { short mi[4][4]; short pad; } i; } Mtx;",
-            "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
-            "Gfx": "typedef struct { unsigned int words[2]; } Gfx;",
-            "Acmd": "typedef long long int Acmd;",
-            "OSThread": "typedef union __OSThreadContext_u { struct { unsigned long long pc; unsigned long long a0; unsigned long long sp; unsigned long long ra; unsigned int sr; unsigned int rcp; unsigned int fpcsr; } regs; long long int force_align[67]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; unsigned short state; unsigned short flags; unsigned long long id; int fp; __OSThreadContext context; } OSThread;"
-        }
+        self.N64_OS_STRUCT_BODIES = {}
 
     def load_logic(self):
-        """Dynamically loads N64 definitions from logic directory text files."""
+        # 1. FORCE CORE STRUCTS TO EXIST (Prevents unknown type 'Vtx' and 'Mtx' errors globally)
+        self.N64_OS_STRUCT_BODIES["Mtx"] = "typedef union { struct { float mf[4][4]; } f; struct { short mi[4][4]; short pad; } i; } Mtx;"
+        self.N64_OS_STRUCT_BODIES["Vtx"] = "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;"
+        self.N64_OS_STRUCT_BODIES["Gfx"] = "typedef struct { unsigned int words[2]; } Gfx;"
+        self.N64_OS_STRUCT_BODIES["Acmd"] = "typedef long long int Acmd;"
+        self.N64_OS_STRUCT_BODIES["OSThread"] = "typedef union __OSThreadContext_u { struct { unsigned long long pc; unsigned long long a0; unsigned long long sp; unsigned long long ra; unsigned int sr; unsigned int rcp; unsigned int fpcsr; } regs; long long int force_align[67]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; unsigned short state; unsigned short flags; unsigned long long id; int fp; __OSThreadContext context; } OSThread;"
+
         if not os.path.exists(self.logic_dir): return True
         
         for filename in os.listdir(self.logic_dir):
@@ -135,7 +132,22 @@ class SourceConverter:
         for m in re.finditer(r"implicit declaration of function ['\"](.*?)['\"]", log_content):
             self.dynamic_categories["implicit_functions"].add(m.group(1).strip())
 
+    def scrub_native_headers(self):
+        """CRITICAL FIX: Crawls the native SDK headers and dynamically strips structural redefinitions."""
+        native_dir = "include"
+        if not os.path.exists(native_dir):
+            return
+            
+        for root, _, files in os.walk(native_dir):
+            for file in files:
+                if file.endswith(('.h', '.c')):
+                    file_path = os.path.join(root, file)
+                    self.apply_to_file(file_path)
+
     def apply_dynamic_fixes(self):
+        # Trigger the native SDK scrub to destroy __OSTranxInfo collisions at the source
+        self.scrub_native_headers() 
+        
         if not os.path.exists(self.stubs_file): return
         stubs = self.read_file(self.stubs_file)
         updated_stubs = False
@@ -146,11 +158,9 @@ class SourceConverter:
         if updated_stubs: self.write_file(self.stubs_file, stubs)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        # Strip simple typedefs and forward declarations
         content = re.sub(rf"typedef\s+[^{{;]*?\b{re.escape(tag)}\b\s*;\n?", f"/* STRIPPED PRIM: {tag} */\n", content)
         content = re.sub(rf"(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*;\n?", f"/* STRIPPED FWD: {tag} */\n", content)
 
-        # Strip full body structs gracefully using brace-matching
         idx = 0
         while True:
             match = re.search(r"\b(?:typedef\s+)?(?:struct|union)\s*(?:[A-Za-z0-9_]+\s*)?\{", content[idx:])
@@ -218,26 +228,20 @@ class SourceConverter:
         elif file_path.endswith(('.c', '.cpp', '.h')):
             content = original
             
-            # BRUTE FORCE STRIP PROBLEMATIC STRUCTS
-            content = re.sub(r'typedef\s+struct\s*\{[^}]*\}\s*__OSBlockInfo\s*;\n?', '/* BRUTE-STRIPPED: __OSBlockInfo */\n', content)
-            content = re.sub(r'typedef\s+struct\s*\{[^}]*\}\s*__OSTranxInfo\s*;\n?', '/* BRUTE-STRIPPED: __OSTranxInfo */\n', content)
-
-            # 1. STRIP REDEFINITIONS FROM OTHER HEADERS (Using Dynamic Set)
             for tag in list(self.N64_OS_STRUCT_BODIES.keys()):
                 content = self.strip_redefinition(content, tag)
-                
-                # Check for known sub-dependencies
                 if tag == "Vtx": content = self.strip_redefinition(content, "Vtx_t")
                 if tag == "OSThread": content = self.strip_redefinition(content, "__OSThreadContext")
                 if tag == "OSIoMesg": content = self.strip_redefinition(content, "OSMesgHdr")
+                if tag == "OSPiHandle": 
+                    content = self.strip_redefinition(content, "__OSBlockInfo")
+                    content = self.strip_redefinition(content, "__OSTranxInfo")
 
-            # 2. STRIP PRIMITIVES TO AVOID C++ CONFLICTS
             for tag in list(self.N64_PRIMITIVES.keys()):
                 content = self.strip_redefinition(content, tag)
 
             content = re.sub(r'(?<!extern\s)\b(?:u32|uint32_t)\s+osAppNMIBuffer\b[^;]*;', r'/* REDEF-FIX: osAppNMIBuffer definition stripped */', content)
 
-            # 3. APPLY CUSTOM REPLACEMENTS SAFELY
             for pat, rep in self.custom_replacements:
                 try:
                     content = re.sub(pat, rep, content)
