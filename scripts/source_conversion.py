@@ -15,7 +15,7 @@ class SourceConverter:
         self.dynamic_categories = defaultdict(set)
 
         # ---------------------------------------------------------------------------
-        # Core N64 Primitives
+        # Core N64 Primitives - PROTECTED
         # ---------------------------------------------------------------------------
         self.N64_PRIMITIVES = {
             "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t", "u64": "uint64_t",
@@ -40,7 +40,7 @@ class SourceConverter:
         }
 
         # ---------------------------------------------------------------------------
-        # Core OS Structs (Full Bodies)
+        # Core OS Structs (Full Bodies) - Sorted by dependency
         # ---------------------------------------------------------------------------
         self.N64_OS_STRUCT_BODIES = {
             "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { int16_t mi[4][4]; int16_t pad; } i; } Mtx;",
@@ -82,7 +82,7 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             f.write(content)
 
     def scrape_logs(self, log_content: str):
-        """Analyzes build log for errors and conflicts."""
+        """Analyzes build log for errors, ignoring standard primitives."""
         self.dynamic_categories = defaultdict(set)
         for m in re.finditer(r"unknown type name ['\"](.*?)['\"]", log_content):
             tag = m.group(1).strip()
@@ -98,29 +98,23 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
             self.dynamic_categories["implicit_functions"].add(m.group(1).strip())
 
     def apply_dynamic_fixes(self):
-        """Apply fixes to n64_types.h and manage linking safety."""
+        """Apply fixes to n64_types.h with cleansing and linkage protection."""
         if not os.path.exists(self.types_header): return
         content = self.read_file(self.types_header)
         
-        # 1. Cleanse bad primitive stubs (e.g., u16 stubbed as void*)
+        # 1. Cleanse bad primitive stubs (fix the 'void*' bit-field error)
         for short in self.N64_PRIMITIVES.keys():
             content = re.sub(rf"typedef\s+void\s*\*\s*{short}\s*;\n?", "", content)
 
         updated = False
-        # Inject bodies for incomplete types
+        # 2. Inject bodies for types that were incomplete in the log
         for tag in self.dynamic_categories.get("need_body", set()):
             if tag in self.N64_OS_STRUCT_BODIES:
                 content = self.strip_redefinition(content, tag)
                 content += f"\n{self.N64_OS_STRUCT_BODIES[tag]}\n"
                 updated = True
 
-        # Handle missing opaque types
-        for typ in self.dynamic_categories.get("missing_types", set()):
-            if not re.search(rf"\b{typ}\b", content):
-                content += f"\ntypedef struct {typ}_s {typ};"
-                updated = True
-
-        # Handle globals and linkage
+        # 3. Handle identifiers and globals with extern "C" linkage
         for ident in self.dynamic_categories.get("undeclared_identifiers", set()):
             if ident in self.N64_KNOWN_GLOBALS and f"{ident}_DEFINED" not in content:
                 content += f"\n#ifndef {ident}_DEFINED\n#define {ident}_DEFINED\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\nextern {self.N64_KNOWN_GLOBALS[ident]}\n#ifdef __cplusplus\n}}\n#endif\n#endif"
@@ -129,12 +123,10 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
         if updated: self.write_file(self.types_header, content)
 
     def strip_redefinition(self, content: str, tag: str) -> str:
-        """Removes any existing struct/typedef definition for a given tag."""
-        # Remove simple forward declarations
+        """Brace-matched removal of existing declarations to prevent redefinition errors."""
         content = re.sub(rf"typedef\s+struct\s+{re.escape(tag)}_s\s+{re.escape(tag)};\n?", "", content)
         content = re.sub(rf"struct\s+{re.escape(tag)}_s;\n?", "", content)
         
-        # Brace-matched removal of full bodies
         pattern = re.compile(rf"\b(?:typedef\s+)?struct\s+{re.escape(tag)}\s*\{{")
         match = pattern.search(content)
         if match:
@@ -156,39 +148,33 @@ typedef struct OSPiHandle_s { struct OSPiHandle_s *next; uint8_t type; uint8_t l
         original = content
 
         if "n64_types.h" in file_path:
-            # 1. Ensure Standard Includes at the very top
+            # 1. Bootstrap standard headers before any N64 types
             if "#include <stdint.h>" not in content:
                 content = "#pragma once\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n" + content.replace("#pragma once", "")
             
-            # 2. Inject Primitives
+            # 2. Re-inject primitives with correct integer types
             for short, full in self.N64_PRIMITIVES.items():
                 if not re.search(rf"\btypedef\s+{full}\s+{short}\b", content):
                     content = re.sub(rf"\btypedef\s+.*?\s+{short}\s*;", "", content)
                     content += f"\ntypedef {full} {short};"
             
-            # 3. Inject OS Bodies if missing
+            # 3. Inject missing full OS bodies
             for tag, body in self.N64_OS_STRUCT_BODIES.items():
                 if not re.search(rf"\b{tag}\b", content) or "force_align" not in content:
                     content = self.strip_redefinition(content, tag)
                     content += f"\n{body}\n"
 
         if file_path.endswith(('.c', '.cpp')):
-            # Fix conflicting osAppNMIBuffer in source files
-            if "osAppNMIBuffer" in self.dynamic_categories["redefinitions"]:
-                content = re.sub(r'^(uint32_t\s+osAppNMIBuffer\s*=.*?;)', r'/* REDEF-FIX: \1 */', content, flags=re.M)
+            # POSIX renaming to prevent system library conflicts
+            for name in self.POSIX_RESERVED_NAMES:
+                if f" {name}(" in content and f"#define {name}" not in content:
+                    prefix = os.path.basename(file_path).split('.')[0]
+                    content = f'#define {name} n64_{prefix}_{name}\n' + content
 
-            # Fix exceptasm.cpp context casting
+            # Fix casting in exceptasm.cpp for register access
             content = re.sub(
                 r'\*(reinterpret_cast<uint32_t\*>\(__osRunningThread->context\))',
                 '*(reinterpret_cast<uint32_t*>(&__osRunningThread->context))',
-                content
-            )
-
-            # Standard register access fixes
-            content = re.sub(r'->context\.([a-z0-9_]+)', r'->context.regs.\1', content)
-            content = re.sub(
-                r'\(\s*uint32_t\s*\*\s*\)__osRunningThread->context',
-                '((uint32_t*)&__osRunningThread->context.force_align[0])',
                 content
             )
 
