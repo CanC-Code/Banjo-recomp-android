@@ -216,7 +216,7 @@ def strip_auto_preamble(content: str) -> str:
         if s.startswith("/* AUTO: forward decl"):
             in_auto_block = True
             continue
-        if in_auto_block and re.match(r'(?:typedef\s+)?struct\s+\w+(?:_s)?\s+\w+\s*;', s):
+        if in_auto_block and re.match(r'(?:typedef\s+)?(?:struct|union)\s+\w+(?:_s)?\s+\w+\s*;', s):
             continue
         in_auto_block = False
         result.append(line)
@@ -243,15 +243,16 @@ def _opaque_stub(tag: str, size: int = 64) -> str:
 
 def _type_already_defined(tag: str, content: str) -> bool:
     if re.search(rf"\}}\s*{re.escape(tag)}\s*;", content): return True
-    if re.search(rf"\btypedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;", content): return True
+    if re.search(rf"\btypedef\s+(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)}\s*;", content): return True
     if f"{tag}_DEFINED" in content: return True
     return False
 
 def strip_redefinition(content: str, tag: str) -> str:
+    """CRITICAL FIX: Safely strips out conflicting union AND struct definitions."""
     changed = True
     while changed:
         changed = False
-        pattern1 = re.compile(rf"\bstruct\s+{re.escape(tag)}\s*\{{")
+        pattern1 = re.compile(rf"\b(?:struct|union)\s+{re.escape(tag)}\s*\{{")
         match = pattern1.search(content)
         if match:
             start_idx = match.start()
@@ -270,7 +271,7 @@ def strip_redefinition(content: str, tag: str) -> str:
 
         idx = 0
         while True:
-            match = re.search(r"\btypedef\s+struct\b[^{]*\{", content[idx:])
+            match = re.search(r"\btypedef\s+(?:struct|union)\b[^{]*\{", content[idx:])
             if not match: break
             start_idx = idx + match.start()
             brace_idx = content.find('{', start_idx)
@@ -290,9 +291,9 @@ def strip_redefinition(content: str, tag: str) -> str:
                 idx = curr_idx + 1
         if changed: continue
 
-        c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
+        c_new, n = re.subn(rf"\btypedef\s+(?:struct\s+|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED LOOSE TYPEDEF: {tag} */", content)
         if n > 0: content, changed = c_new, True
-        c_new, n = re.subn(rf"\bstruct\s+{re.escape(tag)}\s*;", f"/* STRIPPED FWD DECL: {tag} */", content)
+        c_new, n = re.subn(rf"\b(?:struct|union)\s+{re.escape(tag)}\s*;", f"/* STRIPPED FWD DECL: {tag} */", content)
         if n > 0: content, changed = c_new, True
     return content
 
@@ -320,8 +321,8 @@ def clean_conflicting_typedefs():
     content = original = read_file(TYPES_HEADER)
     for p in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg"]:
         content = re.sub(rf"typedef\s+(?:u32|s32|u16|s16|u8|s8|u64|s64|int|unsigned\s+int|long|unsigned\s+long)\s+{p}\s*;", "", content)
-        content = re.sub(rf"typedef\s+struct\s+{re.escape(p)}(?:_s)?\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;", "", content)
-        content = re.sub(rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;", "", content)
+        content = re.sub(rf"typedef\s+(?:struct|union)\s+{re.escape(p)}(?:_s)?\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;", "", content)
+        content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;", "", content)
     if content != original: write_file(TYPES_HEADER, content)
 
 def ensure_types_header_base() -> str:
@@ -337,10 +338,10 @@ def ensure_types_header_base() -> str:
     for p in ["u8","s8","u16","s16","u32","s32","u64","s64","f32","f64","n64_bool","OSIntMask","OSTime","OSId","OSPri","OSMesg"]:
         content = re.sub(rf"\btypedef\s+[^;]+\b{re.escape(p)}\s*;", "", content)
     for p in ["OSIntMask","OSTime","OSId","OSPri","OSMesg"]:
-        content = re.sub(rf"(?:typedef\s+)?(?:struct\s+)?{re.escape(p)}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{re.escape(p)}\s*)?;?\n?", "", content)
-        content = re.sub(rf"typedef\s+struct\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;\n?", "", content)
-        content = re.sub(rf"typedef\s+struct\s+{re.escape(p)}(?:_s)?\s+{re.escape(p)}\s*;\n?", "", content)
-        content = re.sub(rf"struct\s+{re.escape(p)}(?:_s)?\s*;\n?", "", content)
+        content = re.sub(rf"(?:typedef\s+)?(?:struct\s+|union\s+)?{re.escape(p)}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{re.escape(p)}\s*)?;?\n?", "", content)
+        content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;\n?", "", content)
+        content = re.sub(rf"typedef\s+(?:struct|union)\s+{re.escape(p)}(?:_s)?\s+{re.escape(p)}\s*;\n?", "", content)
+        content = re.sub(rf"(?:struct|union)\s+{re.escape(p)}(?:_s)?\s*;\n?", "", content)
 
     content = content.replace("#pragma once", f"#pragma once\n{_CORE_PRIMITIVES}", 1)
     content = repair_unterminated_conditionals(content)
@@ -392,17 +393,17 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redefinition of '(\w+)'", content):
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in sr: sr.append(entry)
-        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+typedef redefinition.*?vs '(?:struct )?(\w+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+typedef redefinition.*?vs '(?:struct|union )?(\w+)'", content):
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in sr: sr.append(entry)
-        for m in re.finditer(r"n64_types\.h:\d+:\d+:\s+error:\s+typedef redefinition.*?'(?:struct )?(\w+)'", content): nsb.add(m.group(1))
+        for m in re.finditer(r"n64_types\.h:\d+:\d+:\s+error:\s+typedef redefinition.*?'(?:struct|union )?(\w+)'", content): nsb.add(m.group(1))
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+use of undeclared identifier '(\w+)'", content): ui.add(m.group(2))
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+implicit declaration of function '(\w+)'", content): ifs.add(m.group(2))
-        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+member access into incomplete type '(?:struct )?(\w+)'", content): nsb.add(m.group(2))
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+member access into incomplete type '(?:struct|union )?(\w+)'", content): nsb.add(m.group(2))
         for m in re.finditer(r"error:\s+member reference (?:base )?type '.*?' is not a (?:pointer|structure or union)\n([^\n]+)\n", content):
             snippet = m.group(1)
             for mm in re.finditer(r'([A-Za-z0-9_]+)(?:->|\.)', snippet): nap.add(mm.group(1))
-        for m in re.finditer(r"error:\s+subscript of pointer to incomplete type '(?:struct )?(\w+)'", content): nsb.add(m.group(1))
+        for m in re.finditer(r"error:\s+subscript of pointer to incomplete type '(?:struct|union )?(\w+)'", content): nsb.add(m.group(1))
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redeclaration of '(\w+)' with a different type", content):
             filepath, var = normalize_path(m.group(1)), m.group(2)
             categories.setdefault("type_mismatch_globals", [])
@@ -434,13 +435,11 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
 
     # ------------------------------------------------------------------
     # NATIVE ERRNO SANITIZER
-    # Safely renames .errno and ->errno globally to avoid POSIX macro blowups
     # ------------------------------------------------------------------
     if categories.get("errno_conflict"):
         for filepath in categories["errno_conflict"]:
             if os.path.exists(filepath):
                 original_content = read_file(filepath)
-                # Apply word-boundary bound regexes to ensure we don't accidentally match substrings
                 new_content = re.sub(r'->errno\b', '->errnum', original_content)
                 new_content = re.sub(r'\.errno\b', '.errnum', new_content)
                 if original_content != new_content:
@@ -478,6 +477,10 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 types_content += f"\n#ifndef {var}_DEFINED\n#define {var}_DEFINED\nextern {decl}\n#endif\n"
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
 
+    # ------------------------------------------------------------------
+    # ZERO-MACRO ASSASSIN
+    # Wipes broken empty stubs (like #define ENVMIX_STATE 0) out of the header
+    # ------------------------------------------------------------------
     known_type_tags: Set[str] = set()
     for item in categories.get("missing_types", []):
         if isinstance(item,(list,tuple)) and len(item)>=2: known_type_tags.add(item[1])
@@ -488,6 +491,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     for tag in categories.get("conflict_typedef", []): known_type_tags.add(tag) if isinstance(tag,str) else None
     known_type_tags.update(N64_OS_OPAQUE_TYPES)
     known_type_tags.update(ACTIVE_STRUCTS.keys())
+    known_type_tags.update(N64_AUDIO_STATE_TYPES)
 
     macros_cleaned = False
     for tag in known_type_tags:
@@ -495,7 +499,9 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         types_content, n1 = re.subn(p1, "", types_content)
         p2 = rf"(?m)^\s*#define {re.escape(tag)} 0 /\* AUTO-INJECTED UNKNOWN MACRO \*/\s*\n?"
         types_content, n2 = re.subn(p2, "", types_content)
-        if n1 + n2 > 0: macros_cleaned = True; fixes += 1
+        p3 = rf"(?m)^\s*#ifndef {re.escape(tag)}\s*\n\s*#define {re.escape(tag)} 0 /\* AUTO-INJECTED UNDECLARED IDENTIFIER \*/\s*\n\s*#endif\s*\n?"
+        types_content, n3 = re.subn(p3, "", types_content)
+        if n1 + n2 + n3 > 0: macros_cleaned = True; fixes += 1
     if macros_cleaned: write_file(TYPES_HEADER, types_content)
 
     if categories.get("not_a_pointer"):
@@ -546,7 +552,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     for type_name in sorted(categories.get("conflict_typedef", [])):
         if type_name in SDK_DEFINES_THESE: continue
         types_content = read_file(TYPES_HEADER)
-        pattern = rf"(?:typedef\s+)?(?:struct\s+)?{re.escape(type_name)}\s*\{{[^}}]*\}}\s*{re.escape(type_name)}?\s*;\n?"
+        pattern = rf"(?:typedef\s+)?(?:struct\s+|union\s+)?{re.escape(type_name)}\s*\{{[^}}]*\}}\s*{re.escape(type_name)}?\s*;\n?"
         new_types, n = re.subn(pattern, "", types_content)
         new_types = re.sub(rf"typedef\s+(?:u32|s32|u16|s16|u8|s8|u64|s64|int|unsigned\s+int)\s+{re.escape(type_name)}\s*;", "", new_types)
         if n > 0:
@@ -584,6 +590,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             new_content, n = re.subn(rf"^(.*?\b{re.escape(var)}\b.*?;)", r"/* AUTO-REMOVED REDEF: \1 */", content, flags=re.MULTILINE)
             if n > 0: write_file(filepath, new_content); fixed_files.add(filepath); fixes += 1
 
+    # CRITICAL FIX: Add _s logic securely to audio and missing tags
     for item in sorted(categories.get("missing_types", []), key=str):
         if isinstance(item,(list,tuple)) and len(item)>=2: filepath, tag = item[0], item[1]
         elif isinstance(item, str): filepath, tag = None, item
@@ -594,7 +601,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         if tag in N64_PRIMITIVES: pass
         elif tag in N64_AUDIO_STATE_TYPES:
             if not _type_already_defined(tag, types_content):
-                types_content += f"\ntypedef struct {tag} {{ long long int force_align[64]; }} {tag};\n"
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
                 write_file(TYPES_HEADER, types_content); fixes += 1
         elif tag in ACTIVE_STRUCTS: categories.setdefault("need_struct_body", set()).add(tag)
         elif tag in N64_OS_OPAQUE_TYPES:
@@ -618,7 +625,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         for t in sorted(categories["unknown_audio_state_types"]):
             if not isinstance(t,str) or t not in N64_AUDIO_STATE_TYPES: continue
             if not _type_already_defined(t, types_content):
-                types_content += f"\ntypedef struct {t} {{ long long int force_align[64]; }} {t};\n"; added = True
+                types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\ntypedef struct {t}_s {{ long long int force_align[64]; }} {t};\n#endif\n"; added = True
         if added: write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories.get("extraneous_brace"):
@@ -806,7 +813,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         for t in sorted(categories["audio_states"]):
             if not isinstance(t, str): continue
             if not _type_already_defined(t, types_content):
-                types_content += f"\ntypedef struct {t} {{ long long int force_align[32]; }} {t};\n"; audio_added = True
+                types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\ntypedef struct {t}_s {{ long long int force_align[32]; }} {t};\n#endif\n"; audio_added = True
         if audio_added: write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories.get("undeclared_n64_types"):
@@ -866,8 +873,13 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
 
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
+            
+            # Explicitly strip sub-types that get collided
             if tag == "OSPiHandle":
                 types_content = strip_redefinition(types_content, "__OSBlockInfo"); types_content = strip_redefinition(types_content, "__OSTranxInfo")
+            if tag == "Vtx":
+                types_content = strip_redefinition(types_content, "Vtx_t")
+                
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
             if tag == "LookAt":
                 types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content); types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content)
@@ -886,7 +898,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
             content = read_file(filepath); content = strip_auto_preamble(content); changed = False
             for t in sorted(type_names):
-                body_pattern = rf"typedef\s+struct[^{{]*\{{[^}}]*\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
+                body_pattern = rf"typedef\s+(?:struct|union)[^{{]*\{{[^}}]*\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
                 fwd_decl = f"typedef struct {t}_s {t};"
                 fwd = f"/* AUTO: forward decl for type defined below */\n{fwd_decl}\n" if re.search(body_pattern, content) else f"/* AUTO: forward declarations */\n{fwd_decl}\n"
                 if fwd_decl not in content: content = fwd + content; changed = True
