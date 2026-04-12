@@ -42,16 +42,19 @@ class SourceConverter:
             "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
         }
 
-        self.N64_OS_STRUCT_BODIES = {}
+        # 1. PERMANENT CORE STRUCTS (Guarantees Vtx, Mtx, Gfx, etc., are never lost)
+        self.N64_OS_STRUCT_BODIES = {
+            "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { short mi[4][4]; short pad; } i; } Mtx;",
+            "Vtx": "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;",
+            "Gfx": "typedef struct { unsigned int words[2]; } Gfx;",
+            "Acmd": "typedef long long int Acmd;",
+            "OSThread": "typedef union __OSThreadContext_u { struct { unsigned long long pc; unsigned long long a0; unsigned long long sp; unsigned long long ra; unsigned int sr; unsigned int rcp; unsigned int fpcsr; } regs; long long int force_align[67]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; unsigned short state; unsigned short flags; unsigned long long id; int fp; __OSThreadContext context; } OSThread;"
+        }
+
+        # 2. AUTO-LOAD ON INIT (Defeats runners that skip calling load_logic())
+        self.load_logic()
 
     def load_logic(self):
-        # 1. FORCE CORE STRUCTS TO EXIST (Prevents unknown type 'Vtx' and 'Mtx' errors globally)
-        self.N64_OS_STRUCT_BODIES["Mtx"] = "typedef union { struct { float mf[4][4]; } f; struct { short mi[4][4]; short pad; } i; } Mtx;"
-        self.N64_OS_STRUCT_BODIES["Vtx"] = "typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t; typedef union { Vtx_t v; long long int force_align[8]; } Vtx;"
-        self.N64_OS_STRUCT_BODIES["Gfx"] = "typedef struct { unsigned int words[2]; } Gfx;"
-        self.N64_OS_STRUCT_BODIES["Acmd"] = "typedef long long int Acmd;"
-        self.N64_OS_STRUCT_BODIES["OSThread"] = "typedef union __OSThreadContext_u { struct { unsigned long long pc; unsigned long long a0; unsigned long long sp; unsigned long long ra; unsigned int sr; unsigned int rcp; unsigned int fpcsr; } regs; long long int force_align[67]; } __OSThreadContext;\ntypedef struct OSThread_s { struct OSThread_s *next; int priority; struct OSThread_s **queue; struct OSThread_s *tlnext; unsigned short state; unsigned short flags; unsigned long long id; int fp; __OSThreadContext context; } OSThread;"
-
         if not os.path.exists(self.logic_dir): return True
         
         for filename in os.listdir(self.logic_dir):
@@ -145,7 +148,7 @@ class SourceConverter:
                     self.apply_to_file(file_path)
 
     def apply_dynamic_fixes(self):
-        # Trigger the native SDK scrub to destroy __OSTranxInfo collisions at the source
+        # Trigger the native SDK scrub to destroy redefinitions at the source
         self.scrub_native_headers() 
         
         if not os.path.exists(self.stubs_file): return
