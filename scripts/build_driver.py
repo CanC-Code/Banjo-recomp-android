@@ -1,7 +1,9 @@
 import os
 import subprocess
 import re
-from source_conversion import SourceConverter   # your latest SourceConverter
+
+# Import the new functional engine from source_conversion.py
+from source_conversion import apply_fixes, ensure_types_header_base
 
 os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "8"
 if "NINJAJOBS" in os.environ:
@@ -45,27 +47,6 @@ def run_build():
             print(f"🛑 Build execution failed: {e}")
             return False
 
-def resolve_cpp_path(file_path):
-    if os.path.exists(file_path):
-        return file_path
-    if "Banjo-recomp-android/" in file_path:
-        file_path = file_path.split("Banjo-recomp-android/")[-1]
-        if os.path.exists(file_path):
-            return file_path
-    search_bases = ["Android/app/src/main/cpp", "src"]
-    for base in search_bases:
-        attempt = os.path.join(base, file_path)
-        if os.path.exists(attempt):
-            return attempt
-    filename = os.path.basename(file_path)
-    for base in search_bases:
-        if not os.path.exists(base):
-            continue
-        for root, _, files in os.walk(base):
-            if filename in files:
-                return os.path.join(root, filename)
-    return file_path
-
 def ensure_bridge_at_top(file_path):
     if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
         return False
@@ -81,25 +62,18 @@ def ensure_bridge_at_top(file_path):
     return True
 
 def main():
-    converter = SourceConverter()
     print("🧹 Performing Initial Cleanse...")
 
-    # === FRESH n64_types.h (replaces the missing bootstrap_n64_types) ===
-    if os.path.exists(TYPES_HEADER):
-        os.remove(TYPES_HEADER)
-    os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
-    with open(TYPES_HEADER, 'w', encoding='utf-8') as f:
-        f.write("#pragma once\n")
-
-    converter.load_logic()
+    # === FRESH n64_types.h Generation ===
+    ensure_types_header_base()
 
     print(f"\n{'='*40}\n--- Applying Initial Fixes ---\n{'='*40}")
 
-    # Apply to types header first
-    fixes_applied = converter.apply_to_file(TYPES_HEADER)
-    print(f"🔧 Applied {fixes_applied} fixes to n64_types.h")
+    # Seed the initial structural types and macros (Level 3 unlocks all advanced structs)
+    fixes_applied, fixed_files = apply_fixes({}, intelligence_level=3)
+    print(f"🔧 Applied {fixes_applied} structural definition fixes.")
 
-    # Sweep source files
+    # Sweep source files to ensure the bridge header is available globally
     source_dirs = ["Android/app/src/main/cpp", "src"]
     for base_dir in source_dirs:
         if not os.path.exists(base_dir):
@@ -109,10 +83,6 @@ def main():
                 filepath = os.path.join(root, filename)
                 if filename.endswith(('.c', '.cpp')):
                     ensure_bridge_at_top(filepath)
-                if filename.endswith(('.c', '.cpp', '.h')):
-                    file_fixes = converter.apply_to_file(filepath)
-                    if file_fixes > 0:
-                        print(f"🔧 Applied {file_fixes} fixes to {filepath}")
 
     # === Iterative self-healing loop ===
     max_iterations = 4
@@ -127,31 +97,13 @@ def main():
                 print("🛑 Maximum build iterations reached. Halting.")
                 break
 
-            with open(LOG_FILE, 'r', errors='replace') as f:
-                log_content = f.read()
-
-            converter.scrape_logs(log_content)
-
-            targeted_files = set()
-            if hasattr(converter, 'dynamic_categories'):
-                targeted_files.update(converter.dynamic_categories.get("needs_float_fix", set()))
-                targeted_files.update(converter.dynamic_categories.get("needs_redef_strip", set()))
-
-            targeted_files.add(TYPES_HEADER)
-
             print("\n🛠️ Applying Dynamic Self-Healing Fixes...")
-            fixed_count = 0
-            for file_path in targeted_files:
-                resolved_path = resolve_cpp_path(file_path)
-                if os.path.exists(resolved_path):
-                    if resolved_path.endswith(('.c', '.cpp')):
-                        ensure_bridge_at_top(resolved_path)
-                    fixes = converter.apply_to_file(resolved_path)
-                    if fixes > 0:
-                        print(f"    🔧 Dynamically fixed: {resolved_path}")
-                        fixed_count += fixes
-
-            converter.apply_dynamic_fixes()
+            
+            # The functional engine automatically parses the logs and targets the broken files
+            categories = {}
+            fixes, modded_files = apply_fixes(categories, intelligence_level=3)
+            
+            print(f"    🔧 Dynamically applied {fixes} syntax/macro fixes across {len(modded_files)} files.")
 
 if __name__ == "__main__":
     main()
