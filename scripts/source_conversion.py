@@ -388,7 +388,7 @@ _CORE_PRIMITIVES = (
     "typedef union { Vp_t vp; long long int force_align[4]; } Vp;\n"
     "#endif\n"
     "#ifdef __cplusplus\n"
-    "#include <sched.h>\n"
+    "extern \"C\" int sched_yield(void);\n"
     "#endif\n"
     "#endif /* END_CORE_PRIMITIVES */\n"
 )
