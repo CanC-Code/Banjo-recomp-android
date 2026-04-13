@@ -65,7 +65,8 @@ def main():
     print("🧹 Performing Initial Cleanse...")
 
     # === FRESH n64_types.h Generation ===
-    ensure_types_header_base()
+    # Provide an empty dictionary since we don't have log categories yet
+    ensure_types_header_base({})
 
     print(f"\n{'='*40}\n--- Applying Initial Fixes ---\n{'='*40}")
 
@@ -98,11 +99,11 @@ def main():
                 break
 
             print("\n🛠️ Applying Dynamic Self-Healing Fixes...")
-            
+
             # The functional engine automatically parses the logs and targets the broken files
             categories = {}
             fixes, modded_files = apply_fixes(categories, intelligence_level=3)
-            
+
             print(f"    🔧 Dynamically applied {fixes} syntax/macro fixes across {len(modded_files)} files.")
 
 if __name__ == "__main__":
