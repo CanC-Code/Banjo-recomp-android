@@ -537,7 +537,10 @@ def clean_conflicting_typedefs():
         content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;", "", content)
     if content != original: write_file(TYPES_HEADER, content)
 
-def ensure_types_header_base(categories: dict) -> str:
+def ensure_types_header_base(categories: Optional[dict] = None) -> str:
+    if categories is None:
+        categories = {}
+        
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
         
