@@ -537,12 +537,24 @@ def clean_conflicting_typedefs():
         content = re.sub(rf"typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(p)}\s*;", "", content)
     if content != original: write_file(TYPES_HEADER, content)
 
-def ensure_types_header_base() -> str:
+def ensure_types_header_base(categories: dict) -> str:
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
-        content = content.replace('#include "ultra/n64_types.h"\n', '')
-        if "#pragma once" not in content: content = "#pragma once\n" + content
+        
+        # Self-healing: Nuke file if it's deeply corrupted by an old script version
+        if "CORE_PRIMITIVES_DEFINED" in content and "/* END_CORE_PRIMITIVES */" not in content:
+            content = ""
+        # Self-healing: Nuke file if compiler flagged unmatched endifs inside it
+        elif categories and categories.get("endif_without_if") and any("n64_types.h" in f for f in categories["endif_without_if"]):
+            content = ""
+
+        if content:
+            content = content.replace('#include "ultra/n64_types.h"\n', '')
+            if "#pragma once" not in content: content = "#pragma once\n" + content
     else:
+        content = ""
+
+    if not content:
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
@@ -557,16 +569,6 @@ def ensure_types_header_base() -> str:
         content = re.sub(rf"(?:struct|union)\s+{re.escape(p)}(?:_s)?\s*;\n?", "", content)
 
     content = content.replace("#pragma once", f"#pragma once\n{_CORE_PRIMITIVES}", 1)
-
-    # Emit correctly-typed forward externs for source-defined typed globals
-    if "_fwd_DEFINED" not in content:
-        typed_block = "\n/* Forward declarations for source-defined typed globals */\n"
-        typed_block += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
-        typed_block += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
-        for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
-            typed_block += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
-        typed_block += '#ifdef __cplusplus\n}\n#endif\n'
-        content += typed_block
 
     content = repair_unterminated_conditionals(content)
     write_file(TYPES_HEADER, content)
@@ -597,7 +599,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         categories.setdefault(key, [])
         if isinstance(categories[key], set): categories[key] = list(categories[key])
 
-    for key in ["undeclared_identifiers","implicit_func_stubs","need_struct_body","not_a_pointer","errno_conflict"]:
+    for key in ["undeclared_identifiers","implicit_func_stubs","need_struct_body","not_a_pointer","errno_conflict","endif_without_if"]:
         categories.setdefault(key, set())
         if isinstance(categories[key], list): categories[key] = set(categories[key])
 
@@ -609,10 +611,14 @@ def _scrape_logs_into_categories(categories: dict) -> None:
     nsb = categories["need_struct_body"]
     nap = categories["not_a_pointer"]
     err = categories["errno_conflict"]
+    endifs = categories["endif_without_if"]
 
     for log_file in set(log_candidates):
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
+
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+#endif without #if", content):
+            endifs.add(normalize_path(m.group(1)))
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:.*errno", content):
             err.add(normalize_path(m.group(1)))
@@ -738,7 +744,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
 
     _scrape_logs_into_categories(categories)
     clean_conflicting_typedefs()
-    types_content = ensure_types_header_base()
+    types_content = ensure_types_header_base(categories)
 
     # ------------------------------------------------------------------
     # NATIVE ERRNO SANITIZER
@@ -768,7 +774,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         original_types = types_content
         scrub_targets = (set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) |
                          {"__osPiTable","__OSBlockInfo","__OSTranxInfo","__osCurrentThread","__osRunQueue","__osFaultedThread"} |
-                         _TYPED_SOURCE_GLOBALS)
+                         _TYPED_SOURCE_GLOBALS | set(PHASE_3_STRUCTS.keys()))
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
             types_content = re.sub(rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", "", types_content)
@@ -1135,6 +1141,11 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         for sym in sorted(categories["undefined_symbols"]):
             if not isinstance(sym, str) or sym.startswith("_Z") or "vtable" in sym: continue
             if sym in _STDLIB_FUNCS: continue
+            
+            # --- GUARD TO PREVENT STRUCTS FROM BECOMING STUBS ---
+            if sym in ACTIVE_STRUCTS or sym in N64_OS_OPAQUE_TYPES or sym in PHASE_3_STRUCTS:
+                continue
+
             if f" {sym}(" not in existing_stubs:
                 existing_stubs += f"long long int {sym}() {{ return 0; }}\n"; stubs_added = True
         if stubs_added: write_file(STUBS_FILE, existing_stubs); fixes += 1
@@ -1261,6 +1272,11 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             else: continue
             if glob == "actor": continue
             if glob in _TYPED_SOURCE_GLOBALS: continue
+            
+            # --- GUARD TO PREVENT STRUCTS FROM BECOMING GLOBALS ---
+            if glob in ACTIVE_STRUCTS or glob in N64_OS_OPAQUE_TYPES or glob in PHASE_3_STRUCTS:
+                continue
+
             if glob in N64_KNOWN_GLOBALS:
                 if f"{glob}_DEFINED" not in types_content:
                     types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {N64_KNOWN_GLOBALS[glob]}\n#endif\n"; globals_added = True
@@ -1268,5 +1284,28 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 decl = (f"extern void* {glob};" if glob.endswith(("_ptr","_p")) else f"extern long long int {glob};")
                 types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"; globals_added = True
         if globals_added: write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # ------------------------------------------------------------------
+    # ENFORCE TYPED GLOBALS AT BOTTOM 
+    # Ensures all struct definitions exist before external globals use them
+    # ------------------------------------------------------------------
+    types_content = read_file(TYPES_HEADER)
+    marker = "/* Forward declarations for source-defined typed globals */"
+    if marker in types_content:
+        types_content = types_content[:types_content.find(marker)].rstrip() + "\n"
+    
+    for var in _TYPED_SOURCE_GLOBALS:
+        types_content = re.sub(rf"(?m)^extern\s+[^\n]+\b{re.escape(var)}\b[^\n]*\n?", "", types_content)
+        types_content = re.sub(rf"(?m)^#ifndef {re.escape(var)}_fwd_DEFINED\n#define {re.escape(var)}_fwd_DEFINED\n[^\n]+\n#endif\n?", "", types_content)
+
+    typed_block = f"\n{marker}\n"
+    typed_block += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
+    typed_block += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
+    for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
+        typed_block += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
+    typed_block += '#ifdef __cplusplus\n}\n#endif\n'
+    
+    types_content += typed_block
+    write_file(TYPES_HEADER, types_content)
 
     return fixes, fixed_files
