@@ -100,7 +100,6 @@ PHASE_2_MACROS = {
     "PI_BSD_DOM1_RLS_REG":  "0x04600020", "PI_BSD_DOM2_LAT_REG":  "0x04600024",
     "PI_BSD_DOM2_PWD_REG":  "0x04600028", "PI_BSD_DOM2_PGS_REG":  "0x0460002C",
     "PI_BSD_DOM2_RLS_REG":  "0x04600030",
-    # SP microcode size constants
     "SP_UCODE_SIZE":      "0x1000",
     "SP_UCODE_DATA_SIZE": "0x800",
     "FRUSTRATIO_1": "1",
@@ -109,24 +108,14 @@ PHASE_2_MACROS = {
 PHASE_3_MACROS = {
     **PHASE_2_MACROS,
     "G_ON": "1", "G_OFF": "0",
-    # GBI texture tile constants
-    "G_TX_RENDERTILE": "0",
-    "G_TX_LOADTILE":   "7",
-    "G_TX_NOMIRROR":   "0",
-    "G_TX_WRAP":       "0",
-    "G_TX_CLAMP":      "0x4",
-    "G_TX_NOMASK":     "0",
+    "G_TX_RENDERTILE": "0", "G_TX_LOADTILE":   "7",
+    "G_TX_NOMIRROR":   "0", "G_TX_WRAP":       "0",
+    "G_TX_CLAMP":      "0x4", "G_TX_NOMASK":     "0",
     "G_TX_NOLOD":      "0",
-    # GBI color combiner source constants
-    "COMBINED":       "0",
-    "TEXEL0":         "1",
-    "TEXEL1":         "2",
-    "PRIMITIVE":      "3",
-    "SHADE":          "4",
-    "ENVIRONMENT":    "5",
-    "TEXEL0_ALPHA":   "1",
-    "PRIMITIVE_ALPHA":"6",
-    # RSP render modes
+    "COMBINED":       "0", "TEXEL0":         "1",
+    "TEXEL1":         "2", "PRIMITIVE":      "3",
+    "SHADE":          "4", "ENVIRONMENT":    "5",
+    "TEXEL0_ALPHA":   "1", "PRIMITIVE_ALPHA":"6",
     "G_RM_AA_ZB_OPA_SURF":  "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
     "G_RM_AA_ZB_XLU_SURF":  "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000",
     "G_ZBUFFER": "0x00000001", "G_SHADE": "0x00000004",
@@ -138,40 +127,9 @@ PHASE_3_MACROS = {
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
     "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;",
-
-    # FIX: .errno field name restored; guard with pragma push/pop so the
-    # NDK's errno macro doesn't hijack the field name during parsing.
-    "OSContStatus": (
-        '#ifdef errno\n'
-        '#pragma push_macro("errno")\n'
-        '#undef errno\n'
-        '#define __n64_errno_save 1\n'
-        '#endif\n'
-        'typedef struct OSContStatus_s { u16 type; u8 status; u8 errno; } OSContStatus;\n'
-        '#ifdef __n64_errno_save\n'
-        '#undef __n64_errno_save\n'
-        '#pragma pop_macro("errno")\n'
-        '#endif'
-    ),
-
-    "OSContPad": (
-        '#ifdef errno\n'
-        '#pragma push_macro("errno")\n'
-        '#undef errno\n'
-        '#define __n64_errno_save 1\n'
-        '#endif\n'
-        'typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errno; } OSContPad;\n'
-        '#ifdef __n64_errno_save\n'
-        '#undef __n64_errno_save\n'
-        '#pragma pop_macro("errno")\n'
-        '#endif'
-    ),
-
+    "OSContStatus": "typedef struct OSContStatus_s { u16 type; u8 status; u8 errnum; } OSContStatus;",
+    "OSContPad": "typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errnum; } OSContPad;",
     "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;",
-
-    # FIX: context members at union top level (anonymous struct); all POD u64/u32
-    # so reinterpret_cast to uint32_t* is legal in C++.
-    # Fields: pc, sp, ra, a0, sr, rcp, fpcsr all present as named by source.
     "OSThread": (
         '#ifndef __OSThreadContext_DEFINED\n'
         '#define __OSThreadContext_DEFINED\n'
@@ -203,9 +161,7 @@ _N64_OS_STRUCT_BODIES = {
         '    __OSThreadContext context;\n'
         '} OSThread;'
     ),
-
     "OSMesgHdr": "typedef struct { u16 type; u8 pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
-
     "OSPiHandle": (
         '#ifndef __OSBlockInfo_DEFINED\n'
         '#define __OSBlockInfo_DEFINED\n'
@@ -217,10 +173,8 @@ _N64_OS_STRUCT_BODIES = {
         '#endif\n'
         'typedef struct OSPiHandle_s { struct OSPiHandle_s *next; u8 type; u8 latency; u8 pageSize; u8 relDuration; u8 pulse; u8 domain; u32 baseAddress; u32 speed; __OSTranxInfo transferInfo; } OSPiHandle;'
     ),
-
     "OSIoMesg":  "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; u32 devAddr; u32 size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
     "OSDevMgr":  "typedef struct OSDevMgr_s { s32 active; struct OSThread_s *thread; struct OSMesgQueue_s *cmdQueue; struct OSMesgQueue_s *evtQueue; struct OSMesgQueue_s *acsQueue; s32 (*dma)(s32, u32, void *, u32); s32 (*edma)(struct OSPiHandle_s *, s32, u32, void *, u32); } OSDevMgr;",
-
     "OSPfs": (
         'typedef struct OSPfs_s {\n'
         '    struct OSIoMesg_s ioMesgBuf;\n'
@@ -242,7 +196,6 @@ _N64_OS_STRUCT_BODIES = {
         '    u8 inodeCache[256];\n'
         '} OSPfs;'
     ),
-
     "OSTimer":   "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; OSTime interval; OSTime value; struct OSMesgQueue_s *mq; OSMesg msg; } OSTimer;",
     "LookAt":    "typedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;",
 }
@@ -250,7 +203,6 @@ _N64_OS_STRUCT_BODIES = {
 SDK_DEFINES_THESE = {"OSScTask"}
 
 PHASE_3_STRUCTS = {
-    # FIX: Real N64 Vtx_n layout — n[4] are signed normals, a is unsigned alpha byte
     "Vtx": (
         'typedef struct {\n'
         '    s16 ob[3];\n'
@@ -271,9 +223,6 @@ PHASE_3_STRUCTS = {
         '    long long int force_align[8];\n'
         '} Vtx;'
     ),
-
-    # FIX: Full __OSViCommonRegs — 8 fields matching real N64 VI register layout.
-    # viswapcontext.c uses: ctrl, width, burst, vSync, hSync, leap, hStart, xScale
     "OSViMode": (
         '#ifndef __OSViCommonRegs_DEFINED\n'
         '#define __OSViCommonRegs_DEFINED\n'
@@ -304,9 +253,7 @@ PHASE_3_STRUCTS = {
         '    __OSViFieldRegs  fldRegs[2];\n'
         '} OSViMode;'
     ),
-
     "OSViContext": "typedef struct OSViContext_s { u16 state; u16 retraceCount; void *framep; struct OSViMode_s *modep; u32 control; struct OSMesgQueue_s *msgq; OSMesg msg; } OSViContext;",
-
     "OSTask": (
         'typedef struct {\n'
         '    u32  type;\n'
@@ -331,58 +278,12 @@ PHASE_3_STRUCTS = {
         '    long long int force_align[16];\n'
         '} OSTask;'
     ),
-
-    # Graphics/audio types needed by SDK headers (gu.h, libaudio.h, exceptasm.cpp)
     "Gfx":    "typedef struct { u32 words[2]; } Gfx;",
-
-    "Acmd": (
-        'typedef union {\n'
-        '    struct { u32 w0; u32 w1; } words;\n'
-        '    long long int force_align[1];\n'
-        '} Acmd;'
-    ),
-
-    "Light": (
-        'typedef struct {\n'
-        '    u8 col[3]; u8 pad0;\n'
-        '    u8 colc[3]; u8 pad1;\n'
-        '    s8 dir[3]; u8 pad2;\n'
-        '} Light_t;\n'
-        'typedef union {\n'
-        '    Light_t l;\n'
-        '    long long int force_align[2];\n'
-        '} Light;'
-    ),
-
-    "Hilite": (
-        'typedef struct { int x1, y1, x2, y2; } Hilite_t;\n'
-        'typedef union {\n'
-        '    Hilite_t h;\n'
-        '    long long int force_align[2];\n'
-        '} Hilite;'
-    ),
-
-    "uSprite": (
-        'typedef struct {\n'
-        '    s16 objX, objY;\n'
-        '    u16 scaleW, scaleH;\n'
-        '    s16 imageW, imageH;\n'
-        '    u16 paddedW, paddedH;\n'
-        '    u16 bitmapW, bitmapH;\n'
-        '    s16 imageX, imageY;\n'
-        '    u16 imageFlags;\n'
-        '} uSprite;'
-    ),
-
-    "CPUState": (
-        'typedef struct {\n'
-        '    u32 gpr[32];\n'
-        '    u32 sr, pc, cause, badvaddr, sp, ra;\n'
-        '    u32 lo, hi;\n'
-        '    u32 fpr[32];\n'
-        '    u32 fpcsr;\n'
-        '} CPUState;'
-    ),
+    "Acmd":   "typedef union { struct { u32 w0; u32 w1; } words; long long int force_align[1]; } Acmd;",
+    "Light":  "typedef struct { u8 col[3]; u8 pad0; u8 colc[3]; u8 pad1; s8 dir[3]; u8 pad2; } Light_t; typedef union { Light_t l; long long int force_align[2]; } Light;",
+    "Hilite": "typedef struct { int x1, y1, x2, y2; } Hilite_t; typedef union { Hilite_t h; long long int force_align[2]; } Hilite;",
+    "uSprite": "typedef struct { s16 objX, objY; u16 scaleW, scaleH; s16 imageW, imageH; u16 paddedW, paddedH; u16 bitmapW, bitmapH; s16 imageX, imageY; u16 imageFlags; } uSprite;",
+    "CPUState": "typedef struct { u32 gpr[32]; u32 sr, pc, cause, badvaddr, sp, ra; u32 lo, hi; u32 fpr[32]; u32 fpcsr; } CPUState;",
 }
 
 N64_PRIMITIVES = {
@@ -411,12 +312,9 @@ N64_KNOWN_GLOBALS = {
     "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
     "__osRunQueue":      "struct OSThread_s *__osRunQueue;",
     "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
-    # exceptasm.cpp defines it as volatile uint32_t; match that type
     "__OSGlobalIntMask": "volatile OSHWIntr __OSGlobalIntMask;",
 }
 
-# Globals whose source files define them with correct types — never emit
-# extern long long stubs; instead emit properly-typed forward declarations.
 _TYPED_SOURCE_GLOBALS = {
     "osTvType", "osRomBase", "osResetType", "osAppNMIBuffer",
     "osClockRate", "osViModeNtscLan1", "osViModePalLan1", "osViModeMpalLan1",
@@ -424,7 +322,6 @@ _TYPED_SOURCE_GLOBALS = {
     "__OSGlobalIntMask",
 }
 
-# Correct extern declarations for typed source globals
 _TYPED_SOURCE_GLOBAL_DECLS = {
     "osTvType":         "extern u32 osTvType;",
     "osRomBase":        "extern u32 osRomBase;",
@@ -485,17 +382,15 @@ _CORE_PRIMITIVES = (
     "#define OSEvent_DEFINED\n"
     "typedef u32 OSEvent;\n"
     "#endif\n"
-    "/* FIX: Vp union member named 'vp' to match viewport.c: vp.vp.vscale */\n"
     "#ifndef Vp_DEFINED\n"
     "#define Vp_DEFINED\n"
     "typedef struct { s16 vscale[4]; s16 vtrans[4]; } Vp_t;\n"
     "typedef union { Vp_t vp; long long int force_align[4]; } Vp;\n"
     "#endif\n"
-    "/* sched_yield: include <sched.h> for C++ threading support */\n"
     "#ifdef __cplusplus\n"
     "#include <sched.h>\n"
     "#endif\n"
-    "#endif\n"
+    "#endif /* END_CORE_PRIMITIVES */\n"
 )
 
 _N64_BOOL_H_CONTENT = (
@@ -609,11 +504,6 @@ def strip_redefinition(content: str, tag: str) -> str:
     return content
 
 def repair_unterminated_conditionals(content: str) -> str:
-    """Remove opener #if blocks with no #endif.
-    FIX: Only removes blocks where the opener is immediately followed by a
-    #define — this avoids eating extern-C guards (#ifdef __cplusplus with
-    no #define after it).
-    """
     lines = content.split('\n')
     stack = []
     remove = set()
@@ -630,7 +520,7 @@ def repair_unterminated_conditionals(content: str) -> str:
         elif re.match(r'#\s*endif\b', stripped):
             if stack: stack.pop()
     for (idx, has_define) in stack:
-        if not has_define: continue  # skip bare #ifdef __cplusplus guards
+        if not has_define: continue
         remove.add(idx)
         for j in range(idx + 1, min(idx + 4, len(lines))):
             if lines[j].strip().startswith('#define') or lines[j].strip().startswith('#endif'):
@@ -656,7 +546,7 @@ def ensure_types_header_base() -> str:
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
-    content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?^#endif\b[ \t]*\n?", "", content)
+    content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?/\* END_CORE_PRIMITIVES \*/\n?", "", content)
     for p in ["u8","s8","u16","s16","u32","s32","u64","s64","f32","f64","n64_bool",
               "OSIntMask","OSTime","OSId","OSPri","OSMesg","OSHWIntr"]:
         content = re.sub(rf"\btypedef\s+[^;]+\b{re.escape(p)}\s*;", "", content)
@@ -671,6 +561,7 @@ def ensure_types_header_base() -> str:
     # Emit correctly-typed forward externs for source-defined typed globals
     if "_fwd_DEFINED" not in content:
         typed_block = "\n/* Forward declarations for source-defined typed globals */\n"
+        typed_block += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
         typed_block += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
         for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
             typed_block += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
@@ -742,12 +633,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in sr: sr.append(entry)
 
-        # typedef redefinition with different types — named or unnamed struct
-        for m in re.finditer(
-            r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+"
-            r"error:\s+typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)",
-            content
-        ):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", content):
             filepath = normalize_path(m.group(1))
             tag1, tag2 = m.group(2), m.group(3)
             if "unnamed struct" in tag1 or "unnamed struct" in tag2:
@@ -759,12 +645,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 categories.setdefault("typedef_redef", [])
                 if entry not in categories["typedef_redef"]: categories["typedef_redef"].append(entry)
 
-        # "definition of type 'X' conflicts with typedef of the same name"
-        for m in re.finditer(
-            r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+"
-            r"error:\s+definition of type '([A-Za-z0-9_]+)' conflicts with typedef",
-            content
-        ):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+definition of type '([A-Za-z0-9_]+)' conflicts with typedef", content):
             filepath = normalize_path(m.group(1))
             tag = m.group(2)
             entry = (filepath, tag)
@@ -786,34 +667,21 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             categories.setdefault("type_mismatch_globals", [])
             if (filepath, var) not in categories["type_mismatch_globals"]: categories["type_mismatch_globals"].append((filepath, var))
 
-        for m in re.finditer(
-            r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+"
-            r"error:\s+redefinition of '([A-Za-z0-9_]+)' with a different type",
-            content
-        ):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redefinition of '([A-Za-z0-9_]+)' with a different type", content):
             filepath, var = normalize_path(m.group(1)), m.group(2)
             if var in _TYPED_SOURCE_GLOBALS:
                 categories.setdefault("type_mismatch_globals", [])
                 if (filepath, var) not in categories["type_mismatch_globals"]:
                     categories["type_mismatch_globals"].append((filepath, var))
 
-        for m in re.finditer(
-            r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+"
-            r"error:\s+redefinition of '([A-Za-z0-9_]+)' as different kind of symbol",
-            content
-        ):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redefinition of '([A-Za-z0-9_]+)' as different kind of symbol", content):
             filepath, var = normalize_path(m.group(1)), m.group(2)
             if var in _TYPED_SOURCE_GLOBALS:
                 categories.setdefault("type_mismatch_globals", [])
                 if (filepath, var) not in categories["type_mismatch_globals"]:
                     categories["type_mismatch_globals"].append((filepath, var))
 
-        # struct member errors
-        for m in re.finditer(
-            r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+"
-            r"error:\s+no member named '([A-Za-z0-9_]+)' in 'struct ([A-Za-z0-9_]+)'",
-            content
-        ):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+no member named '([A-Za-z0-9_]+)' in 'struct ([A-Za-z0-9_]+)'", content):
             filepath = normalize_path(m.group(1))
             member, struct_name = m.group(2), m.group(3)
             base = struct_name[:-2] if struct_name.endswith("_s") else struct_name
@@ -821,12 +689,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             entry = (base, member)
             if entry not in categories["missing_members"]: categories["missing_members"].append(entry)
 
-        # union member errors — route to need_struct_body for known types
-        for m in re.finditer(
-            r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+"
-            r"error:\s+no member named '([A-Za-z0-9_]+)' in '(?:union )?([A-Za-z0-9_]+)'",
-            content
-        ):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+no member named '([A-Za-z0-9_]+)' in '(?:union )?([A-Za-z0-9_]+)'", content):
             member, type_name = m.group(2), m.group(3)
             if type_name in ("Vtx_n", "Vtx_t", "Vtx"): nsb.add("Vtx")
             elif type_name == "Vp": nsb.add("Vp")
@@ -849,7 +712,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             if entry not in categories["type_mismatch_globals"]:
                 categories["type_mismatch_globals"].append(entry)
 
-        # audio state types used as identifiers
         for m in re.finditer(r"error:\s+use of undeclared identifier '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content):
             nsb.add(m.group(1))
 
@@ -879,35 +741,26 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     types_content = ensure_types_header_base()
 
     # ------------------------------------------------------------------
-    # ERRNO SANITIZER — revert any ->errnum back to ->errno (we restored
-    # the struct field name; old patches wrote errnum)
+    # NATIVE ERRNO SANITIZER
     # ------------------------------------------------------------------
     if categories.get("errno_conflict"):
         for filepath in list(categories["errno_conflict"]):
-            if not os.path.exists(filepath): continue
-            original_content = read_file(filepath)
-            new_content = re.sub(r'->errnum\b', '->errno', original_content)
-            new_content = re.sub(r'\.errnum\b', '.errno', new_content)
-            if original_content != new_content:
-                write_file(filepath, new_content)
-                fixed_files.add(filepath); fixes += 1
+            if os.path.exists(filepath):
+                original_content = read_file(filepath)
+                new_content = re.sub(r'->errno\b', '->errnum', original_content)
+                new_content = re.sub(r'\.errno\b', '.errnum', new_content)
+                if original_content != new_content:
+                    write_file(filepath, new_content)
+                    fixed_files.add(filepath)
+                    fixes += 1
 
-    # ------------------------------------------------------------------
-    # Remove stubs for linkage-conflict stdlib functions
-    # ------------------------------------------------------------------
     if categories.get("linkage_conflict_funcs"):
         types_content = read_file(TYPES_HEADER)
         changed = False
         for func in categories["linkage_conflict_funcs"]:
             if func in _STDLIB_FUNCS:
-                types_content, n = re.subn(
-                    rf"(?m)^#ifndef {re.escape(func)}_DEFINED\n.*?#define {re.escape(func)}_DEFINED\nextern[^\n]+{re.escape(func)}[^\n]*\n#endif\n?",
-                    "", types_content, flags=re.DOTALL
-                )
-                types_content, n2 = re.subn(
-                    rf"(?m)^extern\s+long\s+long\s+int\s+{re.escape(func)}\s*\(\s*\)\s*;\n?",
-                    "", types_content
-                )
+                types_content, n = re.subn(rf"(?m)^#ifndef {re.escape(func)}_DEFINED\n.*?#define {re.escape(func)}_DEFINED\nextern[^\n]+{re.escape(func)}[^\n]*\n#endif\n?", "", types_content, flags=re.DOTALL)
+                types_content, n2 = re.subn(rf"(?m)^extern\s+long\s+long\s+int\s+{re.escape(func)}\s*\(\s*\)\s*;\n?", "", types_content)
                 if n + n2 > 0: changed = True
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
 
@@ -922,7 +775,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         if types_content != original_types:
             write_file(TYPES_HEADER, types_content); fixes += 1
 
-        # Emit known globals in extern "C" block
         types_content = read_file(TYPES_HEADER)
         globals_block = ""
         globals_added = False
@@ -949,9 +801,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 types_content += f"\n#ifndef {var}_DEFINED\n#define {var}_DEFINED\nextern {decl}\n#endif\n"
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # ------------------------------------------------------------------
-    # ZERO-MACRO ASSASSIN
-    # ------------------------------------------------------------------
     known_type_tags: Set[str] = set()
     for item in categories.get("missing_types", []):
         if isinstance(item,(list,tuple)) and len(item)>=2: known_type_tags.add(item[1])
@@ -1007,8 +856,14 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         for ident in sorted(categories["undeclared_identifiers"]):
             if not isinstance(ident, str) or ident in N64_KNOWN_GLOBALS: continue
             if ident in _TYPED_SOURCE_GLOBALS or ident in _STDLIB_FUNCS: continue
+            
+            if ident in ACTIVE_STRUCTS or ident in N64_OS_OPAQUE_TYPES or ident in PHASE_3_STRUCTS:
+                categories.setdefault("need_struct_body", set()).add(ident)
+                continue
+
             if ident in N64_AUDIO_STATE_TYPES:
                 categories.setdefault("need_struct_body", set()).add(ident); continue
+
             if ident in ACTIVE_MACROS:
                 if f"#define {ident}" not in types_content:
                     types_content += f"\n#ifndef {ident}\n#define {ident} {ACTIVE_MACROS[ident]}\n#endif\n"; idents_added = True
@@ -1261,7 +1116,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             if f"#include {header}" not in types_content:
                 types_content = types_content.replace("#pragma once", f"#pragma once\n#include {header}"); includes_added = True
         if includes_added:
-            # Never inject math.h — causes C++ linkage conflicts
             types_content = re.sub(r"#pragma once\n#include <math\.h>", "#pragma once", types_content)
             types_content = re.sub(r"(?m)^#include <math\.h>\n", "", types_content)
             write_file(TYPES_HEADER, types_content)
