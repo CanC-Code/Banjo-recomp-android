@@ -65,8 +65,7 @@ def main():
     print("🧹 Performing Initial Cleanse...")
 
     # === FRESH n64_types.h Generation ===
-    # Provide an empty dictionary since we don't have log categories yet
-    ensure_types_header_base({})
+    ensure_types_header_base({}) # Safely passes an empty dict
 
     print(f"\n{'='*40}\n--- Applying Initial Fixes ---\n{'='*40}")
 
