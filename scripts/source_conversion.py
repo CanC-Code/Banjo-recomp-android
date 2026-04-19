@@ -333,6 +333,7 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osViModeMpalLan1": "extern OSViMode osViModeMpalLan1;",
     "osPiRawStartDma":  "extern s32 osPiRawStartDma(s32, u32, void *, u32);",
     "osEPiRawStartDma": "extern s32 osEPiRawStartDma(struct OSPiHandle_s *, s32, u32, void *, u32);",
+    "__OSGlobalIntMask": "extern volatile OSHWIntr __OSGlobalIntMask;", # 🔧 FIX: Correctly expose tracked variable
 }
 
 _STDLIB_FUNCS = {
@@ -625,9 +626,15 @@ def _scrape_logs_into_categories(categories: dict) -> None:
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:.*errno", content):
             err.add(normalize_path(m.group(1)))
-        if "errno -> ->errnum" in content:
-            for f in os.listdir("."):
-                if f.endswith(('.c', '.cpp', '.h')): err.add(f)
+            
+        # 🔧 FIX: Deep walk for generic errno conflicts that lack a direct filepath trace
+        if "errno -> ->errnum" in content or "error: member access into incomplete type" in content and "errno" in content:
+            for base_dir in ["src", "Android/app/src/main/cpp", "."]:
+                if not os.path.exists(base_dir): continue
+                for root, _, files in os.walk(base_dir):
+                    for f in files:
+                        if f.endswith(('.c', '.cpp', '.h')):
+                            err.add(normalize_path(os.path.join(root, f)))
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+unknown type name '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
@@ -967,13 +974,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\ntypedef struct {t}_s {{ long long int force_align[64]; }} {t};\n#endif\n"; added = True
         if added: write_file(TYPES_HEADER, types_content); fixes += 1
 
-    if categories.get("extraneous_brace"):
-        types_content = read_file(TYPES_HEADER)
-        original = types_content
-        types_content = re.sub(r"struct\s+[A-Za-z_]\w*\s*\{\s*long\s+long\s+int\s+force_align\[32\];\s*\};\n", "", types_content)
-        types_content = re.sub(r"typedef\s+struct\s+([A-Za-z_]\w*)\s+\w+\s*\{", r"typedef struct \1 {", types_content)
-        if types_content != original: write_file(TYPES_HEADER, types_content); fixes += 1
-
     for item in sorted(categories.get("conflicting_types",[]), key=str):
         if not isinstance(item,(list,tuple)) or len(item)<2: continue
         filepath, func = item[0], item[1]
@@ -1027,7 +1027,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         if isinstance(item,(list,tuple)) and len(item)>=1: fixd_files.add(item[0])
 
     for filepath in sorted(fixd_files):
-        if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
+        if not os.path.exists(filepath): continue # 🔧 FIX: Removed destructive guard protecting n64_types.h from redefinition cleanup
         content  = read_file(filepath); original = content; content  = strip_auto_preamble(content)
         for item in categories.get("struct_redef",[]):
             if not isinstance(item,(list,tuple)) or len(item)<2: continue
