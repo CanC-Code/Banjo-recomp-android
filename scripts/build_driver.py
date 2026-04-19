@@ -47,30 +47,51 @@ def run_build():
             print(f"🛑 Build execution failed: {e}")
             return False
 
-def ensure_bridge_at_top(file_path):
+def ensure_bridge_included(file_path):
+    """
+    Validates inclusion without aggressively destroying include order.
+    Appends after standard library includes if insertion is necessary.
+    """
     if not os.path.exists(file_path) or file_path.endswith('.h') or "n64_types.h" in file_path:
         return False
+        
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-    bridge = '#include "ultra/n64_types.h"'
-    if content.strip().startswith(bridge):
+        
+    # Skip if already included anywhere in the file to preserve developer intent
+    if re.search(r'#include\s+["<](?:ultra/)?n64_types\.h[">]', content):
         return False
-    content = re.sub(r'#include\s+["<](?:ultra/)?n64_types\.h[">]\n?', '', content)
+
+    # Insert safely after any standard library includes, or at the top if none exist
+    bridge = '#include "ultra/n64_types.h"\n'
+    
+    last_std_include = list(re.finditer(r'#include\s+<[^>]+>\n', content))
+    if last_std_include:
+        insert_pos = last_std_include[-1].end()
+        new_content = content[:insert_pos] + bridge + content[insert_pos:]
+    else:
+        new_content = bridge + content
+        
     with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(f"{bridge}\n{content}")
-    print(f"    🌉 Forced Bridge Header to absolute top of {file_path}")
+        f.write(new_content)
+        
+    print(f"    🌉 Safely injected Bridge Header into {file_path}")
     return True
 
 def main():
     print("🧹 Performing Initial Cleanse...")
 
-    # === FRESH n64_types.h Generation ===
-    ensure_types_header_base({}) # Safely passes an empty dict
+    # State Context Dictionary: Elevated to persist across the entire pipeline execution
+    # This ensures previous fixes and parsed macros are not destroyed between loops.
+    global_context_categories = {}
+
+    # Initial type generation using the preserved context
+    ensure_types_header_base(global_context_categories)
 
     print(f"\n{'='*40}\n--- Applying Initial Fixes ---\n{'='*40}")
 
-    # Seed the initial structural types and macros (Level 3 unlocks all advanced structs)
-    fixes_applied, fixed_files = apply_fixes({}, intelligence_level=3)
+    # Seed the initial structural types and macros
+    fixes_applied, fixed_files = apply_fixes(global_context_categories, intelligence_level=3)
     print(f"🔧 Applied {fixes_applied} structural definition fixes.")
 
     # Sweep source files to ensure the bridge header is available globally
@@ -82,7 +103,7 @@ def main():
             for filename in files:
                 filepath = os.path.join(root, filename)
                 if filename.endswith(('.c', '.cpp')):
-                    ensure_bridge_at_top(filepath)
+                    ensure_bridge_included(filepath)
 
     # === Iterative self-healing loop ===
     max_iterations = 4
@@ -99,9 +120,11 @@ def main():
 
             print("\n🛠️ Applying Dynamic Self-Healing Fixes...")
 
-            # The functional engine automatically parses the logs and targets the broken files
-            categories = {}
-            fixes, modded_files = apply_fixes(categories, intelligence_level=3)
+            # Utilizing the persistent global_context_categories to prevent cyclical regression
+            fixes, modded_files = apply_fixes(global_context_categories, intelligence_level=3)
+
+            # Re-sync the base types header in case apply_fixes discovered new structural dependencies
+            ensure_types_header_base(global_context_categories)
 
             print(f"    🔧 Dynamically applied {fixes} syntax/macro fixes across {len(modded_files)} files.")
 
