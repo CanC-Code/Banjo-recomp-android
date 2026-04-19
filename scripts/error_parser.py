@@ -51,8 +51,21 @@ def load_external_logic():
                 if line.strip() and not line.startswith('#'):
                     OPAQUE_TYPES.add(line.strip())
 
+    # 4. Parse replacements.txt
+    rep_path = os.path.join(LOGIC_DIR, "replacements.txt")
+    if os.path.exists(rep_path):
+        with open(rep_path, 'r') as f:
+            for line in f:
+                if '->' in line:
+                    old, new = line.split('->', 1)
+                    REPLACEMENTS[old.strip()] = new.strip()
+
 # Initialize the logic engine
 load_external_logic()
+
+# Hardcoded Fallbacks (Only if not found in .txt files)
+if "Mtx" not in N64_STRUCT_BODIES:
+    N64_STRUCT_BODIES["Mtx"] = "typedef union { struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;"
 
 POSIX_RESERVED_NAMES = {
     "close", "open", "read", "write", "send", "recv",
@@ -79,6 +92,12 @@ def write_file(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f: f.write(content)
 
+def extract_incomplete_type(line):
+    m = re.search(r"incomplete (?:element )?type '(?:struct\s+)?([^']+)'", line)
+    if m: return m.group(1)
+    m = re.search(r"\(aka '(?:struct\s+)?([^']+)'\)", line)
+    return m.group(1) if m else None
+
 def source_path(path):
     if not path: return None
     p = path.replace("C/C++: ", "").strip()
@@ -91,10 +110,17 @@ def is_sdk_or_ndk_path(fp):
     normalized = fp.replace("\\", "/")
     return any(x in normalized.lower() for x in ["/usr/", "ndk", "libraries/adk"])
 
+def is_defined_locally(filepath, tag):
+    if not filepath or not os.path.exists(filepath): return False
+    c = read_file(filepath)
+    pattern1 = rf"typedef\s+(?:struct|union)[^{{]*\{{({BRACE_MATCH})\}}\s*[^;]*\b{re.escape(tag)}\b[^;]*;"
+    pattern2 = rf"(?:struct|union)\s+{re.escape(tag)}\s*\{{({BRACE_MATCH})\}}"
+    return bool(re.search(pattern1, c) or re.search(pattern2, c))
+
 def classify_errors(log_data):
     """
-    Scans the build log and populates categories.
-    These categories will be used by apply_fixes() in source_conversion.py
+    Unified classification engine. 
+    This is now the single source of truth for both the driver and the conversion engine.
     """
     categories = {
         "missing_types": set(),
@@ -103,10 +129,22 @@ def classify_errors(log_data):
         "need_struct_body": set(),
         "struct_redef": [],
         "typedef_redef": [],
+        "posix_reserved_conflict": [],
         "errno_conflict": set(),
         "missing_members": set(),
         "undefined_symbols": set(),
         "incomplete_sizeof": [],
+        "redefinition": set(),
+        "conflicting_types": set(),
+        "local_struct_fwd": [],
+        "local_fwd_only": [],
+        "missing_globals": set(),
+        "implicit_func": set(),
+        "actor_pointer": set(),
+        "missing_n64_types": set(),
+        "undeclared_macros": set(),
+        "undeclared_gbi": set(),
+        "static_conflict": [],
     }
 
     file_regex = r"((?:/[^:\s]+)+\.(?:c|cpp|h|cc|cxx)):"
@@ -116,23 +154,35 @@ def classify_errors(log_data):
         filepath = source_path(m_file.group(1) if m_file else None)
         if is_sdk_or_ndk_path(filepath): filepath = None
 
-        # Detect incomplete types (The catalyst for injecting your types.txt definitions)
-        m_inc = re.search(r"incomplete (?:definition|type) '(?:struct |union )?(\w+)'", line)
-        if m_inc:
-            tag = m_inc.group(1)
-            # If we have a drop-in definition, use it; otherwise, let the engine stub it.
-            categories["need_struct_body"].add(tag)
+        m_inc = re.search(r"member access into incomplete type '(?:struct|union )?(\w+)'", line)
+        if m_inc: categories["need_struct_body"].add(m_inc.group(1))
+        
+        m_inc_def = re.search(r"incomplete (?:definition|type) '(?:struct |union )?(\w+)'", line)
+        if m_inc_def: categories["need_struct_body"].add(m_inc_def.group(1))
 
-        # Detect unknown types
         m_type = re.search(r"unknown type name '(\w+)'", line)
         if m_type:
-            tag = m_type.group(1)
-            if tag in N64_STRUCT_BODIES:
-                categories["need_struct_body"].add(tag)
-            elif filepath:
-                categories["missing_types"].add((filepath, tag))
+            t = m_type.group(1)
+            if t in N64_STRUCT_BODIES: categories["need_struct_body"].add(t)
+            elif filepath: categories["missing_types"].add((filepath, t))
 
-        # Detect member access errors (Often means the struct is a stub and needs your types.txt body)
+        m_ident = re.search(r"use of undeclared identifier '(\w+)'", line)
+        if m_ident:
+            ident = m_ident.group(1)
+            if ident in KNOWN_MACROS: categories["undeclared_identifiers"].add(ident)
+            elif ident.isupper(): categories["undeclared_identifiers"].add(ident)
+            elif filepath: categories["missing_types"].add((filepath, ident))
+
+        m_func = re.search(r"implicit declaration of function '(\w+)'", line)
+        if m_func: categories["implicit_func_stubs"].add(m_func.group(1))
+
+        if "redefinition of" in line and filepath:
+            m_re = re.search(r"redefinition of '(\w+)'", line)
+            if m_re: categories["struct_redef"].append((filepath, m_re.group(1)))
+
+        if "error:" in line and "errno" in line:
+            if filepath: categories["errno_conflict"].add(filepath)
+
         m_member = re.search(r"no member named '(\w+)' in '(?:struct |union )?(\w+)'", line)
         if m_member:
             member, struct_name = m_member.group(1), m_member.group(2)
