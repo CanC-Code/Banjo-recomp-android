@@ -20,7 +20,7 @@ STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 try:
     from error_parser import (
         BRACE_MATCH, N64_STRUCT_BODIES as _EP_STRUCTS, KNOWN_MACROS as _EP_MACROS,
-        KNOWN_FUNCTION_MACROS, POSIX_RESERVED_NAMES,
+        KNOWN_FUNCTION_MACROS, POSIX_RESERVED_NAMES, OPAQUE_TYPES as _EP_OPAQUE,
         read_file as _ep_read, write_file as _ep_write,
     )
     read_file  = _ep_read
@@ -29,6 +29,7 @@ except ImportError:
     BRACE_MATCH = r"[^{}]*"
     _EP_STRUCTS = {}
     _EP_MACROS  = {}
+    _EP_OPAQUE  = set()
 
     def read_file(filepath: str) -> str:
         try:
@@ -333,7 +334,7 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osViModeMpalLan1": "extern OSViMode osViModeMpalLan1;",
     "osPiRawStartDma":  "extern s32 osPiRawStartDma(s32, u32, void *, u32);",
     "osEPiRawStartDma": "extern s32 osEPiRawStartDma(struct OSPiHandle_s *, s32, u32, void *, u32);",
-    "__OSGlobalIntMask": "extern volatile OSHWIntr __OSGlobalIntMask;", # 🔧 FIX: Correctly expose tracked variable
+    "__OSGlobalIntMask": "extern volatile OSHWIntr __OSGlobalIntMask;", 
 }
 
 _STDLIB_FUNCS = {
@@ -627,7 +628,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:.*errno", content):
             err.add(normalize_path(m.group(1)))
             
-        # 🔧 FIX: Deep walk for generic errno conflicts that lack a direct filepath trace
         if "errno -> ->errnum" in content or "error: member access into incomplete type" in content and "errno" in content:
             for base_dir in ["src", "Android/app/src/main/cpp", "."]:
                 if not os.path.exists(base_dir): continue
@@ -736,17 +736,20 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     fixed_files = set()
 
     if intelligence_level >= 3:
-        ACTIVE_MACROS   = PHASE_3_MACROS
+        ACTIVE_MACROS   = PHASE_3_MACROS.copy()
         ACTIVE_STRUCTS  = {k:v for k,v in {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}.items() if k not in SDK_DEFINES_THESE}
     elif intelligence_level == 2:
-        ACTIVE_MACROS   = PHASE_2_MACROS
+        ACTIVE_MACROS   = PHASE_2_MACROS.copy()
         ACTIVE_STRUCTS  = {k:v for k,v in _N64_OS_STRUCT_BODIES.items() if k not in SDK_DEFINES_THESE}
     else:
-        ACTIVE_MACROS   = PHASE_1_MACROS
+        ACTIVE_MACROS   = PHASE_1_MACROS.copy()
         ACTIVE_STRUCTS  = {}
 
     for k, v in _EP_STRUCTS.items():
         if k not in SDK_DEFINES_THESE: ACTIVE_STRUCTS[k] = v
+
+    ACTIVE_MACROS.update(_EP_MACROS)
+    N64_OS_OPAQUE_TYPES.update(_EP_OPAQUE)
 
     if intelligence_level >= 2:
         for tag in ACTIVE_STRUCTS.keys(): categories.setdefault("need_struct_body", set()).add(tag)
@@ -1027,7 +1030,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         if isinstance(item,(list,tuple)) and len(item)>=1: fixd_files.add(item[0])
 
     for filepath in sorted(fixd_files):
-        if not os.path.exists(filepath): continue # 🔧 FIX: Removed destructive guard protecting n64_types.h from redefinition cleanup
+        if not os.path.exists(filepath): continue
         content  = read_file(filepath); original = content; content  = strip_auto_preamble(content)
         for item in categories.get("struct_redef",[]):
             if not isinstance(item,(list,tuple)) or len(item)<2: continue
