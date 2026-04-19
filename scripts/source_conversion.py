@@ -327,7 +327,7 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osTvType":         "extern u32 osTvType;",
     "osRomBase":        "extern u32 osRomBase;",
     "osResetType":      "extern u32 osResetType;",
-    "osAppNMIBuffer":   "extern u32 osAppNMIBuffer;",  # 🔧 FIX: Matches parameters.cpp scalar definition
+    "osAppNMIBuffer":   "extern u32 osAppNMIBuffer;",
     "osClockRate":      "extern OSTime osClockRate;",
     "osViModeNtscLan1": "extern OSViMode osViModeNtscLan1;",
     "osViModePalLan1":  "extern OSViMode osViModePalLan1;",
@@ -546,10 +546,8 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
         
-        # Self-healing: Nuke file if it's deeply corrupted by an old script version
         if "CORE_PRIMITIVES_DEFINED" in content and "/* END_CORE_PRIMITIVES */" not in content:
             content = ""
-        # Self-healing: Nuke file if compiler flagged unmatched endifs inside it
         elif categories and categories.get("endif_without_if") and any("n64_types.h" in f for f in categories["endif_without_if"]):
             content = ""
 
@@ -1160,7 +1158,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             if not isinstance(sym, str) or sym.startswith("_Z") or "vtable" in sym: continue
             if sym in _STDLIB_FUNCS: continue
             
-            # --- GUARD TO PREVENT STRUCTS FROM BECOMING STUBS ---
             if sym in ACTIVE_STRUCTS or sym in N64_OS_OPAQUE_TYPES or sym in PHASE_3_STRUCTS:
                 continue
 
@@ -1218,7 +1215,29 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
-        ordered_tags = [t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set()) and t not in SDK_DEFINES_THESE]
+        
+        # 🔧 FIX: Strict Dependency Sort for C Header Injection
+        dependency_priority = {
+            "__OSBlockInfo": 1,
+            "__OSTranxInfo": 2,
+            "__OSViCommonRegs": 1,
+            "__OSViFieldRegs": 2,
+            "Vtx_t": 1,
+            "Vtx_n": 2,
+            "__OSThreadContext": 1,
+            "__Light_t": 1,
+            "__LookAtDir": 2,
+            "OSTask_t": 1
+        }
+        def struct_sort_key(t):
+            if t in dependency_priority: return dependency_priority[t]
+            if t in ("OSPiHandle", "OSViMode", "Vtx", "OSThread", "LookAt", "OSTask"): return 100
+            return 50
+
+        ordered_tags = sorted(
+            [t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set()) and t not in SDK_DEFINES_THESE],
+            key=struct_sort_key
+        )
         other_tags   = sorted([t for t in categories.get("need_struct_body", set()) if t not in ACTIVE_STRUCTS and t not in SDK_DEFINES_THESE])
 
         for tag in ordered_tags + other_tags:
@@ -1237,7 +1256,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             norm_body  = re.sub(r'\s+', ' ', body).strip(); norm_types = re.sub(r'\s+', ' ', types_content)
             if norm_body in norm_types: continue
 
-            # 🔧 FIX: Strict struct inclusion check before performing redefinition wipes
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
 
@@ -1292,7 +1310,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             if glob == "actor": continue
             if glob in _TYPED_SOURCE_GLOBALS: continue
             
-            # --- GUARD TO PREVENT STRUCTS FROM BECOMING GLOBALS ---
             if glob in ACTIVE_STRUCTS or glob in N64_OS_OPAQUE_TYPES or glob in PHASE_3_STRUCTS:
                 continue
 
