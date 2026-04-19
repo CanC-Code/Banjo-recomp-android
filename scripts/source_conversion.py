@@ -327,7 +327,7 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osTvType":         "extern u32 osTvType;",
     "osRomBase":        "extern u32 osRomBase;",
     "osResetType":      "extern u32 osResetType;",
-    "osAppNMIBuffer":   "extern u32 osAppNMIBuffer[8];",
+    "osAppNMIBuffer":   "extern u32 osAppNMIBuffer;",  # 🔧 FIX: Matches parameters.cpp scalar definition
     "osClockRate":      "extern OSTime osClockRate;",
     "osViModeNtscLan1": "extern OSViMode osViModeNtscLan1;",
     "osViModePalLan1":  "extern OSViMode osViModePalLan1;",
@@ -697,9 +697,9 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 if (filepath, var) not in categories["type_mismatch_globals"]:
                     categories["type_mismatch_globals"].append((filepath, var))
 
-        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+no member named '([A-Za-z0-9_]+)' in 'struct ([A-Za-z0-9_]+)'", content):
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(c|cpp|h)):\d+:\d+:\s+error:\s+no member named '([A-Za-z0-9_]+)' in 'struct ([A-Za-z0-9_]+)'", content):
             filepath = normalize_path(m.group(1))
-            member, struct_name = m.group(2), m.group(3)
+            member, struct_name = m.group(3), m.group(4)
             base = struct_name[:-2] if struct_name.endswith("_s") else struct_name
             categories.setdefault("missing_members", [])
             entry = (base, member)
@@ -758,6 +758,18 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     _scrape_logs_into_categories(categories)
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base(categories)
+
+    # ------------------------------------------------------------------
+    # EXCEPTASM UNION POINTER CAST FIX
+    # ------------------------------------------------------------------
+    exceptasm_path = "Android/app/src/main/cpp/ultra/exceptasm.cpp"
+    if os.path.exists(exceptasm_path):
+        e_content = read_file(exceptasm_path)
+        new_e = re.sub(r'reinterpret_cast<uint32_t\*>\(\s*__osRunningThread->context\s*\)', r'reinterpret_cast<uint32_t*>(&__osRunningThread->context)', e_content)
+        if new_e != e_content:
+            write_file(exceptasm_path, new_e)
+            fixed_files.add(exceptasm_path)
+            fixes += 1
 
     # ------------------------------------------------------------------
     # NATIVE ERRNO SANITIZER
@@ -1225,22 +1237,23 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
             norm_body  = re.sub(r'\s+', ' ', body).strip(); norm_types = re.sub(r'\s+', ' ', types_content)
             if norm_body in norm_types: continue
 
+            # 🔧 FIX: Strict struct inclusion check before performing redefinition wipes
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
 
-            if tag == "OSPiHandle":
+            if tag == "OSPiHandle" and "__OSTranxInfo_DEFINED" in body:
                 types_content = strip_redefinition(types_content, "__OSBlockInfo")
                 types_content = strip_redefinition(types_content, "__OSTranxInfo")
-            if tag == "Vtx":
+            if tag == "Vtx" and "Vtx_n" in body:
                 types_content = strip_redefinition(types_content, "Vtx_t")
                 types_content = strip_redefinition(types_content, "Vtx_n")
-            if tag == "OSThread":
+            if tag == "OSThread" and "__OSThreadContext_DEFINED" in body:
                 types_content = strip_redefinition(types_content, "__OSThreadContext")
                 types_content = re.sub(r"(?m)^typedef union __OSThreadContext_u[^;]+;\n?", "", types_content, flags=re.DOTALL)
-            if tag == "OSViMode":
+            if tag == "OSViMode" and "__OSViCommonRegs_DEFINED" in body:
                 types_content = strip_redefinition(types_content, "__OSViCommonRegs")
                 types_content = strip_redefinition(types_content, "__OSViFieldRegs")
-            if tag == "OSTask":
+            if tag == "OSTask" and "OSTask_t" in body:
                 types_content = strip_redefinition(types_content, "OSTask_t")
 
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
