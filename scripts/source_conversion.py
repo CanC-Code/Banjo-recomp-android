@@ -535,25 +535,36 @@ def normalize_path(filepath: str) -> str:
     return filepath.lstrip("/") if filepath.startswith("/") else filepath
 
 def _scrub_linkage_comments(content: str) -> str:
-    """Idempotently strips existing AUTO-FIX comments line-by-line to prevent nesting corruption."""
-    lines = content.split('\n')
-    for i, line in enumerate(lines):
-        if "AUTO-FIX LINKAGE:" in line:
-            # Strip out all known markers unconditionally from the line
-            cleaned = line.replace("/* AUTO-FIX LINKAGE:", "").replace("// AUTO-FIX LINKAGE:", "").replace("*/", "").strip()
-            lines[i] = cleaned
-    return '\n'.join(lines)
+    """Mathematically unwraps arbitrarily nested linkage comments before re-applying."""
+    # 1. Clean line-style comments first
+    content = re.sub(r'(?m)^//\s*AUTO-FIX LINKAGE:\s*', '', content)
+    # 2. Extract nested block comments from the inside out
+    while '/* AUTO-FIX LINKAGE:' in content:
+        new_content = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*(.*?)\s*\*/', r'\1', content, flags=re.DOTALL)
+        if new_content == content: break
+        content = new_content
+    return content
 
 def strip_redefinition(content: str, tag: str) -> str:
-    """Robust parser that strips struct/union definitions via bracket evaluation."""
+    """Aggressive AST-aware struct removal that eliminates body conflicts and preprocessor guards."""
     
-    # Pass 1: Parse generic typedefs targeting the tag using bracket alignment. 
+    # Pass 1: Eliminate macro guards that would silently prevent re-injection
+    content = re.sub(rf"(?m)^\s*#\s*define\s+{re.escape(tag)}(?:_s|_t|_n|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
+    
+    # Pass 2: Eliminate compact one-line forward/anonymous struct assignments
+    content = re.sub(rf"(?m)^\s*typedef\s+(?:struct|union)\s+[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;\s*$", f"/* STRIPPED FWD: {tag} */", content)
+    
+    # Pass 3: State-machine parsing to cleanly extract bracketed `{ ... }` bounds
+    pattern = re.compile(r'\b(typedef\s+(?:struct|union)|struct|union)\b[^{;]*\{')
+    new_content = ""
     idx = 0
     while True:
-        match = re.search(r"\btypedef\s+(struct|union)\b[^{]*\{", content[idx:])
+        match = pattern.search(content, idx)
         if not match:
+            new_content += content[idx:]
             break
-        start_idx = idx + match.start()
+            
+        start_idx = match.start()
         brace_idx = content.find('{', start_idx)
         
         open_braces = 1
@@ -564,36 +575,25 @@ def strip_redefinition(content: str, tag: str) -> str:
             curr_idx += 1
             
         semi_idx = content.find(';', curr_idx)
-        if semi_idx != -1 and semi_idx - curr_idx < 50:
+        
+        # Verify bounding logic: ensure no foreign structs were engulfed
+        if semi_idx != -1 and '{' not in content[curr_idx:semi_idx]:
             tail = content[curr_idx:semi_idx+1]
-            if re.search(rf"\b{re.escape(tag)}\b\s*;", tail) or re.search(rf"\b{re.escape(tag)}\b\s*\[", tail):
-                content = content[:start_idx] + f"/* STRIPPED TYPEDEF: {tag} */\n" + content[semi_idx+1:]
-                idx = start_idx
+            header = content[start_idx:brace_idx]
+            
+            if re.search(rf'\b{re.escape(tag)}\b', tail) or re.search(rf'\b{re.escape(tag)}\b', header):
+                new_content += content[idx:start_idx] + f"\n/* STRIPPED BLOCK: {tag} */\n"
+                idx = semi_idx + 1
                 continue
-        idx = start_idx + 1
-
-    # Pass 2: Parse isolated block structs.
-    idx = 0
-    while True:
-        match = re.search(rf"\b(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{", content[idx:])
-        if not match: break
-        start_idx = idx + match.start()
-        brace_idx = content.find('{', start_idx)
-        open_braces = 1
-        curr_idx = brace_idx + 1
-        while curr_idx < len(content) and open_braces > 0:
-            if content[curr_idx] == '{': open_braces += 1
-            elif content[curr_idx] == '}': open_braces -= 1
-            curr_idx += 1
-        semi_idx = content.find(';', curr_idx)
-        if semi_idx != -1 and semi_idx - curr_idx < 20:
-            content = content[:start_idx] + f"/* STRIPPED BLOCK: {tag} */\n" + content[semi_idx+1:]
-            idx = start_idx
-            continue
-        idx = start_idx + 1
-
-    # Pass 3: Destroy residual dangling forward declarations.
-    content = re.sub(rf"\btypedef\s+(?:struct\s+|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", "", content)
+                
+        # Unmatched struct body, append and continue search
+        new_content += content[idx:brace_idx+1]
+        idx = brace_idx + 1
+        
+    content = new_content
+    
+    # Pass 4: Final cleanup sweep for hanging declarations
+    content = re.sub(rf"\btypedef\s+(?:struct\s+|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED SIMPLE: {tag} */", content)
     content = re.sub(rf"\b(?:struct|union)\s+{re.escape(tag)}\s*;", "", content)
     
     return content
@@ -758,7 +758,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     # ------------------------------------------------------------------
     # PHASE 2: TYPED GLOBALS (Mandatory absolute bottom of header)
     # ------------------------------------------------------------------
-    types_content = read_file(TYPES_HEADER)
     
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
