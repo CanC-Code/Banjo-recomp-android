@@ -534,35 +534,51 @@ def normalize_path(filepath: str) -> str:
         if marker in filepath: return filepath.split(marker)[-1]
     return filepath.lstrip("/") if filepath.startswith("/") else filepath
 
-def _recursive_comment_scrubber(content: str) -> str:
-    """Restores files corrupted by nested AUTO-FIX comments to prevent illegal C syntax."""
-    # Restore lines hidden behind // AUTO-FIX LINKAGE:
-    content = re.sub(r'//\s*AUTO-FIX LINKAGE:\s*(.*?)$', r'\1', content, flags=re.MULTILINE)
-    
-    # Recursively un-nest block comments /* AUTO-FIX LINKAGE: */
-    while "/* AUTO-FIX LINKAGE:" in content:
-        new_content = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*(.*?)\s*\*/', r'\1', content, flags=re.DOTALL)
-        if new_content == content: break
-        content = new_content
-    return content.strip()
+def _scrub_linkage_comments(content: str) -> str:
+    """Idempotently strips existing AUTO-FIX comments line-by-line to prevent nesting corruption."""
+    lines = content.split('\n')
+    for i, line in enumerate(lines):
+        if "AUTO-FIX LINKAGE:" in line:
+            # Strip out all known markers unconditionally from the line
+            cleaned = line.replace("/* AUTO-FIX LINKAGE:", "").replace("// AUTO-FIX LINKAGE:", "").replace("*/", "").strip()
+            lines[i] = cleaned
+    return '\n'.join(lines)
 
 def strip_redefinition(content: str, tag: str) -> str:
-    """Aggressively clears all conflicting old definitions of a specific type. Capable of evaluating complex structs."""
+    """Robust parser that strips struct/union definitions via bracket evaluation."""
     
-    # 1. Strip entire lines holding inline/complex nested typedefs bounded to the tag.
-    # Ex: typedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;
-    pattern_line = re.compile(rf"(?m)^.*?\btypedef\s+(?:struct|union)\s*\{{.*?\}}\s*{re.escape(tag)}\s*;.*?$")
-    content = pattern_line.sub(f"/* STRIPPED LINE: {tag} */", content)
-    
-    # 2. Strip block definitions (typedef struct Tag_s { \n ... \n } Tag;)
-    pattern_block = re.compile(rf"\b(?:typedef\s+)?(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{")
+    # Pass 1: Parse generic typedefs targeting the tag using bracket alignment. 
+    idx = 0
     while True:
-        match = pattern_block.search(content)
+        match = re.search(r"\btypedef\s+(struct|union)\b[^{]*\{", content[idx:])
         if not match:
             break
-        start_idx = match.start()
+        start_idx = idx + match.start()
         brace_idx = content.find('{', start_idx)
-        if brace_idx == -1: break
+        
+        open_braces = 1
+        curr_idx = brace_idx + 1
+        while curr_idx < len(content) and open_braces > 0:
+            if content[curr_idx] == '{': open_braces += 1
+            elif content[curr_idx] == '}': open_braces -= 1
+            curr_idx += 1
+            
+        semi_idx = content.find(';', curr_idx)
+        if semi_idx != -1 and semi_idx - curr_idx < 50:
+            tail = content[curr_idx:semi_idx+1]
+            if re.search(rf"\b{re.escape(tag)}\b\s*;", tail) or re.search(rf"\b{re.escape(tag)}\b\s*\[", tail):
+                content = content[:start_idx] + f"/* STRIPPED TYPEDEF: {tag} */\n" + content[semi_idx+1:]
+                idx = start_idx
+                continue
+        idx = start_idx + 1
+
+    # Pass 2: Parse isolated block structs.
+    idx = 0
+    while True:
+        match = re.search(rf"\b(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{", content[idx:])
+        if not match: break
+        start_idx = idx + match.start()
+        brace_idx = content.find('{', start_idx)
         open_braces = 1
         curr_idx = brace_idx + 1
         while curr_idx < len(content) and open_braces > 0:
@@ -570,13 +586,14 @@ def strip_redefinition(content: str, tag: str) -> str:
             elif content[curr_idx] == '}': open_braces -= 1
             curr_idx += 1
         semi_idx = content.find(';', curr_idx)
-        if semi_idx != -1 and semi_idx - curr_idx < 15:
+        if semi_idx != -1 and semi_idx - curr_idx < 20:
             content = content[:start_idx] + f"/* STRIPPED BLOCK: {tag} */\n" + content[semi_idx+1:]
-        else:
-            break
-            
-    # 3. Strip dangling residual typedef declarations
-    content = re.sub(rf"\btypedef\s+(?:struct|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", "", content)
+            idx = start_idx
+            continue
+        idx = start_idx + 1
+
+    # Pass 3: Destroy residual dangling forward declarations.
+    content = re.sub(rf"\btypedef\s+(?:struct\s+|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", "", content)
     content = re.sub(rf"\b(?:struct|union)\s+{re.escape(tag)}\s*;", "", content)
     
     return content
@@ -667,14 +684,11 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
         
-        # Pull linkage errors for fixing
+        # Scrape dynamically missing linkage/body constraints.
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage", content):
             categories.setdefault("linkage_conflict_files", set()).add((normalize_path(m.group(1)), m.group(2)))
-        
-        # Scrape dynamically missing type/body definitions
         for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
             categories.setdefault("need_struct_body", set()).add(m.group(1))
-
         for m in re.finditer(r"error: member access into incomplete type '(?:struct|union )?(\w+)'", content):
             categories.setdefault("need_struct_body", set()).add(m.group(1))
 
@@ -689,57 +703,49 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     if patch_synth_internals(): fixes += 1
     if patch_exceptasm(): fixes += 1
 
-    # Dependency Map: Lower numbers strictly execute first so inner variables are known by exterior wrappers.
-    dependency_priority = {
-        "__OSBlockInfo": 1, 
-        "__OSTranxInfo": 2, 
-        "OSPiHandle": 3,
-        "__OSViCommonRegs": 1, 
-        "__OSViFieldRegs": 2, 
-        "OSViMode": 3, 
-        "OSViContext": 4,
-        "__OSThreadContext": 1, 
-        "OSThread": 2, 
-        "OSMesgQueue": 3, 
-        "OSMesgHdr": 4, 
-        "OSIoMesg": 5, 
-        "OSPfs": 6, 
-        "OSDevMgr": 6, 
-        "OSTimer": 6,
-        "Vtx_t": 1, 
-        "Vtx_n": 2, 
-        "Vtx": 3,
-        "Light_t": 1, 
-        "Light": 2,
-        "Hilite_t": 1, 
-        "Hilite": 2,
-        "LookAt": 1,
-        "Mtx": 1,
-        "OSTask_t": 1, 
-        "OSTask": 2,
-    }
+    # Dependency Map Graph
+    # Level 1 primitives inject first to cascade into complex wrappers down the line. 
+    ORDERED_STRUCT_TAGS = [
+        # Primitives
+        "Mtx", "LookAt", "Hilite_t", "Light_t", "__OSBlockInfo", "__OSViCommonRegs", "__OSViFieldRegs", 
+        "__OSThreadContext", "Vtx_t", "Vtx_n", "OSContStatus", "OSContPad", "OSTask_t", "Gfx", "Acmd", "uSprite", "CPUState",
+        # Level 1
+        "__OSTranxInfo", "OSViMode", "OSThread", "Vtx", "Hilite", "Light", "OSTask",
+        # Level 2
+        "OSPiHandle", "OSMesgQueue", "OSViContext",
+        # Level 3
+        "OSMesgHdr",
+        # Level 4
+        "OSIoMesg",
+        # Level 5
+        "OSPfs", "OSDevMgr", "OSTimer"
+    ]
 
     # ------------------------------------------------------------------
     # PHASE 1: STRUCTS (Bottom-up priority for cascading visibility)
     # ------------------------------------------------------------------
     types_content = read_file(TYPES_HEADER)
     
-    # Process dynamically pulled errors alongside foundational requirements.
-    target_tags = set(_N64_OS_STRUCT_BODIES.keys()) | set(PHASE_3_STRUCTS.keys())
+    target_tags = set(ALL_STRUCTS.keys())
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE}
 
-    def struct_sort_key(t):
-        return dependency_priority.get(t, 100)
+    # Evaluate everything listed in ORDERED_STRUCT_TAGS exactly as written.
+    for tag in ORDERED_STRUCT_TAGS:
+        if tag in target_tags:
+            types_content = strip_redefinition(types_content, tag)
+            if tag in ALL_STRUCTS:
+                types_content += f"\n{ALL_STRUCTS[tag]}\n"
+            elif tag in N64_OS_OPAQUE_TYPES:
+                types_content += "\n" + _opaque_stub(tag)
+            elif tag in N64_AUDIO_STATE_TYPES:
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+            target_tags.remove(tag)
 
-    ordered_tags = sorted(list(target_tags), key=struct_sort_key)
-
-    for tag in ordered_tags:
-        # Strip all legacy/conflicting definitions.
+    # Dump any residual structures identified outside the core dependency list. 
+    for tag in list(target_tags):
         types_content = strip_redefinition(types_content, tag)
-        
-        # Inject standard components dynamically.
         if tag in ALL_STRUCTS:
             types_content += f"\n{ALL_STRUCTS[tag]}\n"
         elif tag in N64_OS_OPAQUE_TYPES:
@@ -754,7 +760,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     # ------------------------------------------------------------------
     types_content = read_file(TYPES_HEADER)
     
-    # Completely remove previous typed global bounds floating within the header body.
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
         types_content = re.sub(rf"#ifndef {re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
@@ -776,8 +781,8 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         for filepath, func in categories["linkage_conflict_files"]:
             if os.path.exists(filepath):
                 c = read_file(filepath)
-                # SCRUB corrupted nested block-comments backwards.
-                c = _recursive_comment_scrubber(c)
+                c = _scrub_linkage_comments(c)
+                
                 # Apply safe idempotent line-style linkage fix over the restored syntax.
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
