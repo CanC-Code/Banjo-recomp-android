@@ -1,2 +1,7 @@
+__osPiTable = struct OSPiHandle_s *__osPiTable;
 __osFlashHandle = struct OSPiHandle_s *__osFlashHandle;
 __osSfHandle = struct OSPiHandle_s *__osSfHandle;
+__osCurrentThread = struct OSThread_s *__osCurrentThread;
+__osRunQueue = struct OSThread_s *__osRunQueue;
+__osFaultedThread = struct OSThread_s *__osFaultedThread;
+__OSGlobalIntMask = volatile unsigned int __OSGlobalIntMask;
