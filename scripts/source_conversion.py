@@ -413,6 +413,10 @@ _N64_BOOL_H_CONTENT = (
 # Utility Helpers
 # ---------------------------------------------------------------------------
 def normalize_path(filepath: str) -> str:
+    # Resolve multi-level relative skips cleanly first
+    if ".." in filepath:
+        filepath = os.path.normpath(filepath).replace('\\', '/')
+        
     for marker in ["Banjo-recomp-android/", "Android/app/"]:
         if marker in filepath: return filepath.split(marker)[-1]
     return filepath.lstrip("/") if filepath.startswith("/") else filepath
@@ -620,6 +624,20 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
 
+        # 🔧 FIX: Deep scan for C vs C++ standard library linkage collisions
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            m = re.search(r"error:\s+declaration of '([A-Za-z0-9_]+)' has a different language linkage", line)
+            if m:
+                func = m.group(1)
+                categories.setdefault("linkage_conflict_funcs", set()).add(func)
+                # Lookahead to catch the exact external file throwing the initial linkage assignment
+                for j in range(i + 1, min(i + 6, len(lines))):
+                    m_note = re.search(r"^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+note:\s+previous declaration", lines[j])
+                    if m_note:
+                        categories.setdefault("linkage_conflict_files", set()).add((normalize_path(m_note.group(1)), func))
+                        break
+
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+#endif without #if", content):
             endifs.add(normalize_path(m.group(1)))
 
@@ -716,10 +734,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
 
         for m in re.finditer(r"error:\s+no member named '(\w+)' in 'Vtx'", content): nsb.add("Vtx")
 
-        for m in re.finditer(r"error:\s+declaration of '([A-Za-z0-9_]+)' has a different language linkage", content):
-            categories.setdefault("linkage_conflict_funcs", set())
-            categories["linkage_conflict_funcs"].add(m.group(1))
-
         for m in re.finditer(r"error:\s+redefinition of '__OSGlobalIntMask'", content):
             categories.setdefault("type_mismatch_globals", [])
             entry = ("Android/app/src/main/cpp/ultra/exceptasm.cpp", "__OSGlobalIntMask")
@@ -783,6 +797,9 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                     fixed_files.add(filepath)
                     fixes += 1
 
+    # ------------------------------------------------------------------
+    # STANDARD C LINKAGE COLLISION HANDLER
+    # ------------------------------------------------------------------
     if categories.get("linkage_conflict_funcs"):
         types_content = read_file(TYPES_HEADER)
         changed = False
@@ -792,6 +809,20 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 types_content, n2 = re.subn(rf"(?m)^extern\s+long\s+long\s+int\s+{re.escape(func)}\s*\(\s*\)\s*;\n?", "", types_content)
                 if n + n2 > 0: changed = True
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # External File Linkage Purger
+    if categories.get("linkage_conflict_files"):
+        for filepath, func in categories["linkage_conflict_files"]:
+            if func in _STDLIB_FUNCS and os.path.exists(filepath):
+                c = read_file(filepath)
+                # Intentionally suppress the bad declaration directly in the remote header
+                c_new, n = re.subn(rf"(?m)^(.*?\b{re.escape(func)}\s*\(.*?;)", r"/* AUTO-FIX LINKAGE: \1 */", c)
+                if n > 0:
+                    if "#include <math.h>" not in c_new and func in {"sinf", "cosf", "sqrtf", "sin", "cos", "sqrt", "tan", "tanf", "acosf", "asinf", "atanf", "atan2f"}:
+                        c_new = "#include <math.h>\n" + c_new
+                    write_file(filepath, c_new)
+                    fixed_files.add(filepath)
+                    fixes += 1
 
     if intelligence_level >= 2:
         original_types = types_content
@@ -1216,7 +1247,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
         
-        # 🔧 FIX: Strict Dependency Sort for C Header Injection
+        # 🔧 Strict Dependency Sort for C Header Injection
         dependency_priority = {
             "__OSBlockInfo": 1,
             "__OSTranxInfo": 2,
