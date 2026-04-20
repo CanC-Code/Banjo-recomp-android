@@ -402,6 +402,7 @@ PHASE_3_STRUCTS = {
 N64_PRIMITIVES = {
     "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
     "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg",
+    "OSHWIntr", "ADPCM_STATE", "OSYieldResult", "OSEvent", "Vp_t", "Vp"
 }
 
 N64_OS_OPAQUE_TYPES = {
@@ -648,8 +649,10 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
         content = read_file(TYPES_HEADER)
     else: content = ""
     
-    # Rigorous self-healing: if the macro isn't there, the primitives were corrupted or deleted. Force inject.
-    if "CORE_PRIMITIVES_DEFINED" not in content:
+    # Rigorous self-healing: if the macro isn't there, or primitives were corrupted.
+    if "CORE_PRIMITIVES_DEFINED" not in content or "typedef uint8_t  u8;" not in content:
+        # Surgically remove corrupted partial blocks if they exist
+        content = re.sub(r'(?m)^#include <stdint\.h>\n#ifndef CORE_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\n?', '', content)
         content = content.replace("#pragma once", "").strip()
         content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
     
@@ -711,7 +714,9 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     target_tags = set(ALL_STRUCTS.keys())
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
-    target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE}
+        
+    # CRITICAL FIX: Ensure Primitives completely bypass the AST stripper logic 
+    target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
 
     for tag in ORDERED_STRUCT_TAGS:
         if tag in target_tags:
