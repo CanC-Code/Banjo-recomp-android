@@ -113,21 +113,15 @@ PHASE_2_MACROS = {
 
 PHASE_3_MACROS = {
     **PHASE_2_MACROS,
-    # GBI on/off
     "G_ON": "1", "G_OFF": "0",
-    # Tile descriptors
     "G_TX_RENDERTILE": "0", "G_TX_LOADTILE":   "7",
     "G_TX_NOMIRROR":   "0", "G_TX_WRAP":       "0",
     "G_TX_CLAMP":      "0x4", "G_TX_NOMASK":     "0",
     "G_TX_NOLOD":      "0",
-    # Color combiner slots — these are positional integers used in
-    # gDPSetCombineLERP / gsDPSetCombineMode as enum-like constants.
-    # They MUST be plain integer defines, not enums, so gbi.h macros expand correctly.
     "COMBINED":       "0", "TEXEL0":         "1",
     "TEXEL1":         "2", "PRIMITIVE":      "3",
     "SHADE":          "4", "ENVIRONMENT":    "5",
     "TEXEL0_ALPHA":   "1", "PRIMITIVE_ALPHA":"6",
-    # Render modes (simplified pass-through values)
     "G_RM_AA_ZB_OPA_SURF":  "0x00000000", "G_RM_AA_ZB_OPA_SURF2": "0x00000000",
     "G_RM_AA_ZB_XLU_SURF":  "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000",
     "G_RM_PASS":            "0x00000000",
@@ -138,7 +132,6 @@ PHASE_3_MACROS = {
     "G_ZBUFFER": "0x00000001", "G_SHADE": "0x00000004",
     "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
     "G_CC_DECALRGBA": "0",
-    # Image format constants used in gsDPSetTile
     "G_IM_FMT_RGBA": "0", "G_IM_FMT_YUV": "1", "G_IM_FMT_CI": "2",
     "G_IM_FMT_IA":   "3", "G_IM_FMT_I":   "4",
     "G_IM_SIZ_4b":  "0", "G_IM_SIZ_8b":  "1",
@@ -146,12 +139,7 @@ PHASE_3_MACROS = {
 }
 
 # ---------------------------------------------------------------------------
-# Audio DSP state typedef block injected into synthInternals.h
-# These types MUST be visible before synthInternals.h struct fields are parsed.
-# Injecting into n64_types.h alone is insufficient because synthInternals.h is
-# included DIRECTLY by audio source files (not through n64_types.h), so Clang
-# sees the field declarations before the -include pre-header applies within
-# the already-opened header chain.
+# Audio DSP state typedef block
 # ---------------------------------------------------------------------------
 _AUDIO_STATE_PREAMBLE = """\
 /* AUTO-INJECTED by patch_engine.py: N64 audio DSP state forward typedefs */
@@ -392,7 +380,6 @@ PHASE_3_STRUCTS = {
     "Hilite": "#ifndef Hilite_DEFINED\n#define Hilite_DEFINED\ntypedef union { Hilite_t h; long long int force_align[2]; } Hilite;\n#endif",
     "uSprite": "#ifndef uSprite_DEFINED\n#define uSprite_DEFINED\ntypedef struct { s16 objX, objY; u16 scaleW, scaleH; s16 imageW, imageH; u16 paddedW, paddedH; u16 bitmapW, bitmapH; s16 imageX, imageY; u16 imageFlags; } uSprite;\n#endif",
     "CPUState": "#ifndef CPUState_DEFINED\n#define CPUState_DEFINED\ntypedef struct { u32 gpr[32]; u32 sr, pc, cause, badvaddr, sp, ra; u32 lo, hi; u32 fpr[32]; u32 fpcsr; } CPUState;\n#endif",
-    # Game-specific types found in core2/ source
     "Struct_core2_7AF80_1": (
         "#ifndef Struct_core2_7AF80_1_DEFINED\n"
         "#define Struct_core2_7AF80_1_DEFINED\n"
@@ -441,10 +428,6 @@ N64_KNOWN_GLOBALS = {
     "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
     "__osRunQueue":      "struct OSThread_s *__osRunQueue;",
     "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
-    # Declare as plain u32 (volatile stripped) to match source definitions
-    # exceptasm.cpp defines it as `volatile uint32_t` — we must NOT emit any
-    # extern declaration for this symbol from n64_types.h; instead we patch
-    # exceptasm.cpp directly to remove the conflicting volatile qualifier.
     "__OSGlobalIntMask": "u32 __OSGlobalIntMask;",
 }
 
@@ -466,8 +449,6 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osViModeMpalLan1": "extern OSViMode osViModeMpalLan1;",
     "osPiRawStartDma":  "extern s32 osPiRawStartDma(s32, u32, void *, u32);",
     "osEPiRawStartDma": "extern s32 osEPiRawStartDma(struct OSPiHandle_s *, s32, u32, void *, u32);",
-    # Do NOT declare __OSGlobalIntMask here — it's defined in exceptasm.cpp
-    # and initialize.c. We patch those files instead.
 }
 
 _STDLIB_FUNCS = {
@@ -675,65 +656,33 @@ def clean_conflicting_typedefs():
     if content != original: write_file(TYPES_HEADER, content)
 
 def _find_synth_internals() -> Optional[str]:
-    """Locate synthInternals.h on disk regardless of relative-path form in the log."""
-    candidates = [
-        SYNTH_INTERNALS_H,
-        SYNTH_INTERNALS_H_ALT,
-        "include/synthInternals.h",
-    ]
-    # Also search under include/
+    candidates = [SYNTH_INTERNALS_H, SYNTH_INTERNALS_H_ALT, "include/synthInternals.h"]
     for root, _, files in os.walk("include"):
         for f in files:
             if f == "synthInternals.h":
                 candidates.append(os.path.join(root, f))
     for c in candidates:
-        if os.path.exists(c):
-            return c
+        if os.path.exists(c): return c
     return None
 
 def patch_synth_internals() -> bool:
-    """
-    Prepend audio state typedefs to synthInternals.h so RESAMPLE_STATE,
-    POLEF_STATE and ENVMIX_STATE are always defined before struct fields
-    reference them, regardless of include order.
-    """
     path = _find_synth_internals()
     if not path:
         logger.warning("synthInternals.h not found — audio state types cannot be injected at source")
         return False
     content = read_file(path)
-    if "N64_AUDIO_STATES_DEFINED" in content:
-        return False  # already patched
+    if "N64_AUDIO_STATES_DEFINED" in content: return False
     write_file(path, _AUDIO_STATE_PREAMBLE + content)
     logger.info(f"Patched audio state typedefs into {path}")
     return True
 
 def patch_exceptasm() -> bool:
-    """
-    Fix exceptasm.cpp: it defines __OSGlobalIntMask as `volatile uint32_t`
-    but n64_types.h declares it as `extern u32` (non-volatile).
-    Clang treats volatile and non-volatile as distinct types and rejects the
-    redefinition. Solution: remove the volatile qualifier from the definition
-    in exceptasm.cpp so it matches the extern declaration.
-    """
     path = "Android/app/src/main/cpp/ultra/exceptasm.cpp"
-    if not os.path.exists(path):
-        return False
+    if not os.path.exists(path): return False
     content = read_file(path)
     original = content
-
-    # Remove volatile from the __OSGlobalIntMask definition line
-    content = re.sub(
-        r'\bvolatile\s+(uint32_t|u32)\s+(__OSGlobalIntMask\s*=)',
-        r'\1 \2',
-        content
-    )
-    # Also fix the reinterpret_cast union pointer pattern if still present
-    content = re.sub(
-        r'reinterpret_cast<uint32_t\*>\(\s*__osRunningThread->context\s*\)',
-        r'reinterpret_cast<uint32_t*>(&__osRunningThread->context)',
-        content
-    )
+    content = re.sub(r'\bvolatile\s+(uint32_t|u32)\s+(__OSGlobalIntMask\s*=)', r'\1 \2', content)
+    content = re.sub(r'reinterpret_cast<uint32_t\*>\(\s*__osRunningThread->context\s*\)', r'reinterpret_cast<uint32_t*>(&__osRunningThread->context)', content)
     if content != original:
         write_file(path, content)
         logger.info(f"Patched volatile __OSGlobalIntMask in {path}")
@@ -741,45 +690,31 @@ def patch_exceptasm() -> bool:
     return False
 
 def patch_dialog_missing_include() -> bool:
-    """
-    src/core2/gc/dialog.c fails with `unknown type name 'u8'` because it
-    defines a struct without including n64_types.h. Force-include it.
-    """
     path = "src/core2/gc/dialog.c"
-    if not os.path.exists(path):
-        return False
+    if not os.path.exists(path): return False
     content = read_file(path)
-    if 'n64_types.h"' in content or '<n64_types.h>' in content:
-        return False
+    if 'n64_types.h"' in content or '<n64_types.h>' in content: return False
     write_file(path, '#include "ultra/n64_types.h"\n' + content)
     logger.info(f"Injected n64_types.h include into {path}")
     return True
 
 def ensure_types_header_base(categories: Optional[dict] = None) -> str:
-    if categories is None:
-        categories = {}
-
+    if categories is None: categories = {}
     if os.path.exists(TYPES_HEADER):
         content = read_file(TYPES_HEADER)
-
-        if "CORE_PRIMITIVES_DEFINED" in content and "/* END_CORE_PRIMITIVES */" not in content:
-            content = ""
-        elif categories and categories.get("endif_without_if") and any("n64_types.h" in f for f in categories["endif_without_if"]):
-            content = ""
-
+        if "CORE_PRIMITIVES_DEFINED" in content and "/* END_CORE_PRIMITIVES */" not in content: content = ""
+        elif categories and categories.get("endif_without_if") and any("n64_types.h" in f for f in categories["endif_without_if"]): content = ""
         if content:
             content = content.replace('#include "ultra/n64_types.h"\n', '')
             if "#pragma once" not in content: content = "#pragma once\n" + content
-    else:
-        content = ""
+    else: content = ""
 
     if not content:
         content = "#pragma once\n\n/* AUTO-GENERATED N64 compatibility types */\n\n"
         os.makedirs(os.path.dirname(TYPES_HEADER), exist_ok=True)
 
     content = re.sub(r"(?m)^#ifndef CORE_PRIMITIVES_DEFINED\b[\s\S]*?/\* END_CORE_PRIMITIVES \*/\n?", "", content)
-    for p in ["u8","s8","u16","s16","u32","s32","u64","s64","f32","f64","n64_bool",
-              "OSIntMask","OSTime","OSId","OSPri","OSMesg","OSHWIntr"]:
+    for p in ["u8","s8","u16","s16","u32","s32","u64","s64","f32","f64","n64_bool", "OSIntMask","OSTime","OSId","OSPri","OSMesg","OSHWIntr"]:
         content = re.sub(rf"\btypedef\s+[^;]+\b{re.escape(p)}\s*;", "", content)
     for p in ["OSIntMask","OSTime","OSId","OSPri","OSMesg","OSHWIntr"]:
         content = re.sub(rf"(?:typedef\s+)?(?:struct\s+|union\s+)?{re.escape(p)}(?:_s)?\s*\{{[^}}]*\}}\s*(?:{re.escape(p)}\s*)?;?\n?", "", content)
@@ -795,21 +730,17 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
 
 def _emit_n64_bool_h():
     shim_locations = [os.path.join(os.path.dirname(TYPES_HEADER), "n64_bool.h")]
-    for candidate in ["include/core2/n64_bool.h",
-                      "Android/app/src/main/cpp/../../../../../include/core2/n64_bool.h"]:
-        if os.path.isdir(os.path.dirname(candidate)):
-            shim_locations.append(candidate)
+    for candidate in ["include/core2/n64_bool.h", "Android/app/src/main/cpp/../../../../../include/core2/n64_bool.h"]:
+        if os.path.isdir(os.path.dirname(candidate)): shim_locations.append(candidate)
     for path in shim_locations:
         if not os.path.exists(path):
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 write_file(path, _N64_BOOL_H_CONTENT)
-            except Exception:
-                pass
+            except Exception: pass
 
 def _scrape_logs_into_categories(categories: dict) -> None:
-    log_candidates = ["Android/failed_files.log", "Android/full_build_log.txt",
-                      "full_build_log.txt", "build_log.txt", "Android/build_log.txt"]
+    log_candidates = ["Android/failed_files.log", "Android/full_build_log.txt", "full_build_log.txt", "build_log.txt", "Android/build_log.txt"]
     for f in os.listdir("."):
         if f.endswith((".txt", ".log")): log_candidates.append(f)
 
@@ -861,8 +792,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 if not os.path.exists(base_dir): continue
                 for root, _, files in walk_dir(base_dir):
                     for f in files:
-                        if f.endswith(('.c', '.cpp', '.h')):
-                            err.add(normalize_path(os.path.join(root, f)))
+                        if f.endswith(('.c', '.cpp', '.h')): err.add(normalize_path(os.path.join(root, f)))
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+unknown type name '(\w+)'", content):
             filepath, tag = normalize_path(m.group(1)), m.group(2)
@@ -902,8 +832,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             entry = (normalize_path(m.group(1)), m.group(2))
             if entry not in sr: sr.append(entry)
         for m in re.finditer(r"n64_types\.h:\d+:\d+:\s+error:\s+typedef redefinition.*?'(?:struct|union )?(\w+)'", content): nsb.add(m.group(1))
-        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+use of undeclared identifier '(\w+)'", content):
-            ui.add(m.group(2))
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+use of undeclared identifier '(\w+)'", content): ui.add(m.group(2))
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+implicit declaration of function '(\w+)'", content): ifs.add(m.group(2))
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+member access into incomplete type '(?:struct|union )?(\w+)'", content): nsb.add(m.group(2))
         for m in re.finditer(r"error:\s+member reference (?:base )?type '.*?' is not a (?:pointer|structure or union)\n([^\n]+)\n", content):
@@ -919,15 +848,13 @@ def _scrape_logs_into_categories(categories: dict) -> None:
             filepath, var = normalize_path(m.group(1)), m.group(2)
             if var in _TYPED_SOURCE_GLOBALS:
                 categories.setdefault("type_mismatch_globals", [])
-                if (filepath, var) not in categories["type_mismatch_globals"]:
-                    categories["type_mismatch_globals"].append((filepath, var))
+                if (filepath, var) not in categories["type_mismatch_globals"]: categories["type_mismatch_globals"].append((filepath, var))
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+redefinition of '([A-Za-z0-9_]+)' as different kind of symbol", content):
             filepath, var = normalize_path(m.group(1)), m.group(2)
             if var in _TYPED_SOURCE_GLOBALS:
                 categories.setdefault("type_mismatch_globals", [])
-                if (filepath, var) not in categories["type_mismatch_globals"]:
-                    categories["type_mismatch_globals"].append((filepath, var))
+                if (filepath, var) not in categories["type_mismatch_globals"]: categories["type_mismatch_globals"].append((filepath, var))
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_]+\.(c|cpp|h)):\d+:\d+:\s+error:\s+no member named '([A-Za-z0-9_]+)' in 'struct ([A-Za-z0-9_]+)'", content):
             filepath = normalize_path(m.group(1))
@@ -949,30 +876,15 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                 if entry not in categories["missing_members"]: categories["missing_members"].append(entry)
 
         for m in re.finditer(r"error:\s+no member named '(\w+)' in 'Vtx'", content): nsb.add("Vtx")
-
-        # __OSGlobalIntMask redefinition — handled by patch_exceptasm()
         for m in re.finditer(r"error:\s+redefinition of '__OSGlobalIntMask'", content):
             categories.setdefault("type_mismatch_globals", [])
             entry = ("Android/app/src/main/cpp/ultra/exceptasm.cpp", "__OSGlobalIntMask")
-            if entry not in categories["type_mismatch_globals"]:
-                categories["type_mismatch_globals"].append(entry)
-
-        # Audio DSP state types
-        for m in re.finditer(r"error:\s+use of undeclared identifier '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content):
-            nsb.add(m.group(1))
-        for m in re.finditer(r"error:\s+unknown type name '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content):
-            nsb.add(m.group(1))
-
-        # GBI constants used in static initializers — "initializer element is not a compile-time constant"
-        # This means gsDPPipeSync() or similar GBI gs-macros are non-constant.
-        # Flag the file for inspection but we can't auto-fix static array GBI usage;
-        # best we can do is ensure the constant macros are defined.
+            if entry not in categories["type_mismatch_globals"]: categories["type_mismatch_globals"].append(entry)
+        for m in re.finditer(r"error:\s+use of undeclared identifier '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content): nsb.add(m.group(1))
+        for m in re.finditer(r"error:\s+unknown type name '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content): nsb.add(m.group(1))
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+initializer element is not a compile-time constant", content):
             categories.setdefault("gbi_static_init_files", set()).add(normalize_path(m.group(1)))
 
-    # ====================================================================
-    # TRANSITIVE DEPENDENCY RESOLVER
-    # ====================================================================
     deps = {
         "OSPiHandle": ["__OSTranxInfo", "__OSBlockInfo"],
         "__OSTranxInfo": ["__OSBlockInfo"],
@@ -996,12 +908,6 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                     if d not in categories["need_struct_body"]:
                         categories["need_struct_body"].add(d)
                         added_transitive = True
-
-    # Aggressively nuke old Vtx compound lines from n64_types.h if they exist
-    if os.path.exists(TYPES_HEADER):
-        types_content = read_file(TYPES_HEADER)
-        types_content, n = re.subn(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*Vtx_t;\s*typedef\s+union\s*\{[^}]*\}\s*Vtx;\n?", "", types_content)
-        if n > 0: write_file(TYPES_HEADER, types_content)
 
 def walk_dir(base_dir: str):
     return os.walk(base_dir)
@@ -1038,88 +944,46 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base(categories)
 
-    # ------------------------------------------------------------------
-    # FIX 0: Patch synthInternals.h with audio state typedefs FIRST.
-    # This must run before any other fix so that the types exist for the
-    # audio source files that include synthInternals.h directly.
-    # ------------------------------------------------------------------
     if patch_synth_internals():
         fixed_files.add(_find_synth_internals() or "synthInternals.h")
         fixes += 1
 
-    # Also inject into n64_types.h (belt-and-suspenders for files that only
-    # see the -include pre-header without explicitly including synthInternals.h)
     types_content = read_file(TYPES_HEADER)
     if "N64_AUDIO_STATES_DEFINED" not in types_content:
-        # Insert after CORE_PRIMITIVES block
         insert_after = "/* END_CORE_PRIMITIVES */"
         if insert_after in types_content:
             types_content = types_content.replace(insert_after, insert_after + "\n" + _AUDIO_STATE_PREAMBLE, 1)
         else:
             types_content += "\n" + _AUDIO_STATE_PREAMBLE
-        write_file(TYPES_HEADER, types_content)
-        fixes += 1
+        write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # ------------------------------------------------------------------
-    # FIX 1: Patch exceptasm.cpp — remove volatile from __OSGlobalIntMask
-    # ------------------------------------------------------------------
-    if patch_exceptasm():
-        fixed_files.add("Android/app/src/main/cpp/ultra/exceptasm.cpp")
-        fixes += 1
+    if patch_exceptasm(): fixed_files.add("Android/app/src/main/cpp/ultra/exceptasm.cpp"); fixes += 1
+    if patch_dialog_missing_include(): fixed_files.add("src/core2/gc/dialog.c"); fixes += 1
 
-    # ------------------------------------------------------------------
-    # FIX 2: Patch dialog.c — inject missing n64_types.h include
-    # ------------------------------------------------------------------
-    if patch_dialog_missing_include():
-        fixed_files.add("src/core2/gc/dialog.c")
-        fixes += 1
-
-    # ------------------------------------------------------------------
-    # FLOAT VOID-POINTER INITIALIZATION SANITIZER
-    # ------------------------------------------------------------------
     if categories.get("f32_null_init"):
         for filepath in categories["f32_null_init"]:
             if os.path.exists(filepath):
                 c = read_file(filepath)
                 c_new = re.sub(r'\{NULL,\s*NULL\}', '{0.0f, 0.0f}', c)
                 c_new = re.sub(r'=\s*NULL;', '= 0.0f;', c_new)
-                if c_new != c:
-                    write_file(filepath, c_new)
-                    fixed_files.add(filepath)
-                    fixes += 1
+                if c_new != c: write_file(filepath, c_new); fixed_files.add(filepath); fixes += 1
 
-    # ------------------------------------------------------------------
-    # EXCEPTASM UNION POINTER CAST FIX
-    # ------------------------------------------------------------------
     exceptasm_path = "Android/app/src/main/cpp/ultra/exceptasm.cpp"
     if os.path.exists(exceptasm_path):
         e_content = read_file(exceptasm_path)
         new_e = re.sub(r'reinterpret_cast<uint32_t\*>\(\s*__osRunningThread->context\s*\)', r'reinterpret_cast<uint32_t*>(&__osRunningThread->context)', e_content)
-        if new_e != e_content:
-            write_file(exceptasm_path, new_e)
-            fixed_files.add(exceptasm_path)
-            fixes += 1
+        if new_e != e_content: write_file(exceptasm_path, new_e); fixed_files.add(exceptasm_path); fixes += 1
 
-    # ------------------------------------------------------------------
-    # NATIVE ERRNO SANITIZER
-    # ------------------------------------------------------------------
     if categories.get("errno_conflict"):
         for filepath in list(categories["errno_conflict"]):
             if os.path.exists(filepath):
-                original_content = read_file(filepath)
-                new_content = re.sub(r'->errno\b', '->errnum', original_content)
-                new_content = re.sub(r'\.errno\b', '.errnum', new_content)
-                if original_content != new_content:
-                    write_file(filepath, new_content)
-                    fixed_files.add(filepath)
-                    fixes += 1
+                c = read_file(filepath)
+                new_c = re.sub(r'->errno\b', '->errnum', c)
+                new_c = re.sub(r'\.errno\b', '.errnum', new_c)
+                if c != new_c: write_file(filepath, new_c); fixed_files.add(filepath); fixes += 1
 
-    # ------------------------------------------------------------------
-    # STANDARD C LINKAGE COLLISION HANDLER
-    # ------------------------------------------------------------------
     if categories.get("linkage_conflict_funcs"):
-        types_content = read_file(TYPES_HEADER)
-        changed = False
+        types_content = read_file(TYPES_HEADER); changed = False
         for func in categories["linkage_conflict_funcs"]:
             if func in _STDLIB_FUNCS:
                 types_content, n = re.subn(rf"(?m)^#ifndef {re.escape(func)}_DEFINED\n.*?#define {re.escape(func)}_DEFINED\nextern[^\n]+{re.escape(func)}[^\n]*\n#endif\n?", "", types_content, flags=re.DOTALL)
@@ -1130,74 +994,53 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     if categories.get("linkage_conflict_files"):
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
-                c = read_file(filepath)
-                original_c = c
-
+                c = read_file(filepath); original_c = c
                 if "AUTO-FIX LINKAGE:" in c:
                     lines = c.split('\n')
                     for idx in range(len(lines)):
                         if "AUTO-FIX LINKAGE:" in lines[idx]:
-                            core = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*', '', lines[idx])
-                            core = re.sub(r'\*/', '', core)
-                            core = core.replace('// AUTO-FIX LINKAGE:', '')
-                            lines[idx] = f"// AUTO-FIX LINKAGE: {core.strip()}"
+                            core = lines[idx]
+                            core = re.sub(r'(?:/\*\s*AUTO-FIX LINKAGE:\s*)+', '', core)
+                            core = re.sub(r'(?://\s*AUTO-FIX LINKAGE:\s*)+', '', core)
+                            core = re.sub(r'(?:\*/)+', '', core).strip()
+                            lines[idx] = f"// AUTO-FIX LINKAGE: {core}"
                     c = '\n'.join(lines)
-
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
-
                 if c != original_c:
                     if "#include <math.h>" not in c and func in {"sinf", "cosf", "sqrtf", "sin", "cos", "sqrt", "tan", "tanf", "acosf", "asinf", "atanf", "atan2f"}:
                         c = "#include <math.h>\n" + c
-                    write_file(filepath, c)
-                    fixed_files.add(filepath)
-                    fixes += 1
+                    write_file(filepath, c); fixed_files.add(filepath); fixes += 1
 
     if intelligence_level >= 2:
-        types_content = read_file(TYPES_HEADER)
-        original_types = types_content
+        types_content = read_file(TYPES_HEADER); original_types = types_content
         scrub_targets = (set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) |
                          {"__osPiTable","__OSBlockInfo","__OSTranxInfo","__OSViCommonRegs","__OSViFieldRegs","__OSThreadContext","__osCurrentThread","__osRunQueue","__osFaultedThread"} |
                          _TYPED_SOURCE_GLOBALS | set(PHASE_3_STRUCTS.keys()))
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
             types_content = re.sub(rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", "", types_content)
-        if types_content != original_types:
-            write_file(TYPES_HEADER, types_content); fixes += 1
+        if types_content != original_types: write_file(TYPES_HEADER, types_content); fixes += 1
 
-        types_content = read_file(TYPES_HEADER)
-        globals_block = ""
-        globals_added = False
+        types_content = read_file(TYPES_HEADER); globals_block = ""; globals_added = False
         for glob, decl in N64_KNOWN_GLOBALS.items():
-            if glob == "__OSGlobalIntMask":
-                # Do NOT emit extern for __OSGlobalIntMask from n64_types.h.
-                # It is defined in exceptasm.cpp; the extern would cause a
-                # redeclaration conflict. The source files that use it include
-                # the OS headers which forward-declare it already.
-                continue
+            if glob == "__OSGlobalIntMask": continue
             if glob not in types_content:
-                globals_block += f"#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {decl}\n#endif\n"
-                globals_added = True
+                globals_block += f"#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {decl}\n#endif\n"; globals_added = True
         if globals_added:
             block = '\n#ifdef __cplusplus\nextern "C" {\n#endif\n' + globals_block + '\n#ifdef __cplusplus\n}\n#endif\n'
-            types_content += block
-            write_file(TYPES_HEADER, types_content); fixes += 1
+            types_content += block; write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories.get("type_mismatch_globals"):
-        types_content = read_file(TYPES_HEADER)
-        changed = False
+        types_content = read_file(TYPES_HEADER); changed = False
         for item in categories["type_mismatch_globals"]:
             if not isinstance(item,(list,tuple)) or len(item)<2: continue
             _, var = item[0], item[1]
-            if var == "__OSGlobalIntMask":
-                # Handled by patch_exceptasm() — do not touch n64_types.h for this
-                continue
+            if var == "__OSGlobalIntMask": continue
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(var)}_DEFINED\n.*?#define {re.escape(var)}_DEFINED\nextern[^\n]+{re.escape(var)}[^\n]*\n#endif\n?", "", types_content, flags=re.DOTALL)
-            types_content = re.sub(rf"(?m)^extern[^\n]+\b{re.escape(var)}\b[^\n]*\n?", "", types_content)
-            changed = True
+            types_content = re.sub(rf"(?m)^extern[^\n]+\b{re.escape(var)}\b[^\n]*\n?", "", types_content); changed = True
             if var in N64_KNOWN_GLOBALS and var not in _TYPED_SOURCE_GLOBALS and f"{var}_DEFINED" not in types_content:
-                decl = N64_KNOWN_GLOBALS[var]
-                types_content += f"\n#ifndef {var}_DEFINED\n#define {var}_DEFINED\nextern {decl}\n#endif\n"
+                types_content += f"\n#ifndef {var}_DEFINED\n#define {var}_DEFINED\nextern {N64_KNOWN_GLOBALS[var]}\n#endif\n"
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
 
     known_type_tags: Set[str] = set()
@@ -1208,9 +1051,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     for item in categories.get("incomplete_sizeof", []):
         if isinstance(item,(list,tuple)) and len(item)>=2: known_type_tags.add(item[1])
     for tag in categories.get("conflict_typedef", []): known_type_tags.add(tag) if isinstance(tag,str) else None
-    known_type_tags.update(N64_OS_OPAQUE_TYPES)
-    known_type_tags.update(ACTIVE_STRUCTS.keys())
-    known_type_tags.update(N64_AUDIO_STATE_TYPES)
+    known_type_tags.update(N64_OS_OPAQUE_TYPES); known_type_tags.update(ACTIVE_STRUCTS.keys()); known_type_tags.update(N64_AUDIO_STATE_TYPES)
 
     macros_cleaned = False
     for tag in known_type_tags:
@@ -1224,12 +1065,10 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
 
     types_content, n_mac = re.subn(r"(?m)^#ifndef ([A-Z][A-Z0-9_]+)_DEFINED\n#define \1_DEFINED\nextern\s+long\s+long\s+int\s+\1;\n#endif\n?", r"#ifndef \1\n#define \1 0 /* CONVERTED EXTERN TO MACRO */\n#endif\n", types_content)
     if n_mac > 0: macros_cleaned = True; fixes += 1
-
     if macros_cleaned: write_file(TYPES_HEADER, types_content)
 
     if categories.get("not_a_pointer"):
-        types_content = read_file(TYPES_HEADER)
-        changed = False
+        types_content = read_file(TYPES_HEADER); changed = False
         for member in sorted(categories["not_a_pointer"]):
             if not isinstance(member, str): continue
             new_types, n = re.subn(rf"\blong\s+long\s+int\s+{re.escape(member)}\s*;", f"void* {member}; /* AUTO-FIX: cast to pointer */", types_content)
@@ -1241,45 +1080,27 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         if not os.path.exists(STUBS_FILE):
             os.makedirs(os.path.dirname(STUBS_FILE), exist_ok=True)
             write_file(STUBS_FILE, '#include "n64_types.h"\n\n/* AUTO-GENERATED N64 SDK STUBS */\n\n')
-        stubs_content = read_file(STUBS_FILE)
-        funcs_added = False
+        stubs_content = read_file(STUBS_FILE); funcs_added = False
         for func in sorted(categories["implicit_func_stubs"]):
             if not isinstance(func,str) or func in _STDLIB_FUNCS: continue
             proto = f"long long int {func}();"
-            if proto not in types_content:
-                types_content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern {proto}\n#endif\n"; funcs_added = True
+            if proto not in types_content: types_content += f"\n#ifndef {func}_DEFINED\n#define {func}_DEFINED\nextern {proto}\n#endif\n"; funcs_added = True
             impl = f"long long int {func}() {{ return 0; }}\n"
             if impl not in stubs_content: stubs_content += impl; funcs_added = True
-        if funcs_added:
-            write_file(TYPES_HEADER, types_content); write_file(STUBS_FILE, stubs_content); fixes += 1
+        if funcs_added: write_file(TYPES_HEADER, types_content); write_file(STUBS_FILE, stubs_content); fixes += 1
 
     if categories.get("undeclared_identifiers"):
-        types_content = read_file(TYPES_HEADER)
-        idents_added = False
+        types_content = read_file(TYPES_HEADER); idents_added = False
         for ident in sorted(categories["undeclared_identifiers"]):
             if not isinstance(ident, str) or ident in N64_KNOWN_GLOBALS: continue
             if ident in _TYPED_SOURCE_GLOBALS or ident in _STDLIB_FUNCS: continue
-
-            if ident in ACTIVE_STRUCTS or ident in N64_OS_OPAQUE_TYPES or ident in PHASE_3_STRUCTS:
-                categories.setdefault("need_struct_body", set()).add(ident)
-                continue
-
-            if ident in N64_AUDIO_STATE_TYPES:
+            if ident in ACTIVE_STRUCTS or ident in N64_OS_OPAQUE_TYPES or ident in PHASE_3_STRUCTS or ident in N64_AUDIO_STATE_TYPES:
                 categories.setdefault("need_struct_body", set()).add(ident); continue
-
             if ident in ACTIVE_MACROS:
-                if f"#define {ident}" not in types_content:
-                    types_content += f"\n#ifndef {ident}\n#define {ident} {ACTIVE_MACROS[ident]}\n#endif\n"; idents_added = True
+                if f"#define {ident}" not in types_content: types_content += f"\n#ifndef {ident}\n#define {ident} {ACTIVE_MACROS[ident]}\n#endif\n"; idents_added = True
                 continue
-
-            # GBI color combiner slots — TEXEL0, PRIMITIVE, SHADE, etc. are
-            # plain integer aliases used in macro expansions. They are in
-            # PHASE_3_MACROS (ACTIVE_MACROS at level 3) but the prefix check
-            # below wouldn't catch them since they're mixed-case. Handled above.
-
             if ident.isupper() or ident.startswith(("G_","OS_","PI_","PFS_","LEO_","ADPCM","UNITY","MAX_","SP_","FRUSTRATIO","Z_")):
-                if f"#define {ident}" not in types_content:
-                    types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* AUTO-INJECTED UNDECLARED IDENTIFIER */\n#endif\n"; idents_added = True
+                if f"#define {ident}" not in types_content: types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* AUTO-INJECTED UNDECLARED IDENTIFIER */\n#endif\n"; idents_added = True
             else:
                 decl = f"extern long long int {ident};"
                 if decl not in types_content and f"{ident}_DEFINED" not in types_content:
@@ -1308,26 +1129,22 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 write_file(filepath, content); fixed_files.add(filepath); fixes += 1
 
     if categories.get("undeclared_macros"):
-        types_content = read_file(TYPES_HEADER)
-        macros_added  = False
+        types_content = read_file(TYPES_HEADER); macros_added  = False
         for macro in sorted(categories["undeclared_macros"]):
             if not isinstance(macro, str): continue
             if macro in KNOWN_FUNCTION_MACROS:
                 defn = KNOWN_FUNCTION_MACROS[macro]
                 if defn not in types_content: types_content += f"\n{defn}\n"; macros_added = True
             elif macro in ACTIVE_MACROS:
-                if f"#define {macro}" not in types_content:
-                    types_content += f"\n#ifndef {macro}\n#define {macro} {ACTIVE_MACROS[macro]}\n#endif\n"; macros_added = True
+                if f"#define {macro}" not in types_content: types_content += f"\n#ifndef {macro}\n#define {macro} {ACTIVE_MACROS[macro]}\n#endif\n"; macros_added = True
             else:
-                if f"#define {macro}" not in types_content:
-                    types_content += f"\n#ifndef {macro}\n#define {macro} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"; macros_added = True
+                if f"#define {macro}" not in types_content: types_content += f"\n#ifndef {macro}\n#define {macro} 0 /* AUTO-INJECTED UNKNOWN MACRO */\n#endif\n"; macros_added = True
         if macros_added: write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories.get("implicit_func"):
         string_funcs = {"memcpy","memset","strlen","strcpy","strncpy","strcmp","memcmp"}
         stdlib_funcs = {"malloc","free","exit","atoi","rand","srand"}
-        types_content  = read_file(TYPES_HEADER)
-        includes_added = False
+        types_content  = read_file(TYPES_HEADER); includes_added = False
         for func in sorted(categories["implicit_func"]):
             if not isinstance(func, str): continue
             if func in string_funcs:   header = "<string.h>"
@@ -1350,22 +1167,16 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 if "ultra/n64_stubs.c" not in cmake_content:
                     cmake_content = cmake_content.replace("add_library(", "add_library(\n        ultra/n64_stubs.c")
                     write_file(cmake_file, cmake_content)
-        existing_stubs = read_file(STUBS_FILE)
-        stubs_added    = False
+        existing_stubs = read_file(STUBS_FILE); stubs_added    = False
         for sym in sorted(categories["undefined_symbols"]):
             if not isinstance(sym, str) or sym.startswith("_Z") or "vtable" in sym: continue
             if sym in _STDLIB_FUNCS: continue
-
-            if sym in ACTIVE_STRUCTS or sym in N64_OS_OPAQUE_TYPES or sym in PHASE_3_STRUCTS:
-                continue
-
-            if f" {sym}(" not in existing_stubs:
-                existing_stubs += f"long long int {sym}() {{ return 0; }}\n"; stubs_added = True
+            if sym in ACTIVE_STRUCTS or sym in N64_OS_OPAQUE_TYPES or sym in PHASE_3_STRUCTS: continue
+            if f" {sym}(" not in existing_stubs: existing_stubs += f"long long int {sym}() {{ return 0; }}\n"; stubs_added = True
         if stubs_added: write_file(STUBS_FILE, existing_stubs); fixes += 1
 
     if categories.get("audio_states"):
-        types_content = read_file(TYPES_HEADER)
-        audio_added   = False
+        types_content = read_file(TYPES_HEADER); audio_added   = False
         for t in sorted(categories["audio_states"]):
             if not isinstance(t, str): continue
             if not _type_already_defined(t, types_content):
@@ -1373,8 +1184,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         if audio_added: write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories.get("undeclared_n64_types"):
-        types_content = read_file(TYPES_HEADER)
-        k_added = False
+        types_content = read_file(TYPES_HEADER); k_added = False
         for item in sorted(categories["undeclared_n64_types"], key=str):
             if isinstance(item,(list,tuple)) and len(item)>=2: filepath, t = item[0], item[1]
             elif isinstance(item, str): filepath, t = None, item
@@ -1389,10 +1199,8 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 types_content += f"\n#ifndef {t}_DEFINED\n#define {t}_DEFINED\n{decl}#endif\n"; k_added = True
             if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
                 c = read_file(filepath)
-                if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
-                    write_file(filepath, '#include "ultra/n64_types.h"\n' + c); fixed_files.add(filepath); fixes += 1
+                if 'n64_types.h"' not in c and '<n64_types.h>' not in c: write_file(filepath, '#include "ultra/n64_types.h"\n' + c); fixed_files.add(filepath); fixes += 1
         if k_added: write_file(TYPES_HEADER, types_content); fixes += 1
-
         if os.path.exists(STUBS_FILE):
             existing_stubs = read_file(STUBS_FILE)
             if "osSetIntMask" not in existing_stubs:
@@ -1400,8 +1208,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 write_file(STUBS_FILE, existing_stubs); fixes += 1
 
     if categories.get("undeclared_gbi"):
-        types_content = read_file(TYPES_HEADER)
-        gbi_added = False
+        types_content = read_file(TYPES_HEADER); gbi_added = False
         for ident in sorted(categories["undeclared_gbi"]):
             if not isinstance(ident, str): continue
             if ident in ACTIVE_MACROS and f"#define {ident}" not in types_content:
@@ -1415,8 +1222,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     # ------------------------------------------------------------------
     types_content = read_file(TYPES_HEADER)
     marker = "/* Forward declarations for source-defined typed globals */"
-    if marker in types_content:
-        types_content = types_content[:types_content.find(marker)].rstrip() + "\n"
+    if marker in types_content: types_content = types_content[:types_content.find(marker)].rstrip() + "\n"
 
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(rf"(?m)^extern\s+[^\n]+\b{re.escape(var)}\b[^\n]*\n?", "", types_content)
@@ -1425,8 +1231,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     typed_block = f"\n{marker}\n"
     typed_block += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
     typed_block += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
-    for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
-        typed_block += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
+    for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items(): typed_block += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
     typed_block += '#ifdef __cplusplus\n}\n#endif\n'
 
     types_content += typed_block
@@ -1436,38 +1241,25 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     # NEED_STRUCT_BODY
     # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
-        types_content = read_file(TYPES_HEADER)
-        bodies_added  = False
+        types_content = read_file(TYPES_HEADER); bodies_added  = False
+
+        # Aggressively nuke legacy flat Vtx definitions that block the new decoupled setup
+        types_content = re.sub(r"(?s)typedef\s+struct\s*\{[^}]*\}\s*Vtx_t;\s*typedef\s+union\s*\{[^}]*\}\s*Vtx;", "", types_content)
 
         dependency_priority = {
-            "__OSBlockInfo": 1,
-            "__OSTranxInfo": 2,
-            "OSPiHandle": 3,
-            "__OSViCommonRegs": 1,
-            "__OSViFieldRegs": 2,
-            "OSViMode": 3,
-            "Vtx_t": 1,
-            "Vtx_n": 2,
-            "Vtx": 3,
-            "__OSThreadContext": 1,
-            "OSThread": 2,
-            "OSMesgQueue": 3,
-            "Light_t": 1,
-            "Light": 2,
-            "Hilite_t": 1,
-            "Hilite": 2,
-            "OSTask_t": 1,
-            "OSTask": 2
+            "__OSBlockInfo": 1, "__OSTranxInfo": 2, "OSPiHandle": 3,
+            "__OSViCommonRegs": 1, "__OSViFieldRegs": 2, "OSViMode": 3,
+            "Vtx_t": 1, "Vtx_n": 2, "Vtx": 3,
+            "__OSThreadContext": 1, "OSThread": 2, "OSMesgQueue": 3,
+            "Light_t": 1, "Light": 2, "Hilite_t": 1, "Hilite": 2,
+            "OSTask_t": 1, "OSTask": 2
         }
         def struct_sort_key(t):
             if t in dependency_priority: return dependency_priority[t]
             if t in ("OSPiHandle", "OSViMode", "Vtx", "OSThread", "LookAt", "OSTask"): return 100
             return 50
 
-        ordered_tags = sorted(
-            [t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set()) and t not in SDK_DEFINES_THESE],
-            key=struct_sort_key
-        )
+        ordered_tags = sorted([t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set()) and t not in SDK_DEFINES_THESE], key=struct_sort_key)
         other_tags   = sorted([t for t in categories.get("need_struct_body", set()) if t not in ACTIVE_STRUCTS and t not in SDK_DEFINES_THESE])
 
         for tag in ordered_tags + other_tags:
@@ -1476,8 +1268,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             if not body:
                 if tag in N64_AUDIO_STATE_TYPES:
                     if not _type_already_defined(tag, types_content):
-                        types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
-                        bodies_added = True
+                        types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"; bodies_added = True
                     continue
                 if tag in N64_OS_OPAQUE_TYPES and not _type_already_defined(tag, types_content):
                     types_content += "\n" + _opaque_stub(tag); bodies_added = True
@@ -1485,15 +1276,15 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
 
             norm_body  = re.sub(r'\s+', ' ', body).strip()
             norm_types = re.sub(r'\s+', ' ', types_content)
-
             is_redefined = any(t == tag and f.endswith("n64_types.h") for f, t in categories.get("struct_redef", []))
+            
+            # CRITICAL FIX: Force dependent structs to be stripped and appended sequentially to guarantee correct visibility order
+            force_rebuild = tag in dependency_priority or is_redefined
 
-            if norm_body in norm_types and not is_redefined:
-                continue
+            if norm_body in norm_types and not force_rebuild: continue
 
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
-
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
 
             if tag == "LookAt":
@@ -1522,18 +1313,14 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             if changed: write_file(filepath, content); fixed_files.add(filepath); fixes += 1
 
     if categories.get("missing_globals"):
-        types_content = read_file(TYPES_HEADER)
-        globals_added = False
+        types_content = read_file(TYPES_HEADER); globals_added = False
         for item in sorted(categories["missing_globals"], key=str):
             if isinstance(item,(list,tuple)) and len(item)>=2: _, glob = item[0], item[1]
             elif isinstance(item, str): glob = item
             else: continue
             if glob == "actor": continue
             if glob in _TYPED_SOURCE_GLOBALS: continue
-
-            if glob in ACTIVE_STRUCTS or glob in N64_OS_OPAQUE_TYPES or glob in PHASE_3_STRUCTS:
-                continue
-
+            if glob in ACTIVE_STRUCTS or glob in N64_OS_OPAQUE_TYPES or glob in PHASE_3_STRUCTS: continue
             if glob in N64_KNOWN_GLOBALS:
                 if f"{glob}_DEFINED" not in types_content:
                     types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {N64_KNOWN_GLOBALS[glob]}\n#endif\n"; globals_added = True
@@ -1584,8 +1371,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         if content != original: write_file(filepath, content); fixed_files.add(filepath); fixes += 1
 
     if categories.get("incomplete_sizeof"):
-        types_content = read_file(TYPES_HEADER)
-        types_added = False; seen: set = set()
+        types_content = read_file(TYPES_HEADER); types_added = False; seen: set = set()
         for item in categories["incomplete_sizeof"]:
             if not isinstance(item,(list,tuple)) or len(item)<2: continue
             filepath, tag = item[0], item[1]
@@ -1599,8 +1385,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         if types_added: write_file(TYPES_HEADER, types_content); fixes += 1
 
     if categories.get("unknown_audio_state_types"):
-        types_content = read_file(TYPES_HEADER)
-        added = False
+        types_content = read_file(TYPES_HEADER); added = False
         for t in sorted(categories["unknown_audio_state_types"]):
             if not isinstance(t,str) or t not in N64_AUDIO_STATE_TYPES: continue
             if not _type_already_defined(t, types_content):
@@ -1645,8 +1430,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             if isinstance(item,(list,tuple)) and len(item)>=2: file_to_types[item[0]].add(item[1])
         for filepath, type_names in sorted(file_to_types.items()):
             if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
-            content = read_file(filepath)
-            fwd_lines = []
+            content = read_file(filepath); fwd_lines = []
             for t in sorted(type_names):
                 tag = t[1].lower() + t[2:] if len(t)>1 and t[0] in ('s','S') else t
                 fwd_decl = f"typedef struct {tag}_s {t};"
