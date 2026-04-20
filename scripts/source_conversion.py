@@ -551,13 +551,14 @@ def heal_corrupted_headers():
                         pass
 
 def strip_redefinition(content: str, tag: str) -> str:
-    content = re.sub(rf"(?m)^\s*#\s*define\s+{re.escape(tag)}(?:_s|_t|_n|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
+    # UPDATED REGEX: Changed (?:_s|_t|_n|_u)? to (?:_s|_u)? to protect explicitly managed _t and _n types.
+    content = re.sub(rf"(?m)^\s*#\s*define\s+{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
     content = re.sub(rf"(?m)^\s*typedef\s+(?:struct|union)\s+[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;\s*$", f"/* STRIPPED FWD: {tag} */", content)
     
     pattern = re.compile(r'\b(typedef\s+(?:struct|union)|struct|union)\b[^{;]*\{')
     new_content = ""
     idx = 0
-    tag_pattern = rf'\b{re.escape(tag)}(?:_s|_t|_n|_u)?\b'
+    tag_pattern = rf'\b{re.escape(tag)}(?:_s|_u)?\b'
     
     while True:
         match = pattern.search(content, idx)
@@ -590,7 +591,7 @@ def strip_redefinition(content: str, tag: str) -> str:
         
     content = new_content
     content = re.sub(rf"\btypedef\s+(?:struct\s+|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", f"/* STRIPPED SIMPLE: {tag} */", content)
-    content = re.sub(rf"\b(?:struct|union)\s+{re.escape(tag)}(?:_s|_t|_n|_u)?\s*;", "", content)
+    content = re.sub(rf"\b(?:struct|union)\s+{re.escape(tag)}(?:_s|_u)?\s*;", "", content)
     return content
 
 def repair_unterminated_conditionals(content: str) -> str:
