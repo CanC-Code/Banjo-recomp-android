@@ -121,13 +121,14 @@ PHASE_3_MACROS = {
     "G_RM_AA_ZB_XLU_SURF":  "0x00000000", "G_RM_AA_ZB_XLU_SURF2": "0x00000000",
     "G_ZBUFFER": "0x00000001", "G_SHADE": "0x00000004",
     "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
+    "G_CC_DECALRGBA": "0",
 }
 
 # ---------------------------------------------------------------------------
 # N64 struct bodies
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
-    "Mtx": "typedef union { struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;",
+    "Mtx": "typedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;",
     "OSContStatus": "typedef struct OSContStatus_s { u16 type; u8 status; u8 errnum; } OSContStatus;",
     "OSContPad": "typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errnum; } OSContPad;",
     "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;",
@@ -413,10 +414,8 @@ _N64_BOOL_H_CONTENT = (
 # Utility Helpers
 # ---------------------------------------------------------------------------
 def normalize_path(filepath: str) -> str:
-    # Resolve multi-level relative skips cleanly first
     if ".." in filepath:
         filepath = os.path.normpath(filepath).replace('\\', '/')
-        
     for marker in ["Banjo-recomp-android/", "Android/app/"]:
         if marker in filepath: return filepath.split(marker)[-1]
     return filepath.lstrip("/") if filepath.startswith("/") else filepath
@@ -576,7 +575,6 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
         content = re.sub(rf"(?:struct|union)\s+{re.escape(p)}(?:_s)?\s*;\n?", "", content)
 
     content = content.replace("#pragma once", f"#pragma once\n{_CORE_PRIMITIVES}", 1)
-
     content = repair_unterminated_conditionals(content)
     write_file(TYPES_HEADER, content)
     _emit_n64_bool_h()
@@ -635,6 +633,9 @@ def _scrape_logs_into_categories(categories: dict) -> None:
                     if m_note:
                         categories.setdefault("linkage_conflict_files", set()).add((normalize_path(m_note.group(1)), func))
                         break
+
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+initializing 'f32'.*?incompatible type 'void \*'", content):
+            categories.setdefault("f32_null_init", set()).add(normalize_path(m.group(1)))
 
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+#endif without #if", content):
             endifs.add(normalize_path(m.group(1)))
@@ -741,7 +742,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         for m in re.finditer(r"error:\s+use of undeclared identifier '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content):
             nsb.add(m.group(1))
 
-def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set]:
+def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set]:
     fixes       = 0
     fixed_files = set()
 
@@ -768,6 +769,20 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     _scrape_logs_into_categories(categories)
     clean_conflicting_typedefs()
     types_content = ensure_types_header_base(categories)
+
+    # ------------------------------------------------------------------
+    # FLOAT VOID-POINTER INITIALIZATION SANITIZER
+    # ------------------------------------------------------------------
+    if categories.get("f32_null_init"):
+        for filepath in categories["f32_null_init"]:
+            if os.path.exists(filepath):
+                c = read_file(filepath)
+                c_new = re.sub(r'\{NULL,\s*NULL\}', '{0.0f, 0.0f}', c)
+                c_new = re.sub(r'=\s*NULL;', '= 0.0f;', c_new)
+                if c_new != c:
+                    write_file(filepath, c_new)
+                    fixed_files.add(filepath)
+                    fixes += 1
 
     # ------------------------------------------------------------------
     # EXCEPTASM UNION POINTER CAST FIX
@@ -808,20 +823,22 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
                 if n + n2 > 0: changed = True
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # External File Linkage Purger
+    # External File Linkage Purger with Self-Healing Line Regex
     if categories.get("linkage_conflict_files"):
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
                 c = read_file(filepath)
                 original_c = c
                 
-                # 🔧 FIX: Self-healing for previously corrupted nested comments from older script versions
                 if "AUTO-FIX LINKAGE:" in c:
-                    c = re.sub(r'(?:/\*\s*AUTO-FIX LINKAGE:\s*)+', '/* AUTO-FIX LINKAGE: ', c)
-                    c = re.sub(r'(?:\*/\s*){2,}', '*/ ', c)
+                    lines = c.split('\n')
+                    for idx in range(len(lines)):
+                        if "AUTO-FIX LINKAGE:" in lines[idx]:
+                            clean = re.sub(r'(?:/\*\s*AUTO-FIX LINKAGE:\s*)+', '/* AUTO-FIX LINKAGE: ', lines[idx])
+                            clean = re.sub(r'(?:\*/\s*){2,}', '*/', clean)
+                            lines[idx] = clean
+                    c = '\n'.join(lines)
                 
-                # Intentionally suppress the bad declaration directly in the remote header
-                # 🔧 FIX: Negative lookahead to prevent infinitely nesting block comments on multiple passes
                 pattern = rf"(?m)^(?![^\n]*AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"/* AUTO-FIX LINKAGE: \1 */", c)
                 
@@ -835,7 +852,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
     if intelligence_level >= 2:
         original_types = types_content
         scrub_targets = (set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) |
-                         {"__osPiTable","__OSBlockInfo","__OSTranxInfo","__osCurrentThread","__osRunQueue","__osFaultedThread"} |
+                         {"__osPiTable","__OSBlockInfo","__OSTranxInfo","__OSViCommonRegs","__OSViFieldRegs","__OSThreadContext","__osCurrentThread","__osRunQueue","__osFaultedThread"} |
                          _TYPED_SOURCE_GLOBALS | set(PHASE_3_STRUCTS.keys()))
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
@@ -890,6 +907,11 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         p3 = rf"(?m)^\s*#ifndef {re.escape(tag)}\s*\n\s*#define {re.escape(tag)} 0 /\* AUTO-INJECTED UNDECLARED IDENTIFIER \*/\s*\n\s*#endif\s*\n?"
         types_content, n3 = re.subn(p3, "", types_content)
         if n1 + n2 + n3 > 0: macros_cleaned = True; fixes += 1
+    
+    # Compile-time constant correction for uppercase macros mistakenly caught as extern pointers
+    types_content, n_mac = re.subn(r"(?m)^#ifndef ([A-Z][A-Z0-9_]+)_DEFINED\n#define \1_DEFINED\nextern\s+long\s+long\s+int\s+\1;\n#endif\n?", r"#ifndef \1\n#define \1 0 /* CONVERTED EXTERN TO MACRO */\n#endif\n", types_content)
+    if n_mac > 0: macros_cleaned = True; fixes += 1
+
     if macros_cleaned: write_file(TYPES_HEADER, types_content)
 
     if categories.get("not_a_pointer"):
@@ -1255,7 +1277,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
         
-        # 🔧 Strict Dependency Sort for C Header Injection
         dependency_priority = {
             "__OSBlockInfo": 1,
             "__OSTranxInfo": 2,
