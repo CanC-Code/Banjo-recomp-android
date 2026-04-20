@@ -697,7 +697,10 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", content):
             filepath = normalize_path(m.group(1))
             tag1, tag2 = m.group(2), m.group(3)
-            if "unnamed struct" in tag1 or "unnamed struct" in tag2:
+            if tag1 == tag2:
+                entry = (filepath, tag1)
+                if entry not in sr: sr.append(entry)
+            elif "unnamed struct" in tag1 or "unnamed struct" in tag2:
                 canonical = tag2 if tag2.endswith("_s") else tag1
                 entry = (filepath, canonical)
                 if entry not in sr: sr.append(entry)
@@ -786,10 +789,15 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         ACTIVE_MACROS   = PHASE_1_MACROS.copy()
         ACTIVE_STRUCTS  = {}
 
+    # 🔧 FIX: Protect explicit structs from error_parser pollution
     for k, v in _EP_STRUCTS.items():
-        if k not in SDK_DEFINES_THESE: ACTIVE_STRUCTS[k] = v
+        if k not in SDK_DEFINES_THESE and k not in ACTIVE_STRUCTS: 
+            ACTIVE_STRUCTS[k] = v
 
-    ACTIVE_MACROS.update(_EP_MACROS)
+    for k, v in _EP_MACROS.items():
+        if k not in ACTIVE_MACROS:
+            ACTIVE_MACROS[k] = v
+
     N64_OS_OPAQUE_TYPES.update(_EP_OPAQUE)
 
     if intelligence_level >= 2:
@@ -853,7 +861,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 if n + n2 > 0: changed = True
         if changed: write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # External File Linkage Purger with Self-Healing Line Regex
     if categories.get("linkage_conflict_files"):
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
