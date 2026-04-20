@@ -184,7 +184,7 @@ typedef struct MIXER_STATE_s { long long int force_align[64]; } MIXER_STATE;
 """
 
 # ---------------------------------------------------------------------------
-# N64 struct bodies (Fully Decoupled)
+# N64 struct bodies
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
     "Mtx": "#ifndef Mtx_DEFINED\n#define Mtx_DEFINED\ntypedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;\n#endif",
@@ -264,8 +264,6 @@ _N64_OS_STRUCT_BODIES = {
     "OSTimer":   "#ifndef OSTimer_DEFINED\n#define OSTimer_DEFINED\ntypedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; OSTime interval; OSTime value; struct OSMesgQueue_s *mq; OSMesg msg; } OSTimer;\n#endif",
     "LookAt":    "#ifndef LookAt_DEFINED\n#define LookAt_DEFINED\ntypedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;\n#endif",
 }
-
-SDK_DEFINES_THESE = {"OSScTask"}
 
 PHASE_3_STRUCTS = {
     "Vtx_t": (
@@ -1002,14 +1000,10 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
                 c = read_file(filepath); original_c = c
-                # RECURSIVE CLEANUP: Strips previous /* marker */ and // marker patterns to handle gu.h nested errors
-                if "AUTO-FIX LINKAGE:" in c:
-                    while "AUTO-FIX LINKAGE:" in c:
-                        # Strip nested /* AUTO-FIX LINKAGE: ... */ blocks
-                        c = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*(.*?)\s*\*/', r'\1', c)
-                        # Strip nested // AUTO-FIX LINKAGE: ... lines
-                        c = re.sub(r'//\s*AUTO-FIX LINKAGE:\s*', '', c)
-                    c = c.strip()
+                # RECURSIVE CLEANUP: Completely clear all nested comment markers before re-applying
+                c = c.replace("/* AUTO-FIX LINKAGE: ", "").replace(" */", "")
+                c = c.replace("// AUTO-FIX LINKAGE: ", "")
+                c = c.strip()
                 
                 # Apply single-line linkage marker strictly using // to avoid comment closure errors
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
@@ -1020,11 +1014,10 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                     write_file(filepath, c); fixed_files.add(filepath); fixes += 1
 
     # ------------------------------------------------------------------
-    # PHASE 1: STRUCTS (Aggressive stripping and ordered injection)
+    # PHASE 1: STRUCTS (Aggressive stripping and dependency-ordered injection)
     # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER); bodies_added = False
-        types_content = re.sub(r"(?s)typedef\s+struct\s*\{[^}]*\}\s*Vtx_t;\s*typedef\s+union\s*\{[^}]*\}\s*Vtx;", "", types_content)
 
         dependency_priority = {
             "__OSBlockInfo": 1, "__OSTranxInfo": 2, "OSPiHandle": 3,
@@ -1054,7 +1047,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                     types_content += "\n" + _opaque_stub(tag); bodies_added = True
                 continue
 
-            # Clears all previous versions (compact, block, or union-alias) before re-injecting in order
+            # Clear any legacy or compact re-definitions before re-injecting in order
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
