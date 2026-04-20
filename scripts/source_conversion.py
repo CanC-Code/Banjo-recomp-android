@@ -82,6 +82,7 @@ PHASE_1_MACROS = {
     "PFS_DATA_ENXIO":   "0x06", "ADPCMFSIZE": "9", "ADPCMVSIZE": "16",
     "UNITY_PITCH": "0x8000", "MAX_RATIO":   "0xFFFF",
     "PI_DOMAIN1":  "0", "PI_DOMAIN2":  "1",
+    "LFSAMPLES": "8192", # Audio size buffer injected to fix missing ident
 }
 
 PHASE_2_MACROS = {
@@ -184,7 +185,11 @@ _N64_OS_STRUCT_BODIES = {
         '    u8 activebank;\n'
         '    u8 banks;\n'
         '    u8 status;\n'
-        '    u8 inodeTable[256];\n'
+        '    union {\n'
+        '        u8 inodeTable[256];\n'
+        '        u8 inode_table[256];\n'
+        '        u8 minode_table[256];\n'
+        '    };\n'
         '    u8 dir[256];\n'
         '    u8 dir_table[256];\n'
         '    u32 dir_size;\n'
@@ -329,7 +334,8 @@ N64_OS_OPAQUE_TYPES = {
     "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr", "OSPfsState", "OSPfsFile",
     "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
     "OSYieldResult", "OSEvent",
-    "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState",
+    "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState", 
+    "Struct_core2_7AF80_1", "Struct_core1_10A00_1" # Added missing forward-defs explicitly
 }
 
 N64_AUDIO_STATE_TYPES = {
@@ -344,7 +350,7 @@ N64_KNOWN_GLOBALS = {
     "__osCurrentThread": "struct OSThread_s *__osCurrentThread;",
     "__osRunQueue":      "struct OSThread_s *__osRunQueue;",
     "__osFaultedThread": "struct OSThread_s *__osFaultedThread;",
-    "__OSGlobalIntMask": "volatile OSHWIntr __OSGlobalIntMask;",
+    "__OSGlobalIntMask": "u32 __OSGlobalIntMask;", # Stripped volatile to align with OS source 
 }
 
 _TYPED_SOURCE_GLOBALS = {
@@ -365,7 +371,7 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osViModeMpalLan1": "extern OSViMode osViModeMpalLan1;",
     "osPiRawStartDma":  "extern s32 osPiRawStartDma(s32, u32, void *, u32);",
     "osEPiRawStartDma": "extern s32 osEPiRawStartDma(struct OSPiHandle_s *, s32, u32, void *, u32);",
-    "__OSGlobalIntMask": "extern volatile OSHWIntr __OSGlobalIntMask;", 
+    "__OSGlobalIntMask": "extern u32 __OSGlobalIntMask;", # Stripped volatile 
 }
 
 _STDLIB_FUNCS = {
@@ -1093,7 +1099,12 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         if not isinstance(tag, str) or tag in SDK_DEFINES_THESE: continue
 
         types_content = read_file(TYPES_HEADER)
-        if tag in N64_PRIMITIVES: pass
+        if tag in N64_PRIMITIVES:
+            # FIX 6: Force specific missing primitive include block
+            if filepath and os.path.exists(filepath) and not filepath.endswith("n64_types.h"):
+                c = read_file(filepath)
+                if 'n64_types.h"' not in c and '<n64_types.h>' not in c:
+                    write_file(filepath, '#include "ultra/n64_types.h"\n' + c); fixed_files.add(filepath); fixes += 1
         elif tag in N64_AUDIO_STATE_TYPES:
             if not _type_already_defined(tag, types_content):
                 types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
