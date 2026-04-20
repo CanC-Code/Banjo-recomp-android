@@ -45,7 +45,7 @@ except ImportError:
     def write_file(filepath: str, content: str) -> None:
         try:
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            with open(filepath, 'w') as f:
+            with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
         except Exception as e:
             logger.error(f"Failed to write {filepath}: {e}")
@@ -532,34 +532,33 @@ def normalize_path(filepath: str) -> str:
         if marker in filepath: return filepath.split(marker)[-1]
     return filepath.lstrip("/") if filepath.startswith("/") else filepath
 
+def _recursive_comment_scrubber(content: str) -> str:
+    """Aggressively removes nested AUTO-FIX comments to fix illegal syntax."""
+    # Scrub previous line-style comments
+    content = re.sub(r'// AUTO-FIX LINKAGE:.*', '', content)
+    # Scrub block comments recursively
+    while "AUTO-FIX LINKAGE:" in content:
+        # Match /* AUTO-FIX LINKAGE: (text) */ and replace with just (text)
+        new_content = re.sub(r'/\* AUTO-FIX LINKAGE: (.*?) \*/', r'\1', content, flags=re.DOTALL)
+        if new_content == content: break
+        content = new_content
+    return content.strip()
+
 def strip_redefinition(content: str, tag: str) -> str:
+    """Aggressively removes old definitions of a tag from a string."""
     changed = True
     while changed:
         changed = False
-        # Aggressive structure/union stripping (greedy matching for one-liners)
-        pattern1 = re.compile(rf"\b(?:struct|union)\s+{re.escape(tag)}\s*\{{")
-        match = pattern1.search(content)
+        # Remove compact one-liners: typedef struct {...} Tag;
+        pattern_compact = re.compile(rf"(?m)^typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;")
+        content, n = pattern_compact.subn(f"/* STRIPPED COMPACT: {tag} */", content)
+        if n > 0: changed = True
+
+        # Remove block definitions: typedef struct Tag_s { ... } Tag;
+        pattern_block = re.compile(rf"\b(?:typedef\s+)?(?:struct|union)\s+{re.escape(tag)}(?:_s)?\s*\{{")
+        match = pattern_block.search(content)
         if match:
             start_idx = match.start()
-            pre = content[:start_idx].rstrip()
-            if pre.endswith("typedef"): start_idx = pre.rfind("typedef")
-            brace_idx = content.find('{', match.start())
-            open_braces, curr_idx = 1, brace_idx + 1
-            while curr_idx < len(content) and open_braces > 0:
-                if content[curr_idx] == '{': open_braces += 1
-                elif content[curr_idx] == '}': open_braces -= 1
-                curr_idx += 1
-            semi_idx = content.find(';', curr_idx)
-            if semi_idx != -1:
-                content = content[:start_idx] + f"/* AUTO-STRIPPED RE-DEF: {tag} */\n" + content[semi_idx+1:]
-                changed = True; continue
-
-        # Typedef block stripping
-        idx = 0
-        while True:
-            match = re.search(r"\btypedef\s+(?:struct|union)\b[^{]*\{", content[idx:])
-            if not match: break
-            start_idx = idx + match.start()
             brace_idx = content.find('{', start_idx)
             open_braces, curr_idx = 1, brace_idx + 1
             while curr_idx < len(content) and open_braces > 0:
@@ -568,19 +567,12 @@ def strip_redefinition(content: str, tag: str) -> str:
                 curr_idx += 1
             semi_idx = content.find(';', curr_idx)
             if semi_idx != -1:
-                tail = content[curr_idx:semi_idx]
-                if re.search(rf"\b{re.escape(tag)}\b", tail):
-                    content = content[:start_idx] + f"/* AUTO-STRIPPED TYPEDEF ALIAS: {tag} */\n" + content[semi_idx+1:]
-                    changed = True; break
-                idx = semi_idx + 1
-            else:
-                idx = curr_idx + 1
-        if changed: continue
-
-        # Compact one-liners (SDK style)
-        c_new, n = re.subn(rf"(?m)^typedef\s+(?:struct|union)\s*\{{[^}}]*\}}\s*{re.escape(tag)}\s*;", f"/* STRIPPED COMPACT: {tag} */", content)
-        if n > 0: content, changed = c_new, True
-
+                content = content[:start_idx] + f"/* STRIPPED BLOCK: {tag} */\n" + content[semi_idx+1:]
+                changed = True
+    
+    # Final cleanup of loose forward declarations
+    content = re.sub(rf"\btypedef\s+(?:struct|union\s+)?[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;", "", content)
+    content = re.sub(rf"\b(?:struct|union)\s+{re.escape(tag)}\s*;", "", content)
     return content
 
 def repair_unterminated_conditionals(content: str) -> str:
@@ -602,96 +594,162 @@ def repair_unterminated_conditionals(content: str) -> str:
     for (idx, has_define) in stack:
         if not has_define: continue
         remove.add(idx)
-        for j in range(idx + 1, min(idx + 4, len(lines))):
-            if lines[j].strip().startswith('#define') or lines[j].strip().startswith('#endif'):
-                remove.add(j); break
-    if not remove: return content
     return '\n'.join(line for i, line in enumerate(lines) if i not in remove)
 
-def patch_synth_internals() -> bool:
+def clean_conflicting_typedefs():
+    if not os.path.exists(TYPES_HEADER): return
+    content = read_file(TYPES_HEADER)
+    for p in ["OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg", "OSHWIntr"]:
+        content = re.sub(rf"typedef\s+[^;]+\b{re.escape(p)}\s*;", "", content)
+    write_file(TYPES_HEADER, content)
+
+def _find_synth_internals() -> Optional[str]:
     candidates = [SYNTH_INTERNALS_H, SYNTH_INTERNALS_H_ALT, "include/synthInternals.h"]
-    path = next((c for c in candidates if os.path.exists(c)), None)
+    for root, _, files in os.walk("include"):
+        for f in files:
+            if f == "synthInternals.h": candidates.append(os.path.join(root, f))
+    for c in candidates:
+        if os.path.exists(c): return c
+    return None
+
+def patch_synth_internals() -> bool:
+    path = _find_synth_internals()
     if not path: return False
     content = read_file(path)
     if "N64_AUDIO_STATES_DEFINED" in content: return False
     write_file(path, _AUDIO_STATE_PREAMBLE + content)
     return True
 
+def patch_exceptasm() -> bool:
+    path = "Android/app/src/main/cpp/ultra/exceptasm.cpp"
+    if not os.path.exists(path): return False
+    content = read_file(path)
+    original = content
+    content = re.sub(r'\bvolatile\s+(uint32_t|u32)\s+(__OSGlobalIntMask\s*=)', r'\1 \2', content)
+    content = re.sub(r'reinterpret_cast<uint32_t\*>\(\s*__osRunningThread->context\s*\)', r'reinterpret_cast<uint32_t*>(&__osRunningThread->context)', content)
+    if content != original:
+        write_file(path, content)
+        return True
+    return False
+
+def ensure_types_header_base(categories: Optional[dict] = None) -> str:
+    if os.path.exists(TYPES_HEADER):
+        content = read_file(TYPES_HEADER)
+    else: content = ""
+    
+    if not content or "#pragma once" not in content:
+        content = "#pragma once\n" + _CORE_PRIMITIVES
+    
+    content = repair_unterminated_conditionals(content)
+    write_file(TYPES_HEADER, content)
+    return content
+
+def _scrape_logs_into_categories(categories: dict) -> None:
+    log_candidates = ["Android/full_build_log.txt", "full_build_log.txt", "build_log.txt"]
+    for log_file in log_candidates:
+        if not os.path.exists(log_file): continue
+        content = read_file(log_file)
+        
+        # Linkage errors
+        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage", content):
+            categories.setdefault("linkage_conflict_files", set()).add((normalize_path(m.group(1)), m.group(2)))
+        
+        # Missing types
+        for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
+            categories.setdefault("need_struct_body", set()).add(m.group(1))
+
+        # Member access error -> usually needs actual struct body
+        for m in re.finditer(r"error: member access into incomplete type '(?:struct|union )?(\w+)'", content):
+            categories.setdefault("need_struct_body", set()).add(m.group(1))
+
 def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set]:
     fixes = 0
     fixed_files = set()
 
-    # 1. Scraping & Categories (Standard Logic)
+    _scrape_logs_into_categories(categories)
+    clean_conflicting_typedefs()
+    ensure_types_header_base(categories)
+
+    if patch_synth_internals(): fixes += 1
+    if patch_exceptasm(): fixes += 1
+
+    # Dependency Order Map
+    dependency_priority = {
+        "__OSBlockInfo": 1, "__OSTranxInfo": 2, "OSPiHandle": 3,
+        "__OSViCommonRegs": 1, "__OSViFieldRegs": 2, "OSViMode": 3,
+        "Vtx_t": 1, "Vtx_n": 2, "Vtx": 3,
+        "__OSThreadContext": 1, "OSThread": 2, "OSMesgQueue": 3,
+        "Light_t": 1, "Light": 2, "Hilite_t": 1, "Hilite": 2,
+        "OSTask_t": 1, "OSTask": 2
+    }
+
     # ------------------------------------------------------------------
-    # [Internal Note: _scrape_logs_into_categories is called here as provided]
+    # PHASE 1: STRUCTS (Bottom-up priority for visibility)
+    # ------------------------------------------------------------------
+    if categories.get("need_struct_body"):
+        types_content = read_file(TYPES_HEADER)
+        
+        # Tags we need to ensure are defined
+        target_tags = set(categories["need_struct_body"]) | set(_N64_OS_STRUCT_BODIES.keys()) | set(PHASE_3_STRUCTS.keys())
+        target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE}
+
+        def struct_sort_key(t):
+            return dependency_priority.get(t, 100)
+
+        ordered_tags = sorted(list(target_tags), key=struct_sort_key)
+
+        for tag in ordered_tags:
+            # Strip previous corrupted versions
+            types_content = strip_redefinition(types_content, tag)
+            body = _N64_OS_STRUCT_BODIES.get(tag) or PHASE_3_STRUCTS.get(tag)
+            
+            if body:
+                types_content += f"\n{body}\n"
+            elif tag in N64_OS_OPAQUE_TYPES:
+                types_content += "\n" + _opaque_stub(tag)
+            elif tag in N64_AUDIO_STATE_TYPES:
+                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+
+        write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # ------------------------------------------------------------------
+    # PHASE 2: TYPED GLOBALS (Mandatory absolute bottom of header)
+    # ------------------------------------------------------------------
+    types_content = read_file(TYPES_HEADER)
+    # Clear previous versions of globals
+    for var in _TYPED_SOURCE_GLOBALS:
+        types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
+        types_content = re.sub(rf"#ifndef {re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
+
+    marker = "/* Forward declarations for source-defined typed globals */"
+    types_content = types_content.split(marker)[0].strip() + f"\n\n{marker}\n"
+    types_content += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
+    types_content += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
+    for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
+        types_content += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
+    types_content += '#ifdef __cplusplus\n}\n#endif\n'
     
-    # 2. Linkage Fix (CORRECTED: Recursive Scrubber for gu.h errors)
+    write_file(TYPES_HEADER, types_content); fixes += 1
+
+    # ------------------------------------------------------------------
+    # PHASE 3: LINKAGE FIX (Gu.h corruption fix)
     # ------------------------------------------------------------------
     if categories.get("linkage_conflict_files"):
         for filepath, func in categories["linkage_conflict_files"]:
-            if func in _STDLIB_FUNCS and os.path.exists(filepath):
-                c = read_file(filepath); original_c = c
-                # Scrub ALL previous AUTO-FIX markers to prevent comment nesting
-                if "AUTO-FIX LINKAGE:" in c:
-                    while "AUTO-FIX LINKAGE:" in c:
-                        # Strip nested /* ... */ blocks
-                        c = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*(.*?)\s*\*/', r'\1', c)
-                        # Strip nested // lines
-                        c = re.sub(r'//\s*AUTO-FIX LINKAGE:\s*', '', c)
-                
-                # Apply strictly single-line marker
+            if os.path.exists(filepath):
+                c = read_file(filepath)
+                # SCRUB corrupted nested comments first
+                c = _recursive_comment_scrubber(c)
+                # Apply safe line-style linkage fix
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
-                if c != original_c:
-                    write_file(filepath, c); fixed_files.add(filepath); fixes += 1
-
-    # 3. Assemble Header (CORRECTED: Strict Dependency Order)
-    # ------------------------------------------------------------------
-    bodies_added = False
-    types_content = "#pragma once\n" + _CORE_PRIMITIVES + "\n"
-    
-    if intelligence_level >= 2:
-        # Priority map for N64 types to avoid "unknown type name" errors
-        dependency_priority = {
-            "__OSBlockInfo": 1, 
-            "__OSTranxInfo": 2, # Depends on BlockInfo
-            "OSPiHandle": 3,    # Depends on TranxInfo
-            "__OSViCommonRegs": 1,
-            "__OSViFieldRegs": 1,
-            "OSViMode": 2,
-            "Vtx_t": 1,
-            "Vtx_n": 1,
-            "Vtx": 2,           # Depends on Vtx_t/n
-            "__OSThreadContext": 1,
-            "OSThread": 2,      # Depends on ThreadContext
-            "OSMesgQueue": 3    # Depends on OSThread
-        }
-        
-        active_bodies = {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}
-        tags = sorted(active_bodies.keys(), key=lambda t: dependency_priority.get(t, 50))
-        
-        for tag in tags:
-            types_content += "\n" + active_bodies[tag] + "\n"
-            bodies_added = True
-
-        # Opaque fallbacks for missing types identified in logs
-        for tag in categories.get("need_struct_body", set()):
-            if tag not in active_bodies and tag not in SDK_DEFINES_THESE:
-                types_content += "\n" + _opaque_stub(tag)
-                bodies_added = True
-
-        # Injection of Typed Globals (Mandatory Bottom)
-        types_content += "\n/* Typed Global Forwards */\n"
-        types_content += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
-        for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
-            types_content += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
-        types_content += '#ifdef __cplusplus\n}\n#endif\n'
-
-    if bodies_added:
-        write_file(TYPES_HEADER, types_content)
-        fixes += 1
-
-    # 4. Patch Audio Internals
-    if patch_synth_internals(): fixes += 1
+                if n > 0:
+                    if "#include <math.h>" not in c and func in _STDLIB_FUNCS:
+                        c = "#include <math.h>\n" + c
+                    write_file(filepath, c)
+                    fixed_files.add(filepath); fixes += 1
 
     return fixes, fixed_files
+
+if __name__ == "__main__":
+    apply_fixes({})
