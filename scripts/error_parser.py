@@ -19,7 +19,7 @@ REPLACEMENTS = {}
 def load_external_logic():
     """Ingests the specific Name = Typedef; format from your conversion files."""
     global N64_STRUCT_BODIES, KNOWN_MACROS, OPAQUE_TYPES, REPLACEMENTS
-    
+
     if not os.path.exists(LOGIC_DIR):
         return
 
@@ -33,14 +33,12 @@ def load_external_logic():
                     KNOWN_MACROS[k.strip()] = v.strip()
 
     # 2. Parse types.txt (Tag = typedef ... ;)
-    # This handles your multi-part definitions for Vtx and OSThread
     types_path = os.path.join(LOGIC_DIR, "types.txt")
     if os.path.exists(types_path):
         with open(types_path, 'r') as f:
             for line in f:
                 if '=' in line and line.strip() and not line.strip().startswith('#'):
                     tag, definition = line.split('=', 1)
-                    # We store the raw C string to be injected directly into headers
                     N64_STRUCT_BODIES[tag.strip()] = definition.strip()
 
     # 3. Parse opaque.txt (Simple List)
@@ -56,8 +54,8 @@ def load_external_logic():
     if os.path.exists(rep_path):
         with open(rep_path, 'r') as f:
             for line in f:
-                if '->' in line:
-                    old, new = line.split('->', 1)
+                if ':::' in line and not line.strip().startswith('#'):
+                    old, new = line.split(':::', 1)
                     REPLACEMENTS[old.strip()] = new.strip()
 
 # Initialize the logic engine
@@ -118,10 +116,7 @@ def is_defined_locally(filepath, tag):
     return bool(re.search(pattern1, c) or re.search(pattern2, c))
 
 def classify_errors(log_data):
-    """
-    Unified classification engine. 
-    This is now the single source of truth for both the driver and the conversion engine.
-    """
+    """Unified classification engine."""
     categories = {
         "missing_types": set(),
         "undeclared_identifiers": set(),
@@ -156,7 +151,7 @@ def classify_errors(log_data):
 
         m_inc = re.search(r"member access into incomplete type '(?:struct|union )?(\w+)'", line)
         if m_inc: categories["need_struct_body"].add(m_inc.group(1))
-        
+
         m_inc_def = re.search(r"incomplete (?:definition|type) '(?:struct |union )?(\w+)'", line)
         if m_inc_def: categories["need_struct_body"].add(m_inc_def.group(1))
 
@@ -176,12 +171,22 @@ def classify_errors(log_data):
         m_func = re.search(r"implicit declaration of function '(\w+)'", line)
         if m_func: categories["implicit_func_stubs"].add(m_func.group(1))
 
-        if "redefinition of" in line and filepath:
+        if filepath:
             m_re = re.search(r"redefinition of '(\w+)'", line)
             if m_re: categories["struct_redef"].append((filepath, m_re.group(1)))
 
-        if "error:" in line and "errno" in line:
-            if filepath: categories["errno_conflict"].add(filepath)
+            m_td_re = re.search(r"typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", line)
+            if m_td_re:
+                categories["typedef_redef"].append((filepath, f"struct {m_td_re.group(1)}", f"struct {m_td_re.group(2)}"))
+
+            m_stat = re.search(r"static declaration of '(\w+)' follows non-static declaration", line)
+            if m_stat:
+                func_name = m_stat.group(1)
+                categories["posix_reserved_conflict"].append((filepath, func_name))
+                categories["static_conflict"].append((filepath, func_name))
+
+            if "error:" in line and "errno" in line:
+                categories["errno_conflict"].add(filepath)
 
         m_member = re.search(r"no member named '(\w+)' in '(?:struct |union )?(\w+)'", line)
         if m_member:
