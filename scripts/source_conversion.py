@@ -125,14 +125,13 @@ PHASE_3_MACROS = {
 }
 
 # ---------------------------------------------------------------------------
-# N64 struct bodies
+# N64 struct bodies (Fully Decoupled)
 # ---------------------------------------------------------------------------
 _N64_OS_STRUCT_BODIES = {
-    "Mtx": "typedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;",
-    "OSContStatus": "typedef struct OSContStatus_s { u16 type; u8 status; u8 errnum; } OSContStatus;",
-    "OSContPad": "typedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errnum; } OSContPad;",
-    "OSMesgQueue": "typedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;",
-    "OSThread": (
+    "Mtx": "#ifndef Mtx_DEFINED\n#define Mtx_DEFINED\ntypedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;\n#endif",
+    "OSContStatus": "#ifndef OSContStatus_DEFINED\n#define OSContStatus_DEFINED\ntypedef struct OSContStatus_s { u16 type; u8 status; u8 errnum; } OSContStatus;\n#endif",
+    "OSContPad": "#ifndef OSContPad_DEFINED\n#define OSContPad_DEFINED\ntypedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errnum; } OSContPad;\n#endif",
+    "__OSThreadContext": (
         '#ifndef __OSThreadContext_DEFINED\n'
         '#define __OSThreadContext_DEFINED\n'
         'typedef union __OSThreadContext_u {\n'
@@ -149,7 +148,11 @@ _N64_OS_STRUCT_BODIES = {
         '        u64 fp[32];\n'
         '    };\n'
         '} __OSThreadContext;\n'
-        '#endif\n'
+        '#endif'
+    ),
+    "OSThread": (
+        '#ifndef OSThread_DEFINED\n'
+        '#define OSThread_DEFINED\n'
         'struct OSThread_s;\n'
         'typedef struct OSThread_s {\n'
         '    struct OSThread_s *next;\n'
@@ -161,23 +164,19 @@ _N64_OS_STRUCT_BODIES = {
         '    OSId id;\n'
         '    int fp;\n'
         '    __OSThreadContext context;\n'
-        '} OSThread;'
+        '} OSThread;\n'
+        '#endif'
     ),
-    "OSMesgHdr": "typedef struct { u16 type; u8 pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;",
-    "OSPiHandle": (
-        '#ifndef __OSBlockInfo_DEFINED\n'
-        '#define __OSBlockInfo_DEFINED\n'
-        'typedef struct { u32 errStatus; void *dramAddr; void *C2Addr; u32 sectorSize; u32 C1ErrNum; u32 C1ErrSector[4]; } __OSBlockInfo;\n'
-        '#endif\n'
-        '#ifndef __OSTranxInfo_DEFINED\n'
-        '#define __OSTranxInfo_DEFINED\n'
-        'typedef struct { u32 cmdType; u16 transferMode; u16 blockNum; s32 sectorNum; u32 devAddr; u32 bmCtlShadow; u32 seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;\n'
-        '#endif\n'
-        'typedef struct OSPiHandle_s { struct OSPiHandle_s *next; u8 type; u8 latency; u8 pageSize; u8 relDuration; u8 pulse; u8 domain; u32 baseAddress; u32 speed; __OSTranxInfo transferInfo; } OSPiHandle;'
-    ),
-    "OSIoMesg":  "typedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; u32 devAddr; u32 size; struct OSPiHandle_s *piHandle; } OSIoMesg;",
-    "OSDevMgr":  "typedef struct OSDevMgr_s { s32 active; struct OSThread_s *thread; struct OSMesgQueue_s *cmdQueue; struct OSMesgQueue_s *evtQueue; struct OSMesgQueue_s *acsQueue; s32 (*dma)(s32, u32, void *, u32); s32 (*edma)(struct OSPiHandle_s *, s32, u32, void *, u32); } OSDevMgr;",
+    "OSMesgQueue": "#ifndef OSMesgQueue_DEFINED\n#define OSMesgQueue_DEFINED\ntypedef struct OSMesgQueue_s { struct OSThread_s *mtqueue; struct OSThread_s *fullqueue; s32 validCount; s32 first; s32 msgCount; OSMesg *msg; } OSMesgQueue;\n#endif",
+    "OSMesgHdr": "#ifndef OSMesgHdr_DEFINED\n#define OSMesgHdr_DEFINED\ntypedef struct { u16 type; u8 pri; struct OSMesgQueue_s *retQueue; } OSMesgHdr;\n#endif",
+    "__OSBlockInfo": "#ifndef __OSBlockInfo_DEFINED\n#define __OSBlockInfo_DEFINED\ntypedef struct { u32 errStatus; void *dramAddr; void *C2Addr; u32 sectorSize; u32 C1ErrNum; u32 C1ErrSector[4]; } __OSBlockInfo;\n#endif",
+    "__OSTranxInfo": "#ifndef __OSTranxInfo_DEFINED\n#define __OSTranxInfo_DEFINED\ntypedef struct { u32 cmdType; u16 transferMode; u16 blockNum; s32 sectorNum; u32 devAddr; u32 bmCtlShadow; u32 seqCtlShadow; __OSBlockInfo block[2]; } __OSTranxInfo;\n#endif",
+    "OSPiHandle": "#ifndef OSPiHandle_DEFINED\n#define OSPiHandle_DEFINED\ntypedef struct OSPiHandle_s { struct OSPiHandle_s *next; u8 type; u8 latency; u8 pageSize; u8 relDuration; u8 pulse; u8 domain; u32 baseAddress; u32 speed; __OSTranxInfo transferInfo; } OSPiHandle;\n#endif",
+    "OSIoMesg":  "#ifndef OSIoMesg_DEFINED\n#define OSIoMesg_DEFINED\ntypedef struct OSIoMesg_s { OSMesgHdr hdr; void *dramAddr; u32 devAddr; u32 size; struct OSPiHandle_s *piHandle; } OSIoMesg;\n#endif",
+    "OSDevMgr":  "#ifndef OSDevMgr_DEFINED\n#define OSDevMgr_DEFINED\ntypedef struct OSDevMgr_s { s32 active; struct OSThread_s *thread; struct OSMesgQueue_s *cmdQueue; struct OSMesgQueue_s *evtQueue; struct OSMesgQueue_s *acsQueue; s32 (*dma)(s32, u32, void *, u32); s32 (*edma)(struct OSPiHandle_s *, s32, u32, void *, u32); } OSDevMgr;\n#endif",
     "OSPfs": (
+        '#ifndef OSPfs_DEFINED\n'
+        '#define OSPfs_DEFINED\n'
         'typedef struct OSPfs_s {\n'
         '    struct OSIoMesg_s ioMesgBuf;\n'
         '    struct OSMesgQueue_s *queue;\n'
@@ -196,22 +195,30 @@ _N64_OS_STRUCT_BODIES = {
         '    u32 checksum;\n'
         '    u32 inodeCacheIndex;\n'
         '    u8 inodeCache[256];\n'
-        '} OSPfs;'
+        '} OSPfs;\n'
+        '#endif'
     ),
-    "OSTimer":   "typedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; OSTime interval; OSTime value; struct OSMesgQueue_s *mq; OSMesg msg; } OSTimer;",
-    "LookAt":    "typedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;",
+    "OSTimer":   "#ifndef OSTimer_DEFINED\n#define OSTimer_DEFINED\ntypedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; OSTime interval; OSTime value; struct OSMesgQueue_s *mq; OSMesg msg; } OSTimer;\n#endif",
+    "LookAt":    "#ifndef LookAt_DEFINED\n#define LookAt_DEFINED\ntypedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;\n#endif",
 }
 
 SDK_DEFINES_THESE = {"OSScTask"}
 
 PHASE_3_STRUCTS = {
-    "Vtx": (
+    "Vtx_t": (
+        '#ifndef Vtx_t_DEFINED\n'
+        '#define Vtx_t_DEFINED\n'
         'typedef struct {\n'
         '    s16 ob[3];\n'
         '    u16 flag;\n'
         '    s16 tc[2];\n'
         '    u8  cn[4];\n'
         '} Vtx_t;\n'
+        '#endif'
+    ),
+    "Vtx_n": (
+        '#ifndef Vtx_n_DEFINED\n'
+        '#define Vtx_n_DEFINED\n'
         'typedef struct {\n'
         '    s16 ob[3];\n'
         '    u16 flag;\n'
@@ -219,13 +226,19 @@ PHASE_3_STRUCTS = {
         '    s8  n[4];\n'
         '    u8  a;\n'
         '} Vtx_n;\n'
+        '#endif'
+    ),
+    "Vtx": (
+        '#ifndef Vtx_DEFINED\n'
+        '#define Vtx_DEFINED\n'
         'typedef union {\n'
         '    Vtx_t v;\n'
         '    Vtx_n n;\n'
         '    long long int force_align[8];\n'
-        '} Vtx;'
+        '} Vtx;\n'
+        '#endif'
     ),
-    "OSViMode": (
+    "__OSViCommonRegs": (
         '#ifndef __OSViCommonRegs_DEFINED\n'
         '#define __OSViCommonRegs_DEFINED\n'
         'typedef struct {\n'
@@ -238,7 +251,9 @@ PHASE_3_STRUCTS = {
         '    u32 hStart;\n'
         '    u32 xScale;\n'
         '} __OSViCommonRegs;\n'
-        '#endif\n'
+        '#endif'
+    ),
+    "__OSViFieldRegs": (
         '#ifndef __OSViFieldRegs_DEFINED\n'
         '#define __OSViFieldRegs_DEFINED\n'
         'typedef struct {\n'
@@ -248,15 +263,22 @@ PHASE_3_STRUCTS = {
         '    u32 vBurst;\n'
         '    u32 vIntr;\n'
         '} __OSViFieldRegs;\n'
-        '#endif\n'
+        '#endif'
+    ),
+    "OSViMode": (
+        '#ifndef OSViMode_DEFINED\n'
+        '#define OSViMode_DEFINED\n'
         'typedef struct OSViMode_s {\n'
         '    u32 type;\n'
         '    __OSViCommonRegs comRegs;\n'
         '    __OSViFieldRegs  fldRegs[2];\n'
-        '} OSViMode;'
+        '} OSViMode;\n'
+        '#endif'
     ),
-    "OSViContext": "typedef struct OSViContext_s { u16 state; u16 retraceCount; void *framep; struct OSViMode_s *modep; u32 control; struct OSMesgQueue_s *msgq; OSMesg msg; } OSViContext;",
-    "OSTask": (
+    "OSViContext": "#ifndef OSViContext_DEFINED\n#define OSViContext_DEFINED\ntypedef struct OSViContext_s { u16 state; u16 retraceCount; void *framep; struct OSViMode_s *modep; u32 control; struct OSMesgQueue_s *msgq; OSMesg msg; } OSViContext;\n#endif",
+    "OSTask_t": (
+        '#ifndef OSTask_t_DEFINED\n'
+        '#define OSTask_t_DEFINED\n'
         'typedef struct {\n'
         '    u32  type;\n'
         '    u32  flags;\n'
@@ -275,17 +297,25 @@ PHASE_3_STRUCTS = {
         '    u64 *yield_data_ptr;\n'
         '    u32  yield_data_size;\n'
         '} OSTask_t;\n'
+        '#endif'
+    ),
+    "OSTask": (
+        '#ifndef OSTask_DEFINED\n'
+        '#define OSTask_DEFINED\n'
         'typedef union {\n'
         '    OSTask_t t;\n'
         '    long long int force_align[16];\n'
-        '} OSTask;'
+        '} OSTask;\n'
+        '#endif'
     ),
-    "Gfx":    "typedef struct { u32 words[2]; } Gfx;",
-    "Acmd":   "typedef union { struct { u32 w0; u32 w1; } words; long long int force_align[1]; } Acmd;",
-    "Light":  "typedef struct { u8 col[3]; u8 pad0; u8 colc[3]; u8 pad1; s8 dir[3]; u8 pad2; } Light_t; typedef union { Light_t l; long long int force_align[2]; } Light;",
-    "Hilite": "typedef struct { int x1, y1, x2, y2; } Hilite_t; typedef union { Hilite_t h; long long int force_align[2]; } Hilite;",
-    "uSprite": "typedef struct { s16 objX, objY; u16 scaleW, scaleH; s16 imageW, imageH; u16 paddedW, paddedH; u16 bitmapW, bitmapH; s16 imageX, imageY; u16 imageFlags; } uSprite;",
-    "CPUState": "typedef struct { u32 gpr[32]; u32 sr, pc, cause, badvaddr, sp, ra; u32 lo, hi; u32 fpr[32]; u32 fpcsr; } CPUState;",
+    "Gfx":    "#ifndef Gfx_DEFINED\n#define Gfx_DEFINED\ntypedef struct { u32 words[2]; } Gfx;\n#endif",
+    "Acmd":   "#ifndef Acmd_DEFINED\n#define Acmd_DEFINED\ntypedef union { struct { u32 w0; u32 w1; } words; long long int force_align[1]; } Acmd;\n#endif",
+    "Light_t": "#ifndef Light_t_DEFINED\n#define Light_t_DEFINED\ntypedef struct { u8 col[3]; u8 pad0; u8 colc[3]; u8 pad1; s8 dir[3]; u8 pad2; } Light_t;\n#endif",
+    "Light":  "#ifndef Light_DEFINED\n#define Light_DEFINED\ntypedef union { Light_t l; long long int force_align[2]; } Light;\n#endif",
+    "Hilite_t": "#ifndef Hilite_t_DEFINED\n#define Hilite_t_DEFINED\ntypedef struct { int x1, y1, x2, y2; } Hilite_t;\n#endif",
+    "Hilite": "#ifndef Hilite_DEFINED\n#define Hilite_DEFINED\ntypedef union { Hilite_t h; long long int force_align[2]; } Hilite;\n#endif",
+    "uSprite": "#ifndef uSprite_DEFINED\n#define uSprite_DEFINED\ntypedef struct { s16 objX, objY; u16 scaleW, scaleH; s16 imageW, imageH; u16 paddedW, paddedH; u16 bitmapW, bitmapH; s16 imageX, imageY; u16 imageFlags; } uSprite;\n#endif",
+    "CPUState": "#ifndef CPUState_DEFINED\n#define CPUState_DEFINED\ntypedef struct { u32 gpr[32]; u32 sr, pc, cause, badvaddr, sp, ra; u32 lo, hi; u32 fpr[32]; u32 fpcsr; } CPUState;\n#endif",
 }
 
 N64_PRIMITIVES = {
@@ -908,7 +938,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         types_content, n3 = re.subn(p3, "", types_content)
         if n1 + n2 + n3 > 0: macros_cleaned = True; fixes += 1
     
-    # Compile-time constant correction for uppercase macros mistakenly caught as extern pointers
     types_content, n_mac = re.subn(r"(?m)^#ifndef ([A-Z][A-Z0-9_]+)_DEFINED\n#define \1_DEFINED\nextern\s+long\s+long\s+int\s+\1;\n#endif\n?", r"#ifndef \1\n#define \1 0 /* CONVERTED EXTERN TO MACRO */\n#endif\n", types_content)
     if n_mac > 0: macros_cleaned = True; fixes += 1
 
@@ -1277,17 +1306,26 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         types_content = read_file(TYPES_HEADER)
         bodies_added  = False
         
+        # 🔧 Strict Dependency Sort for C Header Injection
         dependency_priority = {
             "__OSBlockInfo": 1,
             "__OSTranxInfo": 2,
+            "OSPiHandle": 3,
             "__OSViCommonRegs": 1,
             "__OSViFieldRegs": 2,
+            "OSViMode": 3,
             "Vtx_t": 1,
             "Vtx_n": 2,
+            "Vtx": 3,
             "__OSThreadContext": 1,
-            "__Light_t": 1,
-            "__LookAtDir": 2,
-            "OSTask_t": 1
+            "OSThread": 2,
+            "OSMesgQueue": 3,
+            "Light_t": 1,
+            "Light": 2,
+            "Hilite_t": 1,
+            "Hilite": 2,
+            "OSTask_t": 1,
+            "OSTask": 2
         }
         def struct_sort_key(t):
             if t in dependency_priority: return dependency_priority[t]
@@ -1319,22 +1357,8 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
 
-            if tag == "OSPiHandle" and "__OSTranxInfo_DEFINED" in body:
-                types_content = strip_redefinition(types_content, "__OSBlockInfo")
-                types_content = strip_redefinition(types_content, "__OSTranxInfo")
-            if tag == "Vtx" and "Vtx_n" in body:
-                types_content = strip_redefinition(types_content, "Vtx_t")
-                types_content = strip_redefinition(types_content, "Vtx_n")
-            if tag == "OSThread" and "__OSThreadContext_DEFINED" in body:
-                types_content = strip_redefinition(types_content, "__OSThreadContext")
-                types_content = re.sub(r"(?m)^typedef union __OSThreadContext_u[^;]+;\n?", "", types_content, flags=re.DOTALL)
-            if tag == "OSViMode" and "__OSViCommonRegs_DEFINED" in body:
-                types_content = strip_redefinition(types_content, "__OSViCommonRegs")
-                types_content = strip_redefinition(types_content, "__OSViFieldRegs")
-            if tag == "OSTask" and "OSTask_t" in body:
-                types_content = strip_redefinition(types_content, "OSTask_t")
-
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
+            
             if tag == "LookAt":
                 types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content)
                 types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content)
