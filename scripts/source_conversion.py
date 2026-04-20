@@ -750,6 +750,12 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     # ------------------------------------------------------------------
     types_content = read_file(TYPES_HEADER)
     
+    # CRITICAL FIX: The global typed variable marker must be stripped BEFORE appending structs.
+    # Leaving this split logic for Phase 2 truncated the file and completely deleted the appended struct payloads.
+    marker = "/* Forward declarations for source-defined typed globals */"
+    if marker in types_content:
+        types_content = types_content.split(marker)[0].strip()
+
     target_tags = set(ALL_STRUCTS.keys())
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
@@ -777,18 +783,16 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         elif tag in N64_AUDIO_STATE_TYPES:
             types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
 
-    write_file(TYPES_HEADER, types_content); fixes += 1
-
     # ------------------------------------------------------------------
     # PHASE 2: TYPED GLOBALS (Mandatory absolute bottom of header)
     # ------------------------------------------------------------------
     
+    # Clean out any straggler global statements from the base of the file before re-injecting the marker
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
         types_content = re.sub(rf"#ifndef {re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
 
-    marker = "/* Forward declarations for source-defined typed globals */"
-    types_content = types_content.split(marker)[0].strip() + f"\n\n{marker}\n"
+    types_content += f"\n\n{marker}\n"
     types_content += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
     types_content += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
     for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
