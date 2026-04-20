@@ -142,45 +142,45 @@ PHASE_3_MACROS = {
 # ---------------------------------------------------------------------------
 _AUDIO_STATE_PREAMBLE = """\
 /* AUTO-INJECTED by patch_engine.py: N64 audio DSP state forward typedefs */
-#ifndef N64_AUDIO_STATES_DEFINED
-#define N64_AUDIO_STATES_DEFINED
-#ifndef RESAMPLE_STATE_DEFINED
-#define RESAMPLE_STATE_DEFINED
+#ifndef RECOMP_N64_AUDIO_STATES_DEFINED
+#define RECOMP_N64_AUDIO_STATES_DEFINED
+#ifndef RECOMP_RESAMPLE_STATE_DEFINED
+#define RECOMP_RESAMPLE_STATE_DEFINED
 typedef struct RESAMPLE_STATE_s { long long int force_align[64]; } RESAMPLE_STATE;
 #endif
-#ifndef POLEF_STATE_DEFINED
-#define POLEF_STATE_DEFINED
+#ifndef RECOMP_POLEF_STATE_DEFINED
+#define RECOMP_POLEF_STATE_DEFINED
 typedef struct POLEF_STATE_s { long long int force_align[64]; } POLEF_STATE;
 #endif
-#ifndef ENVMIX_STATE_DEFINED
-#define ENVMIX_STATE_DEFINED
+#ifndef RECOMP_ENVMIX_STATE_DEFINED
+#define RECOMP_ENVMIX_STATE_DEFINED
 typedef struct ENVMIX_STATE_s { long long int force_align[64]; } ENVMIX_STATE;
 #endif
-#ifndef INTERLEAVE_STATE_DEFINED
-#define INTERLEAVE_STATE_DEFINED
+#ifndef RECOMP_INTERLEAVE_STATE_DEFINED
+#define RECOMP_INTERLEAVE_STATE_DEFINED
 typedef struct INTERLEAVE_STATE_s { long long int force_align[64]; } INTERLEAVE_STATE;
 #endif
-#ifndef ENVMIX_STATE2_DEFINED
-#define ENVMIX_STATE2_DEFINED
+#ifndef RECOMP_ENVMIX_STATE2_DEFINED
+#define RECOMP_ENVMIX_STATE2_DEFINED
 typedef struct ENVMIX_STATE2_s { long long int force_align[64]; } ENVMIX_STATE2;
 #endif
-#ifndef HIPASSLOOP_STATE_DEFINED
-#define HIPASSLOOP_STATE_DEFINED
+#ifndef RECOMP_HIPASSLOOP_STATE_DEFINED
+#define RECOMP_HIPASSLOOP_STATE_DEFINED
 typedef struct HIPASSLOOP_STATE_s { long long int force_align[64]; } HIPASSLOOP_STATE;
 #endif
-#ifndef COMPRESS_STATE_DEFINED
-#define COMPRESS_STATE_DEFINED
+#ifndef RECOMP_COMPRESS_STATE_DEFINED
+#define RECOMP_COMPRESS_STATE_DEFINED
 typedef struct COMPRESS_STATE_s { long long int force_align[64]; } COMPRESS_STATE;
 #endif
-#ifndef REVERB_STATE_DEFINED
-#define REVERB_STATE_DEFINED
+#ifndef RECOMP_REVERB_STATE_DEFINED
+#define RECOMP_REVERB_STATE_DEFINED
 typedef struct REVERB_STATE_s { long long int force_align[64]; } REVERB_STATE;
 #endif
-#ifndef MIXER_STATE_DEFINED
-#define MIXER_STATE_DEFINED
+#ifndef RECOMP_MIXER_STATE_DEFINED
+#define RECOMP_MIXER_STATE_DEFINED
 typedef struct MIXER_STATE_s { long long int force_align[64]; } MIXER_STATE;
 #endif
-#endif /* N64_AUDIO_STATES_DEFINED */
+#endif /* RECOMP_N64_AUDIO_STATES_DEFINED */
 """
 
 # ---------------------------------------------------------------------------
@@ -399,6 +399,13 @@ PHASE_3_STRUCTS = {
     ),
 }
 
+# Automatically upgrade all ALL_STRUCTS to use our custom highly-unique RECOMP_ prefix 
+# to guarantee absolute immunity from N64 SDK preprocessor collisions!
+ALL_STRUCTS = {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}
+for _k in ALL_STRUCTS:
+    ALL_STRUCTS[_k] = ALL_STRUCTS[_k].replace(f"#ifndef {_k}_DEFINED", f"#ifndef RECOMP_{_k}_DEFINED")
+    ALL_STRUCTS[_k] = ALL_STRUCTS[_k].replace(f"#define {_k}_DEFINED", f"#define RECOMP_{_k}_DEFINED")
+
 N64_PRIMITIVES = {
     "u8", "s8", "u16", "s16", "u32", "s32", "u64", "s64",
     "f32", "f64", "n64_bool", "OSIntMask", "OSTime", "OSId", "OSPri", "OSMesg",
@@ -467,8 +474,8 @@ _STDLIB_FUNCS = {
 
 _CORE_PRIMITIVES = (
     "#include <stdint.h>\n"
-    "#ifndef CORE_PRIMITIVES_DEFINED\n"
-    "#define CORE_PRIMITIVES_DEFINED\n"
+    "#ifndef RECOMP_CORE_PRIMITIVES_DEFINED\n"
+    "#define RECOMP_CORE_PRIMITIVES_DEFINED\n"
     "typedef uint8_t  u8;\n"
     "typedef int8_t   s8;\n"
     "typedef uint16_t u16;\n"
@@ -486,20 +493,20 @@ _CORE_PRIMITIVES = (
     "typedef s32   OSPri;\n"
     "typedef void* OSMesg;\n"
     "typedef u32   OSHWIntr;\n"
-    "#ifndef ADPCM_STATE_DEFINED\n"
-    "#define ADPCM_STATE_DEFINED\n"
+    "#ifndef RECOMP_ADPCM_STATE_DEFINED\n"
+    "#define RECOMP_ADPCM_STATE_DEFINED\n"
     "typedef short ADPCM_STATE[9];\n"
     "#endif\n"
-    "#ifndef OSYieldResult_DEFINED\n"
-    "#define OSYieldResult_DEFINED\n"
+    "#ifndef RECOMP_OSYieldResult_DEFINED\n"
+    "#define RECOMP_OSYieldResult_DEFINED\n"
     "typedef u32 OSYieldResult;\n"
     "#endif\n"
-    "#ifndef OSEvent_DEFINED\n"
-    "#define OSEvent_DEFINED\n"
+    "#ifndef RECOMP_OSEvent_DEFINED\n"
+    "#define RECOMP_OSEvent_DEFINED\n"
     "typedef u32 OSEvent;\n"
     "#endif\n"
-    "#ifndef Vp_DEFINED\n"
-    "#define Vp_DEFINED\n"
+    "#ifndef RECOMP_Vp_DEFINED\n"
+    "#define RECOMP_Vp_DEFINED\n"
     "typedef struct { s16 vscale[4]; s16 vtrans[4]; } Vp_t;\n"
     "typedef union { Vp_t vp; long long int force_align[4]; } Vp;\n"
     "#endif\n"
@@ -508,8 +515,6 @@ _CORE_PRIMITIVES = (
     "#endif\n"
     "#endif /* END_CORE_PRIMITIVES */\n"
 )
-
-ALL_STRUCTS = {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}
 
 # ---------------------------------------------------------------------------
 # Utility Helpers
@@ -522,7 +527,6 @@ def normalize_path(filepath: str) -> str:
     return filepath.lstrip("/") if filepath.startswith("/") else filepath
 
 def _scrub_linkage_comments(content: str) -> str:
-    """Idempotently strips existing AUTO-FIX comments line-by-line to prevent recursive nesting syntax corruption."""
     lines = content.split('\n')
     for i, line in enumerate(lines):
         if "AUTO-FIX LINKAGE:" in line:
@@ -551,7 +555,14 @@ def heal_corrupted_headers():
                         pass
 
 def strip_redefinition(content: str, tag: str) -> str:
-    # UPDATED REGEX: Changed (?:_s|_t|_n|_u)? to (?:_s|_u)? to protect explicitly managed _t and _n types.
+    # 1. Cleanly erase any previously injected recomp structs for this tag
+    # This prevents orphaned ifndefs from layering together over multiple script runs!
+    content = re.sub(rf"(?m)^#ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\n#define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\n[\s\S]*?#endif\n?", "", content)
+    
+    # 2. Erase previously injected opaque stubs as well
+    content = re.sub(rf"(?m)^#ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\n#define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\nstruct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\ntypedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\n#endif\n?", "", content)
+
+    # 3. Proceed with standard SDK stripping
     content = re.sub(rf"(?m)^\s*#\s*define\s+{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
     content = re.sub(rf"(?m)^\s*typedef\s+(?:struct|union)\s+[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;\s*$", f"/* STRIPPED FWD: {tag} */", content)
     
@@ -595,6 +606,7 @@ def strip_redefinition(content: str, tag: str) -> str:
     return content
 
 def repair_unterminated_conditionals(content: str) -> str:
+    """Intelligently pops and repairs mismatched or broken preprocessor ifndef boundaries."""
     lines = content.split('\n')
     stack = []
     remove = set()
@@ -609,10 +621,11 @@ def repair_unterminated_conditionals(content: str) -> str:
                 if ns: break
             stack.append((i, next_define))
         elif re.match(r'#\s*endif\b', stripped):
-            if stack: stack.pop()
-    for (idx, has_define) in stack:
-        if not has_define: continue
-        remove.add(idx)
+            if stack:
+                start_idx, has_define = stack.pop()
+                if not has_define:
+                    remove.add(start_idx)
+                    remove.add(i)
     return '\n'.join(line for i, line in enumerate(lines) if i not in remove)
 
 def _find_synth_internals() -> Optional[str]:
@@ -629,7 +642,7 @@ def patch_synth_internals() -> bool:
     path = _find_synth_internals()
     if not path: return False
     content = read_file(path)
-    if "N64_AUDIO_STATES_DEFINED" in content: return False
+    if "RECOMP_N64_AUDIO_STATES_DEFINED" in content or "N64_AUDIO_STATES_DEFINED" in content: return False
     write_file(path, _AUDIO_STATE_PREAMBLE + content)
     return True
 
@@ -650,10 +663,8 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
         content = read_file(TYPES_HEADER)
     else: content = ""
     
-    # Rigorous self-healing: if the macro isn't there, or primitives were corrupted.
-    if "CORE_PRIMITIVES_DEFINED" not in content or "typedef uint8_t  u8;" not in content:
-        # Surgically remove corrupted partial blocks if they exist
-        content = re.sub(r'(?m)^#include <stdint\.h>\n#ifndef CORE_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\n?', '', content)
+    if "RECOMP_CORE_PRIMITIVES_DEFINED" not in content or "typedef uint8_t  u8;" not in content:
+        content = re.sub(r'(?m)^#include <stdint\.h>\n#ifndef (?:CORE|RECOMP_CORE)_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\n?', '', content)
         content = content.replace("#pragma once", "").strip()
         content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
     
@@ -664,8 +675,8 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
 def _opaque_stub(tag: str, size: int = 64) -> str:
     struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
     return (
-        f"#ifndef {tag}_DEFINED\n"
-        f"#define {tag}_DEFINED\n"
+        f"#ifndef RECOMP_{tag}_DEFINED\n"
+        f"#define RECOMP_{tag}_DEFINED\n"
         f"struct {struct_tag} {{ long long int force_align[{size}]; }};\n"
         f"typedef struct {struct_tag} {tag};\n"
         f"#endif\n"
@@ -716,7 +727,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
         
-    # CRITICAL FIX: Ensure Primitives completely bypass the AST stripper logic 
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
 
     for tag in ORDERED_STRUCT_TAGS:
@@ -727,7 +737,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             elif tag in N64_OS_OPAQUE_TYPES:
                 types_content += "\n" + _opaque_stub(tag)
             elif tag in N64_AUDIO_STATE_TYPES:
-                types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+                types_content += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
             target_tags.remove(tag)
 
     for tag in list(target_tags):
@@ -737,17 +747,17 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         elif tag in N64_OS_OPAQUE_TYPES:
             types_content += "\n" + _opaque_stub(tag)
         elif tag in N64_AUDIO_STATE_TYPES:
-            types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+            types_content += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
 
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
-        types_content = re.sub(rf"#ifndef {re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
+        types_content = re.sub(rf"#ifndef RECOMP_{re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
 
     types_content += f"\n\n{marker}\n"
-    types_content += "#ifndef OSViMode_fwd\n#define OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
+    types_content += "#ifndef RECOMP_OSViMode_fwd\n#define RECOMP_OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
     types_content += '#ifdef __cplusplus\nextern "C" {\n#endif\n'
     for var, decl in _TYPED_SOURCE_GLOBAL_DECLS.items():
-        types_content += f"#ifndef {var}_fwd_DEFINED\n#define {var}_fwd_DEFINED\n{decl}\n#endif\n"
+        types_content += f"#ifndef RECOMP_{var}_fwd_DEFINED\n#define RECOMP_{var}_fwd_DEFINED\n{decl}\n#endif\n"
     types_content += '#ifdef __cplusplus\n}\n#endif\n'
     
     write_file(TYPES_HEADER, types_content); fixes += 1
