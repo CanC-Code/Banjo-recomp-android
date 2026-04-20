@@ -634,7 +634,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         categories.setdefault(key, [])
         if isinstance(categories[key], set): categories[key] = list(categories[key])
 
-    for key in ["undeclared_identifiers","implicit_func_stubs","need_struct_body","not_a_pointer","errno_conflict","endif_without_if"]:
+    for key in ["undeclared_identifiers","implicit_func_stubs","need_struct_body","not_a_pointer","errno_conflict","endif_without_if", "linkage_conflict_funcs", "linkage_conflict_files"]:
         categories.setdefault(key, set())
         if isinstance(categories[key], list): categories[key] = set(categories[key])
 
@@ -774,6 +774,40 @@ def _scrape_logs_into_categories(categories: dict) -> None:
 
         for m in re.finditer(r"error:\s+use of undeclared identifier '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content):
             nsb.add(m.group(1))
+
+    # ====================================================================
+    # TRANSITIVE DEPENDENCY RESOLVER
+    # Ensures inner structs are injected if the compiler asks for an outer struct
+    # ====================================================================
+    deps = {
+        "OSPiHandle": ["__OSTranxInfo", "__OSBlockInfo"],
+        "__OSTranxInfo": ["__OSBlockInfo"],
+        "OSViMode": ["__OSViCommonRegs", "__OSViFieldRegs"],
+        "OSViContext": ["OSViMode", "__OSViCommonRegs", "__OSViFieldRegs", "OSMesgQueue", "OSThread", "OSMesgHdr"],
+        "OSThread": ["__OSThreadContext"],
+        "OSMesgQueue": ["OSThread"],
+        "OSPfs": ["OSIoMesg", "OSMesgQueue", "OSPiHandle"],
+        "OSIoMesg": ["OSMesgHdr", "OSPiHandle"],
+        "OSDevMgr": ["OSThread", "OSMesgQueue", "OSPiHandle"],
+        "Vtx": ["Vtx_t", "Vtx_n"]
+    }
+    
+    added_transitive = True
+    while added_transitive:
+        added_transitive = False
+        current_tags = list(categories.get("need_struct_body", set()))
+        for tag in current_tags:
+            if tag in deps:
+                for d in deps[tag]:
+                    if d not in categories["need_struct_body"]:
+                        categories["need_struct_body"].add(d)
+                        added_transitive = True
+
+    # Aggressively nuke old Vtx compound lines from n64_types.h if they exist
+    if os.path.exists(TYPES_HEADER):
+        types_content = read_file(TYPES_HEADER)
+        types_content, n = re.subn(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*Vtx_t;\s*typedef\s+union\s*\{[^}]*\}\s*Vtx;\n?", "", types_content)
+        if n > 0: write_file(TYPES_HEADER, types_content)
 
 def walk_dir(base_dir: str):
     return os.walk(base_dir)
