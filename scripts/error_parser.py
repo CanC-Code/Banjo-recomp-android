@@ -49,7 +49,7 @@ def load_external_logic():
                 if line.strip() and not line.startswith('#'):
                     OPAQUE_TYPES.add(line.strip())
 
-    # 4. Parse replacements.txt
+    # 4. Parse replacements.txt (FIXED DELIMITER)
     rep_path = os.path.join(LOGIC_DIR, "replacements.txt")
     if os.path.exists(rep_path):
         with open(rep_path, 'r') as f:
@@ -116,7 +116,7 @@ def is_defined_locally(filepath, tag):
     return bool(re.search(pattern1, c) or re.search(pattern2, c))
 
 def classify_errors(log_data):
-    """Unified classification engine."""
+    """Unified classification engine mapping compiler outputs to engine directives."""
     categories = {
         "missing_types": set(),
         "undeclared_identifiers": set(),
@@ -172,13 +172,16 @@ def classify_errors(log_data):
         if m_func: categories["implicit_func_stubs"].add(m_func.group(1))
 
         if filepath:
+            # FIX: Capture Struct Redefinitions 
             m_re = re.search(r"redefinition of '(\w+)'", line)
             if m_re: categories["struct_redef"].append((filepath, m_re.group(1)))
 
+            # FIX: Capture Typedef Redefinitions
             m_td_re = re.search(r"typedef redefinition with different types \('struct ([^']+)' vs 'struct ([^']+)'\)", line)
             if m_td_re:
                 categories["typedef_redef"].append((filepath, f"struct {m_td_re.group(1)}", f"struct {m_td_re.group(2)}"))
 
+            # FIX: Capture POSIX static shadowing
             m_stat = re.search(r"static declaration of '(\w+)' follows non-static declaration", line)
             if m_stat:
                 func_name = m_stat.group(1)
