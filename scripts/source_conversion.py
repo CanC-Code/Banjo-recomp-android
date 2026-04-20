@@ -624,14 +624,12 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
 
-        # 🔧 FIX: Deep scan for C vs C++ standard library linkage collisions
         lines = content.split('\n')
         for i, line in enumerate(lines):
             m = re.search(r"error:\s+declaration of '([A-Za-z0-9_]+)' has a different language linkage", line)
             if m:
                 func = m.group(1)
                 categories.setdefault("linkage_conflict_funcs", set()).add(func)
-                # Lookahead to catch the exact external file throwing the initial linkage assignment
                 for j in range(i + 1, min(i + 6, len(lines))):
                     m_note = re.search(r"^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+note:\s+previous declaration", lines[j])
                     if m_note:
@@ -815,12 +813,22 @@ def apply_fixes(categories: dict, intelligence_level: int = 1) -> Tuple[int, set
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
                 c = read_file(filepath)
+                original_c = c
+                
+                # 🔧 FIX: Self-healing for previously corrupted nested comments from older script versions
+                if "AUTO-FIX LINKAGE:" in c:
+                    c = re.sub(r'(?:/\*\s*AUTO-FIX LINKAGE:\s*)+', '/* AUTO-FIX LINKAGE: ', c)
+                    c = re.sub(r'(?:\*/\s*){2,}', '*/ ', c)
+                
                 # Intentionally suppress the bad declaration directly in the remote header
-                c_new, n = re.subn(rf"(?m)^(.*?\b{re.escape(func)}\s*\(.*?;)", r"/* AUTO-FIX LINKAGE: \1 */", c)
-                if n > 0:
-                    if "#include <math.h>" not in c_new and func in {"sinf", "cosf", "sqrtf", "sin", "cos", "sqrt", "tan", "tanf", "acosf", "asinf", "atanf", "atan2f"}:
-                        c_new = "#include <math.h>\n" + c_new
-                    write_file(filepath, c_new)
+                # 🔧 FIX: Negative lookahead to prevent infinitely nesting block comments on multiple passes
+                pattern = rf"(?m)^(?![^\n]*AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
+                c, n = re.subn(pattern, r"/* AUTO-FIX LINKAGE: \1 */", c)
+                
+                if c != original_c:
+                    if "#include <math.h>" not in c and func in {"sinf", "cosf", "sqrtf", "sin", "cos", "sqrt", "tan", "tanf", "acosf", "asinf", "atanf", "atan2f"}:
+                        c = "#include <math.h>\n" + c
+                    write_file(filepath, c)
                     fixed_files.add(filepath)
                     fixes += 1
 
