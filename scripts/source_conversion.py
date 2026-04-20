@@ -467,7 +467,7 @@ def strip_auto_preamble(content: str) -> str:
 def _rename_posix_static(content: str, func_name: str, filepath: str) -> Tuple[str, bool]:
     prefix   = os.path.basename(filepath).split('.')[0]
     new_name = f"n64_{prefix}_{func_name}"
-    define   = f"\n/* AUTO: rename POSIX-reserved static '{func_name}' */\n#define {func_name} {new_name}\n"
+    define   = f"\n// AUTO: rename POSIX-reserved static '{func_name}'\n#define {func_name} {new_name}\n"
     if define in content: return content, False
     includes = list(re.finditer(r'#include\s+.*?\n', content))
     idx = includes[-1].end() if includes else 0
@@ -676,7 +676,7 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         if "errno -> ->errnum" in content or "error: member access into incomplete type" in content and "errno" in content:
             for base_dir in ["src", "Android/app/src/main/cpp", "."]:
                 if not os.path.exists(base_dir): continue
-                for root, _, files in os.walk(base_dir):
+                for root, _, files in walk_dir(base_dir):
                     for f in files:
                         if f.endswith(('.c', '.cpp', '.h')):
                             err.add(normalize_path(os.path.join(root, f)))
@@ -775,6 +775,9 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         for m in re.finditer(r"error:\s+use of undeclared identifier '((?:RESAMPLE|POLEF|ENVMIX|INTERLEAVE|HIPASSLOOP|COMPRESS|REVERB|MIXER)_STATE\w*)'", content):
             nsb.add(m.group(1))
 
+def walk_dir(base_dir: str):
+    return os.walk(base_dir)
+
 def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set]:
     fixes       = 0
     fixed_files = set()
@@ -789,7 +792,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         ACTIVE_MACROS   = PHASE_1_MACROS.copy()
         ACTIVE_STRUCTS  = {}
 
-    # 🔧 FIX: Protect explicit structs from error_parser pollution
     for k, v in _EP_STRUCTS.items():
         if k not in SDK_DEFINES_THESE and k not in ACTIVE_STRUCTS: 
             ACTIVE_STRUCTS[k] = v
@@ -867,17 +869,20 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 c = read_file(filepath)
                 original_c = c
                 
+                # Heal any historically mangled nested block comments from older script versions
                 if "AUTO-FIX LINKAGE:" in c:
                     lines = c.split('\n')
                     for idx in range(len(lines)):
                         if "AUTO-FIX LINKAGE:" in lines[idx]:
-                            clean = re.sub(r'(?:/\*\s*AUTO-FIX LINKAGE:\s*)+', '/* AUTO-FIX LINKAGE: ', lines[idx])
-                            clean = re.sub(r'(?:\*/\s*){2,}', '*/', clean)
-                            lines[idx] = clean
+                            core = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*', '', lines[idx])
+                            core = re.sub(r'\*/', '', core)
+                            core = core.replace('// AUTO-FIX LINKAGE:', '')
+                            lines[idx] = f"// AUTO-FIX LINKAGE: {core.strip()}"
                     c = '\n'.join(lines)
                 
-                pattern = rf"(?m)^(?![^\n]*AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
-                c, n = re.subn(pattern, r"/* AUTO-FIX LINKAGE: \1 */", c)
+                # Apply new, non-nestable double-slash line comments
+                pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
+                c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
                 
                 if c != original_c:
                     if "#include <math.h>" not in c and func in {"sinf", "cosf", "sqrtf", "sin", "cos", "sqrt", "tan", "tanf", "acosf", "asinf", "atanf", "atan2f"}:
@@ -1130,6 +1135,115 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                 if fwd_decl not in content: fwd_lines.append(fwd_decl)
             if fwd_lines: write_file(filepath, "/* AUTO: forward declarations */\n" + "\n".join(fwd_lines) + "\n" + content); fixed_files.add(filepath); fixes += 1
 
+    if categories.get("need_struct_body"):
+        types_content = read_file(TYPES_HEADER)
+        bodies_added  = False
+        
+        # 🔧 Strict Dependency Sort for C Header Injection
+        dependency_priority = {
+            "__OSBlockInfo": 1,
+            "__OSTranxInfo": 2,
+            "OSPiHandle": 3,
+            "__OSViCommonRegs": 1,
+            "__OSViFieldRegs": 2,
+            "OSViMode": 3,
+            "Vtx_t": 1,
+            "Vtx_n": 2,
+            "Vtx": 3,
+            "__OSThreadContext": 1,
+            "OSThread": 2,
+            "OSMesgQueue": 3,
+            "Light_t": 1,
+            "Light": 2,
+            "Hilite_t": 1,
+            "Hilite": 2,
+            "OSTask_t": 1,
+            "OSTask": 2
+        }
+        def struct_sort_key(t):
+            if t in dependency_priority: return dependency_priority[t]
+            if t in ("OSPiHandle", "OSViMode", "Vtx", "OSThread", "LookAt", "OSTask"): return 100
+            return 50
+
+        ordered_tags = sorted(
+            [t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set()) and t not in SDK_DEFINES_THESE],
+            key=struct_sort_key
+        )
+        other_tags   = sorted([t for t in categories.get("need_struct_body", set()) if t not in ACTIVE_STRUCTS and t not in SDK_DEFINES_THESE])
+
+        for tag in ordered_tags + other_tags:
+            if not isinstance(tag, str): continue
+            body = ACTIVE_STRUCTS.get(tag)
+            if not body:
+                if tag in N64_AUDIO_STATE_TYPES:
+                    if not _type_already_defined(tag, types_content):
+                        types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+                        bodies_added = True
+                    continue
+                if tag in N64_OS_OPAQUE_TYPES and not _type_already_defined(tag, types_content):
+                    types_content += "\n" + _opaque_stub(tag); bodies_added = True
+                continue
+
+            norm_body  = re.sub(r'\s+', ' ', body).strip()
+            norm_types = re.sub(r'\s+', ' ', types_content)
+            
+            # Force rebuild if the file flagged a structural redefinition conflict (e.g., error_parser polluted it)
+            is_redefined = any(t == tag and f.endswith("n64_types.h") for f, t in categories.get("struct_redef", []))
+            
+            if norm_body in norm_types and not is_redefined:
+                continue
+
+            types_content = strip_redefinition(types_content, tag)
+            if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
+
+            types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
+            
+            if tag == "LookAt":
+                types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content)
+                types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content)
+            if tag == "Mtx": types_content = re.sub(r"(?m)^typedef\s+union\s*\{[^}]*\}\s*__Mtx_data\s*;\n?", "", types_content)
+
+            types_content += "\n" + body + "\n"; bodies_added = True
+
+        if bodies_added:
+            types_content = repair_unterminated_conditionals(types_content)
+            write_file(TYPES_HEADER, types_content); fixes += 1
+
+    if categories.get("local_fwd_only"):
+        file_to_types2: dict = defaultdict(set)
+        for item in categories["local_fwd_only"]:
+            if isinstance(item,(list,tuple)) and len(item)>=2: file_to_types2[item[0]].add(item[1])
+        for filepath, type_names in sorted(file_to_types2.items()):
+            if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
+            content = read_file(filepath); content = strip_auto_preamble(content); changed = False
+            for t in sorted(type_names):
+                body_pattern = rf"typedef\s+(?:struct|union)[^{{]*\{{[^}}]*\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
+                fwd_decl = f"typedef struct {t}_s {t};"
+                fwd = f"/* AUTO: forward decl for type defined below */\n{fwd_decl}\n" if re.search(body_pattern, content) else f"/* AUTO: forward declarations */\n{fwd_decl}\n"
+                if fwd_decl not in content: content = fwd + content; changed = True
+            if changed: write_file(filepath, content); fixed_files.add(filepath); fixes += 1
+
+    if categories.get("missing_globals"):
+        types_content = read_file(TYPES_HEADER)
+        globals_added = False
+        for item in sorted(categories["missing_globals"], key=str):
+            if isinstance(item,(list,tuple)) and len(item)>=2: _, glob = item[0], item[1]
+            elif isinstance(item, str): glob = item
+            else: continue
+            if glob == "actor": continue
+            if glob in _TYPED_SOURCE_GLOBALS: continue
+            
+            if glob in ACTIVE_STRUCTS or glob in N64_OS_OPAQUE_TYPES or glob in PHASE_3_STRUCTS:
+                continue
+
+            if glob in N64_KNOWN_GLOBALS:
+                if f"{glob}_DEFINED" not in types_content:
+                    types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {N64_KNOWN_GLOBALS[glob]}\n#endif\n"; globals_added = True
+            elif f" {glob};" not in types_content and f"*{glob};" not in types_content and f" {glob}[" not in types_content:
+                decl = (f"extern void* {glob};" if glob.endswith(("_ptr","_p")) else f"extern long long int {glob};")
+                types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"; globals_added = True
+        if globals_added: write_file(TYPES_HEADER, types_content); fixes += 1
+
     fixd_files: set = set()
     for item in categories.get("typedef_redef",[]):
         if isinstance(item,(list,tuple)) and len(item)>=1: fixd_files.add(item[0])
@@ -1143,6 +1257,10 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             if not isinstance(item,(list,tuple)) or len(item)<2: continue
             fp2, tag = item[0], item[1]
             if fp2 != filepath or tag in SDK_DEFINES_THESE: continue
+            
+            # Prevent the generic loop from destructively undoing the clean need_struct_body generation above.
+            if filepath.endswith("n64_types.h") and tag in ACTIVE_STRUCTS: continue
+            
             content = strip_redefinition(content, tag)
 
         for item in categories.get("typedef_redef",[]):
@@ -1308,109 +1426,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             elif ident not in ACTIVE_MACROS and f"#define {ident}" not in types_content:
                 types_content += f"\n#ifndef {ident}\n#define {ident} 0 /* TODO: unknown GBI constant */\n#endif\n"; gbi_added = True
         if gbi_added: write_file(TYPES_HEADER, types_content); fixes += 1
-
-    if categories.get("need_struct_body"):
-        types_content = read_file(TYPES_HEADER)
-        bodies_added  = False
-        
-        # 🔧 Strict Dependency Sort for C Header Injection
-        dependency_priority = {
-            "__OSBlockInfo": 1,
-            "__OSTranxInfo": 2,
-            "OSPiHandle": 3,
-            "__OSViCommonRegs": 1,
-            "__OSViFieldRegs": 2,
-            "OSViMode": 3,
-            "Vtx_t": 1,
-            "Vtx_n": 2,
-            "Vtx": 3,
-            "__OSThreadContext": 1,
-            "OSThread": 2,
-            "OSMesgQueue": 3,
-            "Light_t": 1,
-            "Light": 2,
-            "Hilite_t": 1,
-            "Hilite": 2,
-            "OSTask_t": 1,
-            "OSTask": 2
-        }
-        def struct_sort_key(t):
-            if t in dependency_priority: return dependency_priority[t]
-            if t in ("OSPiHandle", "OSViMode", "Vtx", "OSThread", "LookAt", "OSTask"): return 100
-            return 50
-
-        ordered_tags = sorted(
-            [t for t in ACTIVE_STRUCTS.keys() if t in categories.get("need_struct_body", set()) and t not in SDK_DEFINES_THESE],
-            key=struct_sort_key
-        )
-        other_tags   = sorted([t for t in categories.get("need_struct_body", set()) if t not in ACTIVE_STRUCTS and t not in SDK_DEFINES_THESE])
-
-        for tag in ordered_tags + other_tags:
-            if not isinstance(tag, str): continue
-            body = ACTIVE_STRUCTS.get(tag)
-            if not body:
-                if tag in N64_AUDIO_STATE_TYPES:
-                    if not _type_already_defined(tag, types_content):
-                        types_content += f"\n#ifndef {tag}_DEFINED\n#define {tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
-                        bodies_added = True
-                    continue
-                if tag in N64_OS_OPAQUE_TYPES and not _type_already_defined(tag, types_content):
-                    types_content += "\n" + _opaque_stub(tag); bodies_added = True
-                continue
-
-            norm_body  = re.sub(r'\s+', ' ', body).strip(); norm_types = re.sub(r'\s+', ' ', types_content)
-            if norm_body in norm_types: continue
-
-            types_content = strip_redefinition(types_content, tag)
-            if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
-
-            types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
-            
-            if tag == "LookAt":
-                types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content)
-                types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content)
-            if tag == "Mtx": types_content = re.sub(r"(?m)^typedef\s+union\s*\{[^}]*\}\s*__Mtx_data\s*;\n?", "", types_content)
-
-            types_content += "\n" + body + "\n"; bodies_added = True
-
-        if bodies_added:
-            types_content = repair_unterminated_conditionals(types_content)
-            write_file(TYPES_HEADER, types_content); fixes += 1
-
-    if categories.get("local_fwd_only"):
-        file_to_types2: dict = defaultdict(set)
-        for item in categories["local_fwd_only"]:
-            if isinstance(item,(list,tuple)) and len(item)>=2: file_to_types2[item[0]].add(item[1])
-        for filepath, type_names in sorted(file_to_types2.items()):
-            if not os.path.exists(filepath) or filepath.endswith("n64_types.h"): continue
-            content = read_file(filepath); content = strip_auto_preamble(content); changed = False
-            for t in sorted(type_names):
-                body_pattern = rf"typedef\s+(?:struct|union)[^{{]*\{{[^}}]*\}}\s*[^;]*\b{re.escape(t)}\b[^;]*;"
-                fwd_decl = f"typedef struct {t}_s {t};"
-                fwd = f"/* AUTO: forward decl for type defined below */\n{fwd_decl}\n" if re.search(body_pattern, content) else f"/* AUTO: forward declarations */\n{fwd_decl}\n"
-                if fwd_decl not in content: content = fwd + content; changed = True
-            if changed: write_file(filepath, content); fixed_files.add(filepath); fixes += 1
-
-    if categories.get("missing_globals"):
-        types_content = read_file(TYPES_HEADER)
-        globals_added = False
-        for item in sorted(categories["missing_globals"], key=str):
-            if isinstance(item,(list,tuple)) and len(item)>=2: _, glob = item[0], item[1]
-            elif isinstance(item, str): glob = item
-            else: continue
-            if glob == "actor": continue
-            if glob in _TYPED_SOURCE_GLOBALS: continue
-            
-            if glob in ACTIVE_STRUCTS or glob in N64_OS_OPAQUE_TYPES or glob in PHASE_3_STRUCTS:
-                continue
-
-            if glob in N64_KNOWN_GLOBALS:
-                if f"{glob}_DEFINED" not in types_content:
-                    types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\nextern {N64_KNOWN_GLOBALS[glob]}\n#endif\n"; globals_added = True
-            elif f" {glob};" not in types_content and f"*{glob};" not in types_content and f" {glob}[" not in types_content:
-                decl = (f"extern void* {glob};" if glob.endswith(("_ptr","_p")) else f"extern long long int {glob};")
-                types_content += f"\n#ifndef {glob}_DEFINED\n#define {glob}_DEFINED\n{decl}\n#endif\n"; globals_added = True
-        if globals_added: write_file(TYPES_HEADER, types_content); fixes += 1
 
     # ------------------------------------------------------------------
     # ENFORCE TYPED GLOBALS AT BOTTOM 
