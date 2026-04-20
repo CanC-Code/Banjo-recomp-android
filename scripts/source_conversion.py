@@ -1002,7 +1002,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
                 c = read_file(filepath); original_c = c
-                # RECURSIVE CLEANUP: Completely clear all markers (block and line) to handle gu.h deep nesting
+                # RECURSIVE CLEANUP: Strips previous /* marker */ and // marker patterns to handle gu.h nested errors
                 if "AUTO-FIX LINKAGE:" in c:
                     while "AUTO-FIX LINKAGE:" in c:
                         # Strip nested /* AUTO-FIX LINKAGE: ... */ blocks
@@ -1011,7 +1011,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                         c = re.sub(r'//\s*AUTO-FIX LINKAGE:\s*', '', c)
                     c = c.strip()
                 
-                # Apply single-line linkage marker to the scrubbed line
+                # Apply single-line linkage marker strictly using // to avoid comment closure errors
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
                 if c != original_c:
@@ -1020,12 +1020,10 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                     write_file(filepath, c); fixed_files.add(filepath); fixes += 1
 
     # ------------------------------------------------------------------
-    # PHASE 1: STRUCTS (Bottom-up priority for visibility)
+    # PHASE 1: STRUCTS (Aggressive stripping and ordered injection)
     # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
         types_content = read_file(TYPES_HEADER); bodies_added = False
-
-        # Nuking legacy flat definitions
         types_content = re.sub(r"(?s)typedef\s+struct\s*\{[^}]*\}\s*Vtx_t;\s*typedef\s+union\s*\{[^}]*\}\s*Vtx;", "", types_content)
 
         dependency_priority = {
@@ -1056,14 +1054,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                     types_content += "\n" + _opaque_stub(tag); bodies_added = True
                 continue
 
-            norm_body  = re.sub(r'\s+', ' ', body).strip()
-            norm_types = re.sub(r'\s+', ' ', types_content)
-            is_redefined = any(t == tag and f.endswith("n64_types.h") for f, t in categories.get("struct_redef", []))
-            force_rebuild = tag in dependency_priority or is_redefined
-
-            if norm_body in norm_types and not force_rebuild: continue
-
-            # Robust stripping of compact definitions before rebuild
+            # Clears all previous versions (compact, block, or union-alias) before re-injecting in order
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
@@ -1075,18 +1066,18 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             write_file(TYPES_HEADER, types_content); fixes += 1
 
     # ------------------------------------------------------------------
-    # PHASE 2: TYPED GLOBALS (Mandatory Absolute Bottom for usage visibility)
+    # PHASE 2: TYPED GLOBALS (Mandatory absolute bottom of header)
     # ------------------------------------------------------------------
     if intelligence_level >= 2:
         types_content = read_file(TYPES_HEADER); original_types = types_content
         scrub_targets = (set(ACTIVE_STRUCTS.keys()) | N64_OS_OPAQUE_TYPES | set(ACTIVE_MACROS.keys()) |
-                         {"__osPiTable","__OSBlockInfo","__OSTranxInfo","__OSViCommonRegs","__OSViFieldRegs","__OSThreadContext","__osCurrentThread","__osRunQueue","__osFaultedThread"} |
-                         _TYPED_SOURCE_GLOBALS | set(PHASE_3_STRUCTS.keys()))
+                         {"__osPiTable","__osFlashHandle","__osSfHandle","__osCurrentThread","__osRunQueue","__osFaultedThread"} |
+                         _TYPED_SOURCE_GLOBALS)
+        
         for target in scrub_targets:
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
             types_content = re.sub(rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", "", types_content)
         
-        # Inject Typed Globals at the EOF
         marker = "/* Forward declarations for source-defined typed globals */"
         if marker in types_content: types_content = types_content[:types_content.find(marker)].rstrip() + "\n"
 
@@ -1099,7 +1090,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         types_content += typed_block
         if types_content != original_types: write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # Final cleanup logic for missing identifiers and member alignment
     if categories.get("missing_members"):
         types_content = read_file(TYPES_HEADER)
         for item in sorted(categories["missing_members"]):
