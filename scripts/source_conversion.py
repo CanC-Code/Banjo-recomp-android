@@ -14,7 +14,6 @@ logger = logging.getLogger("N64_RECOMP_ENGINE")
 TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE   = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 
-# Path to the upstream synthInternals.h that needs audio state types prepended
 SYNTH_INTERNALS_H = "Android/app/src/main/cpp/../../../../../include/synthInternals.h"
 SYNTH_INTERNALS_H_ALT = "include/synthInternals.h"
 
@@ -1003,17 +1002,16 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         for filepath, func in categories["linkage_conflict_files"]:
             if func in _STDLIB_FUNCS and os.path.exists(filepath):
                 c = read_file(filepath); original_c = c
-                # RECURSIVE CLEANUP: Completely clear previous markers (block and line) to handle gu.h nested errors
+                # RECURSIVE CLEANUP: Completely clear all markers (block and line) to handle gu.h deep nesting
                 if "AUTO-FIX LINKAGE:" in c:
                     while "AUTO-FIX LINKAGE:" in c:
                         # Strip nested /* AUTO-FIX LINKAGE: ... */ blocks
                         c = re.sub(r'/\*\s*AUTO-FIX LINKAGE:\s*(.*?)\s*\*/', r'\1', c)
                         # Strip nested // AUTO-FIX LINKAGE: ... lines
                         c = re.sub(r'//\s*AUTO-FIX LINKAGE:\s*', '', c)
-                    # Restore leading/trailing whitespace after recursive strip
                     c = c.strip()
                 
-                # Apply new single-line linkage marker to the clean line
+                # Apply single-line linkage marker to the scrubbed line
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
                 if c != original_c:
@@ -1022,12 +1020,12 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
                     write_file(filepath, c); fixed_files.add(filepath); fixes += 1
 
     # ------------------------------------------------------------------
-    # PHASE 1: REBUILD STRUCT BODIES (Top-down visibility for typedefs)
+    # PHASE 1: STRUCTS (Bottom-up priority for visibility)
     # ------------------------------------------------------------------
     if categories.get("need_struct_body"):
-        types_content = read_file(TYPES_HEADER); bodies_added  = False
+        types_content = read_file(TYPES_HEADER); bodies_added = False
 
-        # Aggressively nuke legacy flat definitions that block the new decoupled setup
+        # Nuking legacy flat definitions
         types_content = re.sub(r"(?s)typedef\s+struct\s*\{[^}]*\}\s*Vtx_t;\s*typedef\s+union\s*\{[^}]*\}\s*Vtx;", "", types_content)
 
         dependency_priority = {
@@ -1061,20 +1059,14 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             norm_body  = re.sub(r'\s+', ' ', body).strip()
             norm_types = re.sub(r'\s+', ' ', types_content)
             is_redefined = any(t == tag and f.endswith("n64_types.h") for f, t in categories.get("struct_redef", []))
-            
             force_rebuild = tag in dependency_priority or is_redefined
 
             if norm_body in norm_types and not force_rebuild: continue
 
-            # Greedy stripping of old definitions before re-appending in dependency order
+            # Robust stripping of compact definitions before rebuild
             types_content = strip_redefinition(types_content, tag)
             if not tag.endswith("_s"): types_content = strip_redefinition(types_content, f"{tag}_s")
             types_content = re.sub(rf"#ifndef {re.escape(tag)}_DEFINED[\s\S]*?#endif\n?", "", types_content)
-
-            if tag == "LookAt":
-                types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__Light_t\s*;\n?", "", types_content)
-                types_content = re.sub(r"(?m)^typedef\s+struct\s*\{[^}]*\}\s*__LookAtDir\s*;\n?", "", types_content)
-            if tag == "Mtx": types_content = re.sub(r"(?m)^typedef\s+union\s*\{[^}]*\}\s*__Mtx_data\s*;\n?", "", types_content)
 
             types_content += "\n" + body + "\n"; bodies_added = True
 
@@ -1083,7 +1075,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             write_file(TYPES_HEADER, types_content); fixes += 1
 
     # ------------------------------------------------------------------
-    # PHASE 2: ENFORCE TYPED GLOBALS (Must follow struct definitions)
+    # PHASE 2: TYPED GLOBALS (Mandatory Absolute Bottom for usage visibility)
     # ------------------------------------------------------------------
     if intelligence_level >= 2:
         types_content = read_file(TYPES_HEADER); original_types = types_content
@@ -1094,7 +1086,7 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
             types_content = re.sub(rf"(?m)^#ifndef {re.escape(target)}_DEFINED\n#define {re.escape(target)}_DEFINED\nextern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n#endif\n?", "", types_content)
             types_content = re.sub(rf"(?m)^extern\s+(?:long\s+long\s+int|void\*)\s+{re.escape(target)}(?:\[\])?;\n?", "", types_content)
         
-        # Inject global forward decls block at the VERY end
+        # Inject Typed Globals at the EOF
         marker = "/* Forward declarations for source-defined typed globals */"
         if marker in types_content: types_content = types_content[:types_content.find(marker)].rstrip() + "\n"
 
@@ -1107,20 +1099,9 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         types_content += typed_block
         if types_content != original_types: write_file(TYPES_HEADER, types_content); fixes += 1
 
-    # ------------------------------------------------------------------
-    # REST OF FIXES
-    # ------------------------------------------------------------------
-    if patch_exceptasm(): fixed_files.add("Android/app/src/main/cpp/ultra/exceptasm.cpp"); fixes += 1
-    if patch_dialog_missing_include(): fixed_files.add("src/core2/gc/dialog.c"); fixes += 1
-
-    # ... (Generic fixes for undeclared identifiers, stubs, etc. follow standard patterns)
-    
-    # [Rest of the apply_fixes function logic remains as provided, but respecting the new n64_types.h structure]
-    
-    # (Final missing types/members/globals logic)
+    # Final cleanup logic for missing identifiers and member alignment
     if categories.get("missing_members"):
         types_content = read_file(TYPES_HEADER)
-        # Injects fields into structs or creates opaque placeholders
         for item in sorted(categories["missing_members"]):
             struct_name, member_name = item[0], item[1]
             pattern = rf"(struct\s+{re.escape(struct_name)}\s*\{{)([^}}]*?)(\}})"
