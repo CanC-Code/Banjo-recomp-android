@@ -14,6 +14,7 @@ TYPES_HEADER = "Android/app/src/main/cpp/ultra/n64_types.h"
 STUBS_FILE = "Android/app/src/main/cpp/ultra/n64_stubs.c"
 SYNTH_INTERNALS_H = "Android/app/src/main/cpp/../../../../../include/synthInternals.h"
 SYNTH_INTERNALS_H_ALT = "include/synthInternals.h"
+CMAKE_LISTS_PATH = "Android/app/CMakeLists.txt"
 
 # --- Constants & Fallbacks ---
 try:
@@ -571,6 +572,32 @@ def ensure_n64_bool_header():
         except Exception:
             pass
 
+def patch_cmake_compiler_flags() -> bool:
+    """
+    Automatically injects Clang compiler flags into the Android wrapper's build script to silence
+    N64 graphic macros causing 'compile-time constant' errors.
+    """
+    path = CMAKE_LISTS_PATH
+    if not os.path.exists(path):
+        # Fallback search path if executed from varying root directory
+        path = "CMakeLists.txt"
+        if not os.path.exists(path):
+            return False
+
+    content = read_file(path)
+    flags = "-Wno-error=initializer-overrides -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -fpermissive"
+    
+    if flags in content:
+        return False
+        
+    # Safely append to the end of the file if not already present
+    content += f'\n# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n'
+    content += f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n'
+    content += f'set(CMAKE_CXX_FLAGS "${{CMAKE_CXX_FLAGS}} {flags}")\n'
+    
+    write_file(path, content)
+    return True
+
 def strip_redefinition(content: str, tag: str) -> str:
     # Cleanly erase any previously injected recomp structs using the new Block Markers
     content = re.sub(
@@ -814,6 +841,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
     if patch_synth_internals():
         fixes += 1
     if patch_exceptasm():
+        fixes += 1
+    if patch_cmake_compiler_flags():
         fixes += 1
 
     ORDERED_STRUCT_TAGS = [
