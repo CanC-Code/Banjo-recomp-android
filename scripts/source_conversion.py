@@ -178,8 +178,8 @@ typedef struct MIXER_STATE_s { long long int force_align[64]; } MIXER_STATE;
 # --- N64 Struct Bodies (Fully Decoupled) ---
 _N64_OS_STRUCT_BODIES = {
     "Mtx": "#ifndef Mtx_DEFINED\n#define Mtx_DEFINED\ntypedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;\n#endif",
-    "OSContStatus": "#ifndef OSContStatus_DEFINED\n#define OSContStatus_DEFINED\ntypedef struct OSContStatus_s { u16 type; u8 status; u8 errnum; } OSContStatus;\n#endif",
-    "OSContPad": "#ifndef OSContPad_DEFINED\n#define OSContPad_DEFINED\ntypedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; u8 errnum; } OSContPad;\n#endif",
+    "OSContStatus": "#ifndef OSContStatus_DEFINED\n#define OSContStatus_DEFINED\ntypedef struct OSContStatus_s { u16 type; u8 status; union { u8 errnum; u8 errno; }; } OSContStatus;\n#endif",
+    "OSContPad": "#ifndef OSContPad_DEFINED\n#define OSContPad_DEFINED\ntypedef struct OSContPad_s { u16 button; s8 stick_x; s8 stick_y; union { u8 errnum; u8 errno; }; } OSContPad;\n#endif",
     "__OSThreadContext": (
         '#ifndef __OSThreadContext_DEFINED\n'
         '#define __OSThreadContext_DEFINED\n'
@@ -369,7 +369,11 @@ PHASE_3_STRUCTS = {
     "Struct_core2_7AF80_1": (
         "#ifndef Struct_core2_7AF80_1_DEFINED\n"
         "#define Struct_core2_7AF80_1_DEFINED\n"
-        "typedef struct Struct_core2_7AF80_1_s { long long int force_align[64]; } Struct_core2_7AF80_1;\n"
+        "typedef struct Struct_core2_7AF80_1_s {\n"
+        "    s32 count;\n"
+        "    void *unk8;\n"
+        "    long long int force_align_tail[62];\n"
+        "} Struct_core2_7AF80_1;\n"
         "#endif"
     ),
     "MapModelDescription": (
@@ -378,8 +382,9 @@ PHASE_3_STRUCTS = {
         "typedef struct MapModelDescription_s {\n"
         "    s32 map_id;\n"
         "    s32 opa_model_id;\n"
+        "    s32 xlu_model_id;\n"
         "    f32 scale;\n"
-        "    long long int force_align_tail[61];\n"
+        "    long long int force_align_tail[60];\n"
         "} MapModelDescription;\n"
         "#endif"
     ),
@@ -408,13 +413,13 @@ N64_PRIMITIVES = {
 }
 
 N64_OS_OPAQUE_TYPES = {
-    "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue", "OSThread",
+    "OSPiHandle", "OSMesgQueue", "OSThread",
     "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller",
     "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr", "OSPfsState", "OSPfsFile",
     "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
     "OSYieldResult", "OSEvent",
     "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState",
-    "Struct_core2_7AF80_1", "Struct_core1_10A00_1",
+    "Struct_core1_10A00_1",
 }
 
 N64_AUDIO_STATE_TYPES = {
@@ -817,7 +822,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         "OSPiHandle", "OSMesgQueue", "OSViContext",
         "OSMesgHdr",
         "OSIoMesg",
-        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription", "MapProgressFlagToDialogID"
+        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription", "MapProgressFlagToDialogID",
+        "Struct_core2_7AF80_1"
     ]
 
     types_content = read_file(TYPES_HEADER)
