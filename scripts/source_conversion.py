@@ -551,21 +551,21 @@ def heal_corrupted_headers():
                         pass
 
 def strip_redefinition(content: str, tag: str) -> str:
-    # Cleanly erase any previously injected recomp structs for this tag
+    # 1. Cleanly erase any previously injected recomp structs using the new Block Markers
     content = re.sub(
-        rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n[\s\S]*?#\s*endif\s*\r?\n?",
+        rf"(?m)^// --- RECOMP_INJECT: {re.escape(tag)} ---[\s\S]*?// --- END_RECOMP_INJECT: {re.escape(tag)} ---\r?\n?",
         "",
         content
     )
 
-    # Erase previously injected opaque stubs as well
+    # 2. Erase previously injected opaque stubs as well
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
 
-    # Proceed with standard SDK stripping
+    # 3. Proceed with standard SDK stripping for the first pass
     content = re.sub(
         rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$",
         f"/* STRIPPED DEFINE: {tag}_DEFINED */",
@@ -577,7 +577,7 @@ def strip_redefinition(content: str, tag: str) -> str:
         content
     )
 
-    # Fallback regex for simple leaf structs
+    # 4. Fallback regex for simple leaf structs
     content = re.sub(
         rf"\b(?:typedef\s+(?:struct|union)|struct|union)\b[^{{;]*{{[^{{}}]*}}\s*{re.escape(tag)}(?:_s|_u)?\s*;",
         f"/* STRIPPED SIMPLE BLOCK: {tag} */",
@@ -589,6 +589,7 @@ def strip_redefinition(content: str, tag: str) -> str:
     idx = 0
     tag_pattern = rf'\b{re.escape(tag)}(?:_s|_u)?\b'
 
+    # Fallback Brace matching logic to ensure raw decompiled C structs are handled
     while True:
         match = pattern.search(content, idx)
         if not match:
@@ -728,12 +729,18 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
         "build_log.txt",
         "Android/failed_files.log"
     ]
+    
+    # ANSI escape sequence stripper for modern CI logs (e.g. Ninja/Clang)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    
     for log_file in log_candidates:
         if not os.path.exists(log_file):
             continue
-        content = read_file(log_file)
-
+            
+        raw_content = read_file(log_file)
+        content = ansi_escape.sub('', raw_content)
         lines = content.split('\n')
+        
         for i, line in enumerate(lines):
             # 1) Robust Linkage Scanner
             m_link = re.search(
@@ -768,17 +775,10 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 ):
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
-            # 2) Struct extraction mappings
-            m_struct1 = re.search(r"error:\s+unknown type name '(\w+)'", line)
+            # 2) Broadened Struct extraction mappings
+            m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type)\s+'(?:struct\s+|union\s+)?(\w+)'", line)
             if m_struct1:
                 categories.setdefault("need_struct_body", set()).add(m_struct1.group(1))
-
-            m_struct2 = re.search(
-                r"error: member access into incomplete type '(?:struct|union )?(\w+)'",
-                line
-            )
-            if m_struct2:
-                categories.setdefault("need_struct_body", set()).add(m_struct2.group(1))
 
 def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set[str]]:
     fixes = 0
@@ -818,25 +818,29 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
 
     injected_structs = ""
 
+    # Generate the injected block using the new tagged markers
+    def _format_injection(tag: str, inner_code: str) -> str:
+        return f"\n// --- RECOMP_INJECT: {tag} ---\n{inner_code}\n// --- END_RECOMP_INJECT: {tag} ---\n"
+
     for tag in ORDERED_STRUCT_TAGS:
         if tag in target_tags:
             types_content = strip_redefinition(types_content, tag)
             if tag in ALL_STRUCTS:
-                injected_structs += f"\n{ALL_STRUCTS[tag]}\n"
+                injected_structs += _format_injection(tag, ALL_STRUCTS[tag])
             elif tag in N64_OS_OPAQUE_TYPES:
-                injected_structs += "\n" + _opaque_stub(tag)
+                injected_structs += _format_injection(tag, _opaque_stub(tag))
             elif tag in N64_AUDIO_STATE_TYPES:
-                injected_structs += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+                injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
             target_tags.discard(tag)
 
     for tag in list(target_tags):
         types_content = strip_redefinition(types_content, tag)
         if tag in ALL_STRUCTS:
-            injected_structs += f"\n{ALL_STRUCTS[tag]}\n"
+            injected_structs += _format_injection(tag, ALL_STRUCTS[tag])
         elif tag in N64_OS_OPAQUE_TYPES:
-            injected_structs += "\n" + _opaque_stub(tag)
+            injected_structs += _format_injection(tag, _opaque_stub(tag))
         elif tag in N64_AUDIO_STATE_TYPES:
-            injected_structs += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+            injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
 
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(
@@ -873,6 +877,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
                 c = read_file(filepath)
                 c = _scrub_linkage_comments(c)
 
+                # Proceed with standard Auto-Fix linkage scrubber 
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
                 if n > 0:
