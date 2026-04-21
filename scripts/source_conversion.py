@@ -406,7 +406,6 @@ N64_PRIMITIVES = {
     "OSHWIntr", "ADPCM_STATE", "OSYieldResult", "OSEvent", "Vp_t", "Vp"
 }
 
-# REMOVED: "OSPfsState", "OSPfsFile", "OSPfsDir" to prevent collision with core1/pfsmanager.h definitions
 N64_OS_OPAQUE_TYPES = {
     "OSPiHandle", "OSMesgQueue", "OSThread",
     "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller",
@@ -818,9 +817,16 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
             # 2) Broadened Struct extraction mappings
-            m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type)\s+'(?:struct\s+|union\s+)?(\w+)'", line)
+            m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?(\w+)'", line)
             if m_struct1:
                 categories.setdefault("need_struct_body", set()).add(m_struct1.group(1))
+
+            # 3) DYNAMIC ROBUSTNESS: Redefinition and Conflict Extraction
+            # This captures anything colliding so the orchestrator can intelligently back-off
+            if "error:" in line and ("redefinition" in line or "conflicting types" in line):
+                matches = re.findall(r"'(?:struct\s+|union\s+)?(\w+)'", line)
+                for m in matches:
+                    categories.setdefault("redefinition_conflict", set()).add(m)
 
 def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set[str]]:
     fixes = 0
@@ -855,11 +861,16 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
     if marker in types_content:
         types_content = types_content.split(marker)[0].strip()
 
+    redef_conflicts = set(categories.get("redefinition_conflict", set()))
+
     target_tags = set(ALL_STRUCTS.keys())
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
 
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
+
+    # DYNAMIC ROBUSTNESS: Automatically back-off on redefined types to yield to native headers
+    target_tags -= redef_conflicts
 
     injected_structs = ""
 
@@ -876,6 +887,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
                 injected_structs += _format_injection(tag, _opaque_stub(tag))
             elif tag in N64_AUDIO_STATE_TYPES:
                 injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
+            else:
+                injected_structs += _format_injection(tag, _opaque_stub(tag, 64))
             target_tags.discard(tag)
 
     for tag in list(target_tags):
@@ -886,9 +899,14 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
             injected_structs += _format_injection(tag, _opaque_stub(tag))
         elif tag in N64_AUDIO_STATE_TYPES:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
+        else:
+            # DYNAMIC ROBUSTNESS: Automatically synthesize an opaque stub for globally undefined structs
+            logger.info(f"Dynamically generating opaque stub for unknown struct: {tag}")
+            injected_structs += _format_injection(tag, _opaque_stub(tag, 64))
 
     for tag in N64_FORWARD_STRUCTS:
-        injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_FWD_DEFINED\n#define RECOMP_{tag}_FWD_DEFINED\nstruct {tag};\ntypedef struct {tag} {tag};\n#endif")
+        if tag not in redef_conflicts:
+            injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_FWD_DEFINED\n#define RECOMP_{tag}_FWD_DEFINED\nstruct {tag};\ntypedef struct {tag} {tag};\n#endif")
 
     # Inject macros using the block marker system
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
