@@ -379,16 +379,20 @@ PHASE_3_STRUCTS = {
         "#ifndef MapModelDescription_DEFINED\n"
         "#define MapModelDescription_DEFINED\n"
         "typedef struct MapModelDescription_s {\n"
-        "    long long int force_align[8];\n"
-        "    f32 scale; /* Temporarily exposed for mapModel.c compilation */\n"
-        "    long long int force_align_tail[55];\n"
+        "    s32 map_id;\n"
+        "    s32 opa_model_id;\n"
+        "    f32 scale;\n"
+        "    long long int force_align_tail[61];\n"
         "} MapModelDescription;\n"
         "#endif"
     ),
     "MapProgressFlagToDialogID": (
         "#ifndef MapProgressFlagToDialogID_DEFINED\n"
         "#define MapProgressFlagToDialogID_DEFINED\n"
-        "typedef struct MapProgressFlagToDialogID_s { long long int force_align[64]; } MapProgressFlagToDialogID;\n"
+        "typedef struct MapProgressFlagToDialogID_s {\n"
+        "    s32 value;\n"
+        "    long long int force_align_tail[63];\n"
+        "} MapProgressFlagToDialogID;\n"
         "#endif"
     ),
 }
@@ -414,7 +418,6 @@ N64_OS_OPAQUE_TYPES = {
     "OSYieldResult", "OSEvent",
     "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState",
     "Struct_core2_7AF80_1", "Struct_core1_10A00_1",
-    "MapProgressFlagToDialogID",
 }
 
 N64_AUDIO_STATE_TYPES = {
@@ -806,7 +809,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         "OSPiHandle", "OSMesgQueue", "OSViContext",
         "OSMesgHdr",
         "OSIoMesg",
-        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription"
+        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription", "MapProgressFlagToDialogID"
     ]
 
     types_content = read_file(TYPES_HEADER)
