@@ -556,14 +556,11 @@ def heal_corrupted_headers():
 
 def strip_redefinition(content: str, tag: str) -> str:
     # 1. Cleanly erase any previously injected recomp structs for this tag
-    # This prevents orphaned ifndefs from layering together over multiple script runs!
-    content = re.sub(rf"(?m)^#ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\n#define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\n[\s\S]*?#endif\n?", "", content)
-    
-    # 2. Erase previously injected opaque stubs as well
-    content = re.sub(rf"(?m)^#ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\n#define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\nstruct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\ntypedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\n#endif\n?", "", content)
+    # Using \s*\r?\n hard-ensures it handles ALL line endings and prevents orphan #ifndefs!
+    content = re.sub(rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n[\s\S]*?#\s*endif\s*\r?\n?", "", content)
 
     # 3. Proceed with standard SDK stripping
-    content = re.sub(rf"(?m)^\s*#\s*define\s+{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
+    content = re.sub(rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
     content = re.sub(rf"(?m)^\s*typedef\s+(?:struct|union)\s+[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;\s*$", f"/* STRIPPED FWD: {tag} */", content)
     
     pattern = re.compile(r'\b(typedef\s+(?:struct|union)|struct|union)\b[^{;]*\{')
@@ -606,27 +603,9 @@ def strip_redefinition(content: str, tag: str) -> str:
     return content
 
 def repair_unterminated_conditionals(content: str) -> str:
-    """Intelligently pops and repairs mismatched or broken preprocessor ifndef boundaries."""
-    lines = content.split('\n')
-    stack = []
-    remove = set()
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if re.match(r'#\s*(?:ifndef|ifdef|if)\b', stripped):
-            next_define = False
-            for j in range(i + 1, min(i + 3, len(lines))):
-                ns = lines[j].strip()
-                if ns.startswith('#define'):
-                    next_define = True; break
-                if ns: break
-            stack.append((i, next_define))
-        elif re.match(r'#\s*endif\b', stripped):
-            if stack:
-                start_idx, has_define = stack.pop()
-                if not has_define:
-                    remove.add(start_idx)
-                    remove.add(i)
-    return '\n'.join(line for i, line in enumerate(lines) if i not in remove)
+    # DANGEROUS: Disabled! The old heuristic would recklessly destroy valid #ifdef __cplusplus
+    # guards from the SDK. The highly precise regexes in strip_redefinition handle cleanup fully!
+    return content
 
 def _find_synth_internals() -> Optional[str]:
     candidates = [SYNTH_INTERNALS_H, SYNTH_INTERNALS_H_ALT, "include/synthInternals.h"]
@@ -663,10 +642,11 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
         content = read_file(TYPES_HEADER)
     else: content = ""
     
-    if "RECOMP_CORE_PRIMITIVES_DEFINED" not in content or "typedef uint8_t  u8;" not in content:
-        content = re.sub(r'(?m)^#include <stdint\.h>\n#ifndef (?:CORE|RECOMP_CORE)_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\n?', '', content)
-        content = content.replace("#pragma once", "").strip()
-        content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
+    # We forcefully re-inject primitives block from scratch. We use \s*\r?\n to ensure 
+    # we heal any previous damage cleanly across all OS environments.
+    content = re.sub(r'(?m)^#include <stdint\.h>\s*\r?\n#ifndef (?:CORE|RECOMP_CORE)_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\s*\r?\n?', '', content)
+    content = content.replace("#pragma once", "").strip()
+    content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
     
     content = repair_unterminated_conditionals(content)
     write_file(TYPES_HEADER, content)
