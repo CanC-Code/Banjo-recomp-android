@@ -400,7 +400,6 @@ PHASE_3_STRUCTS = {
 }
 
 # Automatically upgrade all ALL_STRUCTS to use our custom highly-unique RECOMP_ prefix 
-# to guarantee absolute immunity from N64 SDK preprocessor collisions!
 ALL_STRUCTS = {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}
 for _k in ALL_STRUCTS:
     ALL_STRUCTS[_k] = ALL_STRUCTS[_k].replace(f"#ifndef {_k}_DEFINED", f"#ifndef RECOMP_{_k}_DEFINED")
@@ -556,13 +555,19 @@ def heal_corrupted_headers():
 
 def strip_redefinition(content: str, tag: str) -> str:
     # 1. Cleanly erase any previously injected recomp structs for this tag
-    # Using \s*\r?\n hard-ensures it handles ALL line endings and prevents orphan #ifndefs!
     content = re.sub(rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n[\s\S]*?#\s*endif\s*\r?\n?", "", content)
+    
+    # 2. Erase previously injected opaque stubs as well
+    content = re.sub(rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?", "", content)
 
     # 3. Proceed with standard SDK stripping
     content = re.sub(rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
     content = re.sub(rf"(?m)^\s*typedef\s+(?:struct|union)\s+[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;\s*$", f"/* STRIPPED FWD: {tag} */", content)
     
+    # 4. EXTREMELY safe fallback regex for simple leaf structs (No nested braces inside them)
+    content = re.sub(rf"\b(?:typedef\s+(?:struct|union)|struct|union)\b[^{{;]*{{[^{{}}]*}}\s*{re.escape(tag)}(?:_s|_u)?\s*;", f"/* STRIPPED SIMPLE BLOCK: {tag} */", content)
+    
+    # 5. Robust comment-aware brace matching block stripper
     pattern = re.compile(r'\b(typedef\s+(?:struct|union)|struct|union)\b[^{;]*\{')
     new_content = ""
     idx = 0
@@ -579,9 +584,30 @@ def strip_redefinition(content: str, tag: str) -> str:
         
         open_braces = 1
         curr_idx = brace_idx + 1
+        in_line_comment = False
+        in_block_comment = False
+        
+        # Fast comment skipping to guarantee we don't trip over "/* { */" or "// }"
         while curr_idx < len(content) and open_braces > 0:
-            if content[curr_idx] == '{': open_braces += 1
-            elif content[curr_idx] == '}': open_braces -= 1
+            if not in_line_comment and not in_block_comment:
+                if content[curr_idx:curr_idx+2] == '//':
+                    in_line_comment = True
+                    curr_idx += 2
+                    continue
+                elif content[curr_idx:curr_idx+2] == '/*':
+                    in_block_comment = True
+                    curr_idx += 2
+                    continue
+                elif content[curr_idx] == '{': open_braces += 1
+                elif content[curr_idx] == '}': open_braces -= 1
+            elif in_line_comment:
+                if content[curr_idx] == '\n':
+                    in_line_comment = False
+            elif in_block_comment:
+                if content[curr_idx:curr_idx+2] == '*/':
+                    in_block_comment = False
+                    curr_idx += 2
+                    continue
             curr_idx += 1
             
         semi_idx = content.find(';', curr_idx)
@@ -603,8 +629,8 @@ def strip_redefinition(content: str, tag: str) -> str:
     return content
 
 def repair_unterminated_conditionals(content: str) -> str:
-    # DANGEROUS: Disabled! The old heuristic would recklessly destroy valid #ifdef __cplusplus
-    # guards from the SDK. The highly precise regexes in strip_redefinition handle cleanup fully!
+    # Disabled to prevent destroying critical SDK standard C++ guards. 
+    # Replaced by cleaner regex cleanup in strip_redefinition
     return content
 
 def _find_synth_internals() -> Optional[str]:
@@ -642,8 +668,7 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
         content = read_file(TYPES_HEADER)
     else: content = ""
     
-    # We forcefully re-inject primitives block from scratch. We use \s*\r?\n to ensure 
-    # we heal any previous damage cleanly across all OS environments.
+    # We forcefully re-inject primitives block from scratch at the VERY TOP of the file 
     content = re.sub(r'(?m)^#include <stdint\.h>\s*\r?\n#ifndef (?:CORE|RECOMP_CORE)_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\s*\r?\n?', '', content)
     content = content.replace("#pragma once", "").strip()
     content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
@@ -709,29 +734,41 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
 
+    # Store injections separately so we can surgically insert them at the TOP of the file.
+    # This prevents ordering conflicts like `unknown type name Vtx_t`
+    injected_structs = ""
+
     for tag in ORDERED_STRUCT_TAGS:
         if tag in target_tags:
             types_content = strip_redefinition(types_content, tag)
             if tag in ALL_STRUCTS:
-                types_content += f"\n{ALL_STRUCTS[tag]}\n"
+                injected_structs += f"\n{ALL_STRUCTS[tag]}\n"
             elif tag in N64_OS_OPAQUE_TYPES:
-                types_content += "\n" + _opaque_stub(tag)
+                injected_structs += "\n" + _opaque_stub(tag)
             elif tag in N64_AUDIO_STATE_TYPES:
-                types_content += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+                injected_structs += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
             target_tags.remove(tag)
 
     for tag in list(target_tags):
         types_content = strip_redefinition(types_content, tag)
         if tag in ALL_STRUCTS:
-            types_content += f"\n{ALL_STRUCTS[tag]}\n"
+            injected_structs += f"\n{ALL_STRUCTS[tag]}\n"
         elif tag in N64_OS_OPAQUE_TYPES:
-            types_content += "\n" + _opaque_stub(tag)
+            injected_structs += "\n" + _opaque_stub(tag)
         elif tag in N64_AUDIO_STATE_TYPES:
-            types_content += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
+            injected_structs += f"\n#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif\n"
 
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
         types_content = re.sub(rf"#ifndef RECOMP_{re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
+
+    # Insert injected structs cleanly AFTER the primitive block so they evaluate BEFORE SDK headers!
+    core_marker = "/* END_CORE_PRIMITIVES */"
+    if core_marker in types_content:
+        parts = types_content.split(core_marker, 1)
+        types_content = parts[0] + core_marker + "\n" + injected_structs + parts[1]
+    else:
+        types_content = injected_structs + "\n" + types_content
 
     types_content += f"\n\n{marker}\n"
     types_content += "#ifndef RECOMP_OSViMode_fwd\n#define RECOMP_OSViMode_fwd\ntypedef struct OSViMode_s OSViMode;\n#endif\n"
