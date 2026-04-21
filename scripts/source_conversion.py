@@ -371,8 +371,9 @@ PHASE_3_STRUCTS = {
         "#define Struct_core2_7AF80_1_DEFINED\n"
         "typedef struct Struct_core2_7AF80_1_s {\n"
         "    s32 count;\n"
+        "    s32 unk4;\n"
         "    void *unk8;\n"
-        "    long long int force_align_tail[62];\n"
+        "    long long int force_align_tail[61];\n"
         "} Struct_core2_7AF80_1;\n"
         "#endif"
     ),
