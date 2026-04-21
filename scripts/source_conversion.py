@@ -378,7 +378,11 @@ PHASE_3_STRUCTS = {
     "MapModelDescription": (
         "#ifndef MapModelDescription_DEFINED\n"
         "#define MapModelDescription_DEFINED\n"
-        "typedef struct MapModelDescription_s { long long int force_align[64]; } MapModelDescription;\n"
+        "typedef struct MapModelDescription_s {\n"
+        "    long long int force_align[8];\n"
+        "    f32 scale; /* Temporarily exposed for mapModel.c compilation */\n"
+        "    long long int force_align_tail[55];\n"
+        "} MapModelDescription;\n"
         "#endif"
     ),
     "MapProgressFlagToDialogID": (
@@ -410,7 +414,7 @@ N64_OS_OPAQUE_TYPES = {
     "OSYieldResult", "OSEvent",
     "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState",
     "Struct_core2_7AF80_1", "Struct_core1_10A00_1",
-    "MapModelDescription", "MapProgressFlagToDialogID",
+    "MapProgressFlagToDialogID",
 }
 
 N64_AUDIO_STATE_TYPES = {
@@ -446,6 +450,7 @@ _TYPED_SOURCE_GLOBAL_DECLS = {
     "osViModeMpalLan1": "extern OSViMode osViModeMpalLan1;",
     "osPiRawStartDma": "extern s32 osPiRawStartDma(s32, u32, void *, u32);",
     "osEPiRawStartDma": "extern s32 osEPiRawStartDma(struct OSPiHandle_s *, s32, u32, void *, u32);",
+    "__OSGlobalIntMask": "extern u32 __OSGlobalIntMask;",
 }
 
 _STDLIB_FUNCS = {
@@ -551,21 +556,21 @@ def heal_corrupted_headers():
                         pass
 
 def strip_redefinition(content: str, tag: str) -> str:
-    # 1. Cleanly erase any previously injected recomp structs using the new Block Markers
+    # Cleanly erase any previously injected recomp structs using the new Block Markers
     content = re.sub(
         rf"(?m)^// --- RECOMP_INJECT: {re.escape(tag)} ---[\s\S]*?// --- END_RECOMP_INJECT: {re.escape(tag)} ---\r?\n?",
         "",
         content
     )
 
-    # 2. Erase previously injected opaque stubs as well
+    # Erase previously injected opaque stubs as well
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
 
-    # 3. Proceed with standard SDK stripping for the first pass
+    # Proceed with standard SDK stripping for the first pass
     content = re.sub(
         rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$",
         f"/* STRIPPED DEFINE: {tag}_DEFINED */",
@@ -577,7 +582,7 @@ def strip_redefinition(content: str, tag: str) -> str:
         content
     )
 
-    # 4. Fallback regex for simple leaf structs
+    # Fallback regex for simple leaf structs
     content = re.sub(
         rf"\b(?:typedef\s+(?:struct|union)|struct|union)\b[^{{;]*{{[^{{}}]*}}\s*{re.escape(tag)}(?:_s|_u)?\s*;",
         f"/* STRIPPED SIMPLE BLOCK: {tag} */",
@@ -801,7 +806,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         "OSPiHandle", "OSMesgQueue", "OSViContext",
         "OSMesgHdr",
         "OSIoMesg",
-        "OSPfs", "OSDevMgr", "OSTimer"
+        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription"
     ]
 
     types_content = read_file(TYPES_HEADER)
@@ -818,7 +823,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
 
     injected_structs = ""
 
-    # Generate the injected block using the new tagged markers
+    # Generate the injected block using the tagged markers
     def _format_injection(tag: str, inner_code: str) -> str:
         return f"\n// --- RECOMP_INJECT: {tag} ---\n{inner_code}\n// --- END_RECOMP_INJECT: {tag} ---\n"
 
@@ -841,6 +846,14 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
             injected_structs += _format_injection(tag, _opaque_stub(tag))
         elif tag in N64_AUDIO_STATE_TYPES:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
+
+    # Inject macros using the block marker system
+    macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
+    for m_name, m_val in PHASE_3_MACROS.items():
+        macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
+    macro_injection += "// --- END_RECOMP_INJECT: MACROS ---\n"
+    
+    injected_structs = macro_injection + injected_structs
 
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(
