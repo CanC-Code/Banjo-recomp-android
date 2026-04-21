@@ -406,11 +406,11 @@ N64_PRIMITIVES = {
     "OSHWIntr", "ADPCM_STATE", "OSYieldResult", "OSEvent", "Vp_t", "Vp"
 }
 
+# REMOVED: "OSPfsState", "OSPfsFile", "OSPfsDir" to prevent collision with core1/pfsmanager.h definitions
 N64_OS_OPAQUE_TYPES = {
     "OSPiHandle", "OSMesgQueue", "OSThread",
     "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller",
-    "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr", "OSPfsState", "OSPfsFile",
-    "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
+    "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr", "OSDevMgr", "SPTask", "GBIarg",
     "OSYieldResult", "OSEvent",
     "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState",
 }
