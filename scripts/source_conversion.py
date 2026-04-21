@@ -367,17 +367,6 @@ PHASE_3_STRUCTS = {
     "Hilite": "#ifndef Hilite_DEFINED\n#define Hilite_DEFINED\ntypedef union { Hilite_t h; long long int force_align[2]; } Hilite;\n#endif",
     "uSprite": "#ifndef uSprite_DEFINED\n#define uSprite_DEFINED\ntypedef struct { s16 objX, objY; u16 scaleW, scaleH; s16 imageW, imageH; u16 paddedW, paddedH; u16 bitmapW, bitmapH; s16 imageX, imageY; u16 imageFlags; } uSprite;\n#endif",
     "CPUState": "#ifndef CPUState_DEFINED\n#define CPUState_DEFINED\ntypedef struct { u32 gpr[32]; u32 sr, pc, cause, badvaddr, sp, ra; u32 lo, hi; u32 fpr[32]; u32 fpcsr; } CPUState;\n#endif",
-    "Struct_core2_7AF80_1": (
-        "#ifndef Struct_core2_7AF80_1_DEFINED\n"
-        "#define Struct_core2_7AF80_1_DEFINED\n"
-        "typedef struct Struct_core2_7AF80_1_s {\n"
-        "    s32 count;\n"
-        "    s32 unk4;\n"
-        "    void *unk8;\n"
-        "    long long int force_align_tail[61];\n"
-        "} Struct_core2_7AF80_1;\n"
-        "#endif"
-    ),
     "MapModelDescription": (
         "#ifndef MapModelDescription_DEFINED\n"
         "#define MapModelDescription_DEFINED\n"
@@ -401,6 +390,9 @@ PHASE_3_STRUCTS = {
     ),
 }
 
+# Tag match structural forwarding safely detaches compiler dependency from local code limits
+N64_FORWARD_STRUCTS = ["Struct_core2_7AF80_1", "Struct_core1_10A00_1"]
+
 # --- Automatically Upgrade Struct Definitions with RECOMP Prefix ---
 ALL_STRUCTS = {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}
 for _k in ALL_STRUCTS:
@@ -421,7 +413,6 @@ N64_OS_OPAQUE_TYPES = {
     "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
     "OSYieldResult", "OSEvent",
     "Acmd", "Gfx", "Light", "Hilite", "uSprite", "CPUState",
-    "Struct_core1_10A00_1",
 }
 
 N64_AUDIO_STATE_TYPES = {
@@ -476,6 +467,12 @@ _STDLIB_FUNCS = {
 
 _CORE_PRIMITIVES = (
     "#include <stdint.h>\n"
+    "#undef NULL\n"
+    "#ifdef __cplusplus\n"
+    "#define NULL 0\n"
+    "#else\n"
+    "#define NULL 0\n"
+    "#endif\n"
     "#ifndef RECOMP_CORE_PRIMITIVES_DEFINED\n"
     "#define RECOMP_CORE_PRIMITIVES_DEFINED\n"
     "typedef uint8_t  u8;\n"
@@ -574,26 +571,23 @@ def ensure_n64_bool_header():
 
 def patch_cmake_compiler_flags() -> bool:
     """
-    Automatically injects Clang compiler flags into the Android wrapper's build script to silence
-    N64 graphic macros causing 'compile-time constant' errors.
+    Forces decompiled engine logic (.c) to be evaluated dynamically under C++ strictness standards
+    to ensure the wrapper's graphical struct initializers and macros properly initialize as compile-time constructs.
     """
     path = CMAKE_LISTS_PATH
     if not os.path.exists(path):
-        # Fallback search path if executed from varying root directory
         path = "CMakeLists.txt"
         if not os.path.exists(path):
             return False
 
     content = read_file(path)
-    flags = "-Wno-error=initializer-overrides -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -fpermissive"
+    flags = "-xc++ -fpermissive -Wno-narrowing -Wno-c++11-narrowing -Wno-writable-strings -Wno-constant-conversion"
     
-    if flags in content:
+    if "-xc++" in content:
         return False
         
-    # Safely append to the end of the file if not already present
     content += f'\n# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n'
     content += f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n'
-    content += f'set(CMAKE_CXX_FLAGS "${{CMAKE_CXX_FLAGS}} {flags}")\n'
     
     write_file(path, content)
     return True
@@ -852,8 +846,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         "OSPiHandle", "OSMesgQueue", "OSViContext",
         "OSMesgHdr",
         "OSIoMesg",
-        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription", "MapProgressFlagToDialogID",
-        "Struct_core2_7AF80_1"
+        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription", "MapProgressFlagToDialogID"
     ]
 
     types_content = read_file(TYPES_HEADER)
@@ -893,6 +886,9 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
             injected_structs += _format_injection(tag, _opaque_stub(tag))
         elif tag in N64_AUDIO_STATE_TYPES:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
+
+    for tag in N64_FORWARD_STRUCTS:
+        injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_FWD_DEFINED\n#define RECOMP_{tag}_FWD_DEFINED\nstruct {tag};\ntypedef struct {tag} {tag};\n#endif")
 
     # Inject macros using the block marker system
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
