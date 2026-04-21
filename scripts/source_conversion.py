@@ -233,18 +233,15 @@ _N64_OS_STRUCT_BODIES = {
         '    u8 activebank;\n'
         '    u8 banks;\n'
         '    u8 status;\n'
-        '    union {\n'
-        '        u8 inodeTable[256];\n'
-        '        u8 inode_table[256];\n'
-        '        u8 minode_table[256];\n'
-        '    };\n'
-        '    u8 dir[256];\n'
-        '    u8 dir_table[256];\n'
-        '    u32 dir_size;\n'
-        '    u32 inode_start_page;\n'
-        '    u32 label[8];\n'
-        '    s32 repairList[256];\n'
+        '    u8 id[32];\n'
+        '    u8 label[32];\n'
         '    u32 version;\n'
+        '    u32 dir_size;\n'
+        '    u32 inode_table;\n'
+        '    u32 minode_table;\n'
+        '    u32 dir_table;\n'
+        '    u32 inode_start_page;\n'
+        '    s32 repairList[256];\n'
         '    u32 checksum;\n'
         '    u32 inodeCacheIndex;\n'
         '    u8 inodeCache[256];\n'
@@ -411,7 +408,7 @@ N64_PRIMITIVES = {
 }
 
 N64_OS_OPAQUE_TYPES = {
-    "OSPfs", "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue", "OSThread",
+    "OSContStatus", "OSContPad", "OSPiHandle", "OSMesgQueue", "OSThread",
     "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller",
     "OSViMode", "OSViContext", "OSAiStatus", "OSMesgHdr", "OSPfsState", "OSPfsFile",
     "OSPfsDir", "OSDevMgr", "SPTask", "GBIarg",
@@ -557,6 +554,16 @@ def heal_corrupted_headers():
                             write_file(path, c)
                     except Exception:
                         pass
+
+def ensure_n64_bool_header():
+    for base_dir in ["include", "Android/app/src/main/cpp/../../../../../include"]:
+        os.makedirs(base_dir, exist_ok=True)
+        path = os.path.join(base_dir, "n64_bool.h")
+        content = "#ifndef RECOMP_N64_BOOL_H\n#define RECOMP_N64_BOOL_H\n#include <stdint.h>\ntypedef int n64_bool;\n#endif\n"
+        try:
+            write_file(path, content)
+        except Exception:
+            pass
 
 def strip_redefinition(content: str, tag: str) -> str:
     # Cleanly erase any previously injected recomp structs using the new Block Markers
@@ -793,6 +800,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
     fixed_files = set()
 
     heal_corrupted_headers()
+    ensure_n64_bool_header()
     _scrape_logs_into_categories(categories)
 
     ensure_types_header_base(categories)
