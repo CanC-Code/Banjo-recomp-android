@@ -554,20 +554,19 @@ def heal_corrupted_headers():
                         pass
 
 def strip_redefinition(content: str, tag: str) -> str:
-    # 1. Cleanly erase any previously injected recomp structs for this tag
+    # Cleanly erase any previously injected recomp structs for this tag
     content = re.sub(rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n[\s\S]*?#\s*endif\s*\r?\n?", "", content)
     
-    # 2. Erase previously injected opaque stubs as well
+    # Erase previously injected opaque stubs as well
     content = re.sub(rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?", "", content)
 
-    # 3. Proceed with standard SDK stripping
+    # Proceed with standard SDK stripping
     content = re.sub(rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$", f"/* STRIPPED DEFINE: {tag}_DEFINED */", content)
     content = re.sub(rf"(?m)^\s*typedef\s+(?:struct|union)\s+[A-Za-z0-9_]+\s+{re.escape(tag)}\s*;\s*$", f"/* STRIPPED FWD: {tag} */", content)
     
-    # 4. EXTREMELY safe fallback regex for simple leaf structs (No nested braces inside them)
+    # Fallback regex for simple leaf structs
     content = re.sub(rf"\b(?:typedef\s+(?:struct|union)|struct|union)\b[^{{;]*{{[^{{}}]*}}\s*{re.escape(tag)}(?:_s|_u)?\s*;", f"/* STRIPPED SIMPLE BLOCK: {tag} */", content)
     
-    # 5. Robust comment-aware brace matching block stripper
     pattern = re.compile(r'\b(typedef\s+(?:struct|union)|struct|union)\b[^{;]*\{')
     new_content = ""
     idx = 0
@@ -587,7 +586,6 @@ def strip_redefinition(content: str, tag: str) -> str:
         in_line_comment = False
         in_block_comment = False
         
-        # Fast comment skipping to guarantee we don't trip over "/* { */" or "// }"
         while curr_idx < len(content) and open_braces > 0:
             if not in_line_comment and not in_block_comment:
                 if content[curr_idx:curr_idx+2] == '//':
@@ -628,11 +626,6 @@ def strip_redefinition(content: str, tag: str) -> str:
     content = re.sub(rf"\b(?:struct|union)\s+{re.escape(tag)}(?:_s|_u)?\s*;", "", content)
     return content
 
-def repair_unterminated_conditionals(content: str) -> str:
-    # Disabled to prevent destroying critical SDK standard C++ guards. 
-    # Replaced by cleaner regex cleanup in strip_redefinition
-    return content
-
 def _find_synth_internals() -> Optional[str]:
     candidates = [SYNTH_INTERNALS_H, SYNTH_INTERNALS_H_ALT, "include/synthInternals.h"]
     for root, _, files in os.walk("include"):
@@ -668,12 +661,9 @@ def ensure_types_header_base(categories: Optional[dict] = None) -> str:
         content = read_file(TYPES_HEADER)
     else: content = ""
     
-    # We forcefully re-inject primitives block from scratch at the VERY TOP of the file 
     content = re.sub(r'(?m)^#include <stdint\.h>\s*\r?\n#ifndef (?:CORE|RECOMP_CORE)_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\s*\r?\n?', '', content)
     content = content.replace("#pragma once", "").strip()
     content = "#pragma once\n" + _CORE_PRIMITIVES + "\n" + content
-    
-    content = repair_unterminated_conditionals(content)
     write_file(TYPES_HEADER, content)
     return content
 
@@ -693,12 +683,36 @@ def _scrape_logs_into_categories(categories: dict) -> None:
         if not os.path.exists(log_file): continue
         content = read_file(log_file)
         
-        for m in re.finditer(r"(?m)^\s*(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage", content):
-            categories.setdefault("linkage_conflict_files", set()).add((normalize_path(m.group(1)), m.group(2)))
-        for m in re.finditer(r"error:\s+unknown type name '(\w+)'", content):
-            categories.setdefault("need_struct_body", set()).add(m.group(1))
-        for m in re.finditer(r"error: member access into incomplete type '(?:struct|union )?(\w+)'", content):
-            categories.setdefault("need_struct_body", set()).add(m.group(1))
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            # 1) Robust Linkage Scanner:
+            # Grabs error path natively, and then peeks ahead up to 15 lines looking for where the collision originated.
+            m_link = re.search(r"(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage", line)
+            if m_link:
+                file_err = normalize_path(m_link.group(1))
+                func = m_link.group(2)
+                
+                file_note = None
+                for j in range(i+1, min(i+15, len(lines))):
+                    m_note = re.search(r"(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+note:\s+previous declaration is here", lines[j])
+                    if m_note:
+                        file_note = normalize_path(m_note.group(1))
+                        break
+                
+                # Exclude native NDK paths from patching; they are immutable and accurate. Focus on our headers!
+                if "sysroot" not in file_err and "toolchains" not in file_err and "ndk" not in file_err.lower():
+                    categories.setdefault("linkage_conflict_files", set()).add((file_err, func))
+                elif file_note and "sysroot" not in file_note and "toolchains" not in file_note and "ndk" not in file_note.lower():
+                    categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
+
+            # 2) Struct extraction mappings
+            m_struct1 = re.search(r"error:\s+unknown type name '(\w+)'", line)
+            if m_struct1:
+                categories.setdefault("need_struct_body", set()).add(m_struct1.group(1))
+                
+            m_struct2 = re.search(r"error: member access into incomplete type '(?:struct|union )?(\w+)'", line)
+            if m_struct2:
+                categories.setdefault("need_struct_body", set()).add(m_struct2.group(1))
 
 def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set]:
     fixes = 0
@@ -734,8 +748,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
 
-    # Store injections separately so we can surgically insert them at the TOP of the file.
-    # This prevents ordering conflicts like `unknown type name Vtx_t`
     injected_structs = ""
 
     for tag in ORDERED_STRUCT_TAGS:
@@ -762,7 +774,6 @@ def apply_fixes(categories: dict, intelligence_level: int = 3) -> Tuple[int, set
         types_content = re.sub(rf"(?m)^extern\s+[^;]+\b{re.escape(var)}\b.*;", "", types_content)
         types_content = re.sub(rf"#ifndef RECOMP_{re.escape(var)}_fwd_DEFINED[\s\S]*?#endif", "", types_content)
 
-    # Insert injected structs cleanly AFTER the primitive block so they evaluate BEFORE SDK headers!
     core_marker = "/* END_CORE_PRIMITIVES */"
     if core_marker in types_content:
         parts = types_content.split(core_marker, 1)
