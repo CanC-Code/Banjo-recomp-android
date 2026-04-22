@@ -250,7 +250,7 @@ _N64_OS_STRUCT_BODIES = {
         '#endif'
     ),
     "OSTimer": "#ifndef OSTimer_DEFINED\n#define OSTimer_DEFINED\ntypedef struct OSTimer_s { struct OSTimer_s *next; struct OSTimer_s *prev; OSTime interval; OSTime value; struct OSMesgQueue_s *mq; OSMesg msg; } OSTimer;\n#endif",
-    "LookAt": "#ifndef LookAt_DEFINED\n#define LookAt_DEFINED\ntypedef struct { struct { float x, y, z; float pad; } l[2]; } LookAt;\n#endif",
+    "LookAt": "#ifndef LookAt_DEFINED\n#define LookAt_DEFINED\ntypedef union { Light l[2]; long long int force_align[2]; } LookAt;\n#endif",
 }
 
 SDK_DEFINES_THESE = {"OSScTask"}
@@ -569,10 +569,11 @@ def ensure_n64_bool_header():
         except Exception:
             pass
 
-def patch_cmake_compiler_flags() -> bool:
+def patch_cmake_compiler_flags(categories: Dict) -> bool:
     """
     Forces decompiled engine logic (.c) to be evaluated dynamically under C++ strictness standards
     to ensure the wrapper's graphical struct initializers and macros properly initialize as compile-time constructs.
+    If it triggers C++ constant initialization errors, dynamically backs off.
     """
     path = CMAKE_LISTS_PATH
     if not os.path.exists(path):
@@ -583,14 +584,23 @@ def patch_cmake_compiler_flags() -> bool:
     content = read_file(path)
     flags = "-xc++ -fpermissive -Wno-narrowing -Wno-c++11-narrowing -Wno-writable-strings -Wno-constant-conversion"
     
-    if "-xc++" in content:
+    # DYNAMIC ROBUSTNESS: Back off from C++ initialization strictness if it triggers static allocation breaks
+    if categories.get("remove_xcxx"):
+        if "-xc++" in content:
+            content = content.replace(flags, "")
+            content = content.replace("-xc++ ", "")
+            write_file(path, content)
+            return True
         return False
+    else:
+        if "-xc++" in content:
+            return False
+            
+        content += f'\n# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n'
+        content += f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n'
         
-    content += f'\n# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n'
-    content += f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n'
-    
-    write_file(path, content)
-    return True
+        write_file(path, content)
+        return True
 
 def strip_redefinition(content: str, tag: str) -> str:
     # Cleanly erase any previously injected recomp structs using the new Block Markers
@@ -602,7 +612,7 @@ def strip_redefinition(content: str, tag: str) -> str:
 
     # Erase previously injected opaque stubs as well
     content = re.sub(
-        rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
+        rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{[\s\S]*?}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
@@ -761,12 +771,24 @@ def ensure_types_header_base(categories: Optional[Dict] = None) -> str:
     write_file(TYPES_HEADER, content)
     return content
 
-def _opaque_stub(tag: str, size: int = 64) -> str:
+def _opaque_stub(tag: str, size: int = 64, missing_members: Set[str] = None) -> str:
     struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
+    members = ""
+    # DYNAMIC ROBUSTNESS: Automatically synthesize missing fields natively inferred from the stack
+    if missing_members:
+        for m in sorted(missing_members):
+            if m.startswith('f') or m.endswith('_x') or m.endswith('_y') or m.endswith('_z'):
+                members += f"    float {m};\n"
+            else:
+                members += f"    int {m};\n"
+    
     return (
         f"#ifndef RECOMP_{tag}_DEFINED\n"
         f"#define RECOMP_{tag}_DEFINED\n"
-        f"struct {struct_tag} {{ long long int force_align[{size}]; }};\n"
+        f"struct {struct_tag} {{\n"
+        f"{members}"
+        f"    long long int force_align[{size}];\n"
+        f"}};\n"
         f"typedef struct {struct_tag} {tag};\n"
         f"#endif\n"
     )
@@ -830,11 +852,30 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 categories.setdefault("need_struct_body", set()).add(m_struct1.group(1))
 
             # 3) DYNAMIC ROBUSTNESS: Redefinition and Conflict Extraction
-            # This captures anything colliding so the orchestrator can intelligently back-off
             if "error:" in line and ("redefinition" in line or "conflicting types" in line):
                 matches = re.findall(r"'(?:struct\s+|union\s+)?(\w+)'", line)
                 for m in matches:
                     categories.setdefault("redefinition_conflict", set()).add(m)
+
+            # 4) DYNAMIC ROBUSTNESS: Missing Members (Synthesize fields on the fly)
+            m_member = re.search(r"error:\s+no member named '(\w+)' in '(?:struct\s+|union\s+)?(\w+)'", line)
+            if m_member:
+                struct_tag = m_member.group(2)
+                categories.setdefault("missing_members", defaultdict(set))[struct_tag].add(m_member.group(1))
+                categories.setdefault("need_struct_body", set()).add(struct_tag)
+
+            # 5) DYNAMIC ROBUSTNESS: Undeclared identifiers / functions
+            m_undeclared = re.search(r"error:\s+(?:use of undeclared identifier|implicit declaration of function)\s+'(\w+)'", line)
+            if m_undeclared:
+                categories.setdefault("undeclared", set()).add(m_undeclared.group(1))
+            
+            m_expected_semi = re.search(r"error:\s+expected ';' after expression\s+(\w+)", line)
+            if m_expected_semi:
+                categories.setdefault("undeclared", set()).add(m_expected_semi.group(1))
+
+            # 6) DYNAMIC ROBUSTNESS: C++ initialization strictness back-off
+            if "initializer element is not a compile-time constant" in line:
+                categories["remove_xcxx"] = True
 
 def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set[str]]:
     fixes = 0
@@ -850,7 +891,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         fixes += 1
     if patch_exceptasm():
         fixes += 1
-    if patch_cmake_compiler_flags():
+    if patch_cmake_compiler_flags(categories):
         fixes += 1
 
     ORDERED_STRUCT_TAGS = [
@@ -872,8 +913,6 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
     redef_conflicts = set(categories.get("redefinition_conflict", set()))
 
     # --- DYNAMIC ROBUSTNESS: Proactive Redefinition Stripping ---
-    # We must explicitly strip any struct that triggered a conflict so its old injection
-    # doesn't remain stranded in n64_types.h when we decide to yield priority.
     for tag in redef_conflicts:
         types_content = strip_redefinition(types_content, tag)
 
@@ -902,7 +941,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
             elif tag in N64_AUDIO_STATE_TYPES:
                 injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
             else:
-                injected_structs += _format_injection(tag, _opaque_stub(tag, 64))
+                missing = categories.get("missing_members", {}).get(tag, set())
+                injected_structs += _format_injection(tag, _opaque_stub(tag, 64, missing))
             target_tags.discard(tag)
 
     for tag in list(target_tags):
@@ -915,7 +955,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
         else:
             logger.info(f"Dynamically generating opaque stub for unknown struct: {tag}")
-            injected_structs += _format_injection(tag, _opaque_stub(tag, 64))
+            missing = categories.get("missing_members", {}).get(tag, set())
+            injected_structs += _format_injection(tag, _opaque_stub(tag, 64, missing))
 
     for tag in N64_FORWARD_STRUCTS:
         types_content = strip_redefinition(types_content, tag)
@@ -929,6 +970,11 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
     for m_name, m_val in PHASE_3_MACROS.items():
         macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
+        
+    for m_name in sorted(categories.get("undeclared", set())):
+        if m_name.startswith("rare_") or m_name.isupper() or m_name.startswith("gs"):
+            macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
+            
     macro_injection += "// --- END_RECOMP_INJECT: MACROS ---\n"
     
     injected_structs = macro_injection + injected_structs
