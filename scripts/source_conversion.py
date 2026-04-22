@@ -406,6 +406,7 @@ N64_PRIMITIVES = {
     "OSHWIntr", "ADPCM_STATE", "OSYieldResult", "OSEvent", "Vp_t", "Vp"
 }
 
+# REMOVED: "OSPfsState", "OSPfsFile", "OSPfsDir" to prevent collision with core1/pfsmanager.h definitions
 N64_OS_OPAQUE_TYPES = {
     "OSPiHandle", "OSMesgQueue", "OSThread",
     "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller",
@@ -602,6 +603,13 @@ def strip_redefinition(content: str, tag: str) -> str:
     # Erase previously injected opaque stubs as well
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{\s*long\s+long\s+int\s+force_align\[\d+\];\s*}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
+        "",
+        content
+    )
+    
+    # Erase previously injected forward declarations
+    content = re.sub(
+        rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_FWD_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_FWD_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
@@ -863,13 +871,19 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
 
     redef_conflicts = set(categories.get("redefinition_conflict", set()))
 
+    # --- DYNAMIC ROBUSTNESS: Proactive Redefinition Stripping ---
+    # We must explicitly strip any struct that triggered a conflict so its old injection
+    # doesn't remain stranded in n64_types.h when we decide to yield priority.
+    for tag in redef_conflicts:
+        types_content = strip_redefinition(types_content, tag)
+
     target_tags = set(ALL_STRUCTS.keys())
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
 
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
 
-    # DYNAMIC ROBUSTNESS: Automatically back-off on redefined types to yield to native headers
+    # Automatically back-off on redefined types to yield to native headers
     target_tags -= redef_conflicts
 
     injected_structs = ""
@@ -900,11 +914,11 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         elif tag in N64_AUDIO_STATE_TYPES:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_DEFINED\n#define RECOMP_{tag}_DEFINED\ntypedef struct {tag}_s {{ long long int force_align[64]; }} {tag};\n#endif")
         else:
-            # DYNAMIC ROBUSTNESS: Automatically synthesize an opaque stub for globally undefined structs
             logger.info(f"Dynamically generating opaque stub for unknown struct: {tag}")
             injected_structs += _format_injection(tag, _opaque_stub(tag, 64))
 
     for tag in N64_FORWARD_STRUCTS:
+        types_content = strip_redefinition(types_content, tag)
         if tag not in redef_conflicts:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_FWD_DEFINED\n#define RECOMP_{tag}_FWD_DEFINED\nstruct {tag};\ntypedef struct {tag} {tag};\n#endif")
 
