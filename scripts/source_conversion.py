@@ -570,11 +570,6 @@ def ensure_n64_bool_header():
             pass
 
 def patch_cmake_compiler_flags(categories: Dict) -> bool:
-    """
-    Forces decompiled engine logic (.c) to be evaluated dynamically under C++ strictness standards
-    to ensure the wrapper's graphical struct initializers and macros properly initialize as compile-time constructs.
-    If it triggers C++ constant initialization errors, dynamically backs off.
-    """
     path = CMAKE_LISTS_PATH
     if not os.path.exists(path):
         path = "CMakeLists.txt"
@@ -584,7 +579,6 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
     content = read_file(path)
     flags = "-xc++ -fpermissive -Wno-narrowing -Wno-c++11-narrowing -Wno-writable-strings -Wno-constant-conversion"
     
-    # DYNAMIC ROBUSTNESS: Back off from C++ initialization strictness if it triggers static allocation breaks
     if categories.get("remove_xcxx"):
         if "-xc++" in content:
             content = content.replace(flags, "")
@@ -603,28 +597,24 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
         return True
 
 def strip_redefinition(content: str, tag: str) -> str:
-    # Cleanly erase any previously injected recomp structs using the new Block Markers
     content = re.sub(
         rf"(?m)^// --- RECOMP_INJECT: {re.escape(tag)} ---[\s\S]*?// --- END_RECOMP_INJECT: {re.escape(tag)} ---\r?\n?",
         "",
         content
     )
 
-    # Erase previously injected opaque stubs as well
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{[\s\S]*?}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
     
-    # Erase previously injected forward declarations
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_FWD_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_FWD_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
 
-    # Proceed with standard SDK stripping for the first pass
     content = re.sub(
         rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$",
         f"/* STRIPPED DEFINE: {tag}_DEFINED */",
@@ -636,7 +626,6 @@ def strip_redefinition(content: str, tag: str) -> str:
         content
     )
 
-    # Fallback regex for simple leaf structs
     content = re.sub(
         rf"\b(?:typedef\s+(?:struct|union)|struct|union)\b[^{{;]*{{[^{{}}]*}}\s*{re.escape(tag)}(?:_s|_u)?\s*;",
         f"/* STRIPPED SIMPLE BLOCK: {tag} */",
@@ -648,7 +637,6 @@ def strip_redefinition(content: str, tag: str) -> str:
     idx = 0
     tag_pattern = rf'\b{re.escape(tag)}(?:_s|_u)?\b'
 
-    # Fallback Brace matching logic to ensure raw decompiled C structs are handled
     while True:
         match = pattern.search(content, idx)
         if not match:
@@ -774,7 +762,6 @@ def ensure_types_header_base(categories: Optional[Dict] = None) -> str:
 def _opaque_stub(tag: str, size: int = 64, missing_members: Set[str] = None) -> str:
     struct_tag = f"{tag}_s" if not tag.endswith("_s") else tag
     members = ""
-    # DYNAMIC ROBUSTNESS: Automatically synthesize missing fields natively inferred from the stack
     if missing_members:
         for m in sorted(missing_members):
             if m.startswith('f') or m.endswith('_x') or m.endswith('_y') or m.endswith('_z'):
@@ -801,7 +788,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
         "Android/failed_files.log"
     ]
     
-    # ANSI escape sequence stripper for modern CI logs (e.g. Ninja/Clang)
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     
     for log_file in log_candidates:
@@ -813,7 +799,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
         lines = content.split('\n')
         
         for i, line in enumerate(lines):
-            # 1) Robust Linkage Scanner
             m_link = re.search(
                 r"(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage",
                 line
@@ -846,25 +831,21 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 ):
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
-            # 2) Broadened Struct extraction mappings
             m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?(\w+)'", line)
             if m_struct1:
                 categories.setdefault("need_struct_body", set()).add(m_struct1.group(1))
 
-            # 3) DYNAMIC ROBUSTNESS: Redefinition and Conflict Extraction
             if "error:" in line and ("redefinition" in line or "conflicting types" in line):
                 matches = re.findall(r"'(?:struct\s+|union\s+)?(\w+)'", line)
                 for m in matches:
                     categories.setdefault("redefinition_conflict", set()).add(m)
 
-            # 4) DYNAMIC ROBUSTNESS: Missing Members (Synthesize fields on the fly)
             m_member = re.search(r"error:\s+no member named '(\w+)' in '(?:struct\s+|union\s+)?(\w+)'", line)
             if m_member:
                 struct_tag = m_member.group(2)
                 categories.setdefault("missing_members", defaultdict(set))[struct_tag].add(m_member.group(1))
                 categories.setdefault("need_struct_body", set()).add(struct_tag)
 
-            # 5) DYNAMIC ROBUSTNESS: Undeclared identifiers / functions
             m_undeclared = re.search(r"error:\s+(?:use of undeclared identifier|implicit declaration of function)\s+'(\w+)'", line)
             if m_undeclared:
                 categories.setdefault("undeclared", set()).add(m_undeclared.group(1))
@@ -873,7 +854,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
             if m_expected_semi:
                 categories.setdefault("undeclared", set()).add(m_expected_semi.group(1))
 
-            # 6) DYNAMIC ROBUSTNESS: C++ initialization strictness back-off
             if "initializer element is not a compile-time constant" in line:
                 categories["remove_xcxx"] = True
 
@@ -894,14 +874,17 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
     if patch_cmake_compiler_flags(categories):
         fixes += 1
 
+    # DYNAMIC ROBUSTNESS FIX: Strictly ordered injection layout based on topological dependencies
+    # Resolves standard C parsing errors when embedding unions/structs by value (e.g. LookAt encapsulating Light)
     ORDERED_STRUCT_TAGS = [
-        "Mtx", "LookAt", "Hilite_t", "Light_t", "__OSBlockInfo", "__OSViCommonRegs", "__OSViFieldRegs",
-        "__OSThreadContext", "Vtx_t", "Vtx_n", "OSContStatus", "OSContPad", "OSTask_t", "Gfx", "Acmd", "uSprite", "CPUState",
-        "__OSTranxInfo", "OSViMode", "OSThread", "Vtx", "Hilite", "Light", "OSTask",
-        "OSPiHandle", "OSMesgQueue", "OSViContext",
-        "OSMesgHdr",
-        "OSIoMesg",
-        "OSPfs", "OSDevMgr", "OSTimer", "MapModelDescription", "MapProgressFlagToDialogID"
+        "Mtx", "Light_t", "Light", "LookAt", "Hilite_t", "Hilite",
+        "__OSBlockInfo", "__OSTranxInfo", "OSPiHandle",
+        "__OSViCommonRegs", "__OSViFieldRegs", "OSViMode",
+        "__OSThreadContext", "OSThread", "OSMesgQueue", "OSViContext",
+        "OSMesgHdr", "OSIoMesg", "OSPfs", "OSDevMgr", "OSTimer",
+        "Vtx_t", "Vtx_n", "Vtx", "OSContStatus", "OSContPad", "OSTask_t", "OSTask",
+        "Gfx", "Acmd", "uSprite", "CPUState",
+        "MapModelDescription", "MapProgressFlagToDialogID"
     ]
 
     types_content = read_file(TYPES_HEADER)
@@ -912,7 +895,6 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
 
     redef_conflicts = set(categories.get("redefinition_conflict", set()))
 
-    # --- DYNAMIC ROBUSTNESS: Proactive Redefinition Stripping ---
     for tag in redef_conflicts:
         types_content = strip_redefinition(types_content, tag)
 
@@ -921,13 +903,10 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         target_tags |= set(categories["need_struct_body"])
 
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
-
-    # Automatically back-off on redefined types to yield to native headers
     target_tags -= redef_conflicts
 
     injected_structs = ""
 
-    # Generate the injected block using the tagged markers
     def _format_injection(tag: str, inner_code: str) -> str:
         return f"\n// --- RECOMP_INJECT: {tag} ---\n{inner_code}\n// --- END_RECOMP_INJECT: {tag} ---\n"
 
@@ -963,10 +942,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         if tag not in redef_conflicts:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_FWD_DEFINED\n#define RECOMP_{tag}_FWD_DEFINED\nstruct {tag};\ntypedef struct {tag} {tag};\n#endif")
 
-    # Prevent the Phase 3 Macro block from endlessly duplicating on consecutive runs
     types_content = strip_redefinition(types_content, "MACROS")
 
-    # Inject macros using the block marker system
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
     for m_name, m_val in PHASE_3_MACROS.items():
         macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
@@ -1013,8 +990,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
             if os.path.exists(filepath):
                 c = read_file(filepath)
                 c = _scrub_linkage_comments(c)
-
-                # Proceed with standard Auto-Fix linkage scrubber 
+                
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
                 if n > 0:
