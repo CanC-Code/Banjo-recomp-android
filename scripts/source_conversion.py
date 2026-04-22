@@ -579,10 +579,16 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
     content = read_file(path)
     flags = "-xc++ -fpermissive -Wno-narrowing -Wno-c++11-narrowing -Wno-writable-strings -Wno-constant-conversion"
     
+    # DYNAMIC ROBUSTNESS: Complete eradication of C++ strictness for valid C initialization
     if categories.get("remove_xcxx"):
-        if "-xc++" in content:
-            content = content.replace(flags, "")
-            content = content.replace("-xc++ ", "")
+        original = content
+        content = content.replace(f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n', "")
+        content = content.replace(f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")', "")
+        content = content.replace("# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n", "")
+        content = content.replace(flags, "")
+        content = content.replace("-xc++ ", "")
+        
+        if content != original:
             write_file(path, content)
             return True
         return False
@@ -799,6 +805,7 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
         lines = content.split('\n')
         
         for i, line in enumerate(lines):
+            # 1) Robust Linkage Scanner
             m_link = re.search(
                 r"(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage",
                 line
@@ -831,33 +838,63 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 ):
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
+            # 2) DYNAMIC ROBUSTNESS FIX: Base Tag Re-mapping to Prevent Blind Re-injections
             m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?(\w+)'", line)
             if m_struct1:
-                categories.setdefault("need_struct_body", set()).add(m_struct1.group(1))
+                tag = m_struct1.group(1)
+                categories.setdefault("need_struct_body", set()).add(tag)
+                if tag.endswith("_s") or tag.endswith("_u"):
+                    categories["need_struct_body"].add(tag[:-2])
 
             if "error:" in line and ("redefinition" in line or "conflicting types" in line):
                 matches = re.findall(r"'(?:struct\s+|union\s+)?(\w+)'", line)
                 for m in matches:
                     categories.setdefault("redefinition_conflict", set()).add(m)
+                    if m.endswith("_s") or m.endswith("_u"):
+                        categories["redefinition_conflict"].add(m[:-2])
+                    else:
+                        categories["redefinition_conflict"].add(f"{m}_s")
 
+            # 3) DYNAMIC ROBUSTNESS: Missing Struct Member Synthesis
             m_member = re.search(r"error:\s+no member named '(\w+)' in '(?:struct\s+|union\s+)?(\w+)'", line)
             if m_member:
+                member_name = m_member.group(1)
                 struct_tag = m_member.group(2)
-                categories.setdefault("missing_members", defaultdict(set))[struct_tag].add(m_member.group(1))
+                categories.setdefault("missing_members", defaultdict(set))[struct_tag].add(member_name)
                 categories.setdefault("need_struct_body", set()).add(struct_tag)
+                
+                base_tag = struct_tag[:-2] if (struct_tag.endswith("_s") or struct_tag.endswith("_u")) else struct_tag
+                categories["missing_members"][base_tag].add(member_name)
+                categories["need_struct_body"].add(base_tag)
 
-            m_undeclared = re.search(r"error:\s+(?:use of undeclared identifier|implicit declaration of function)\s+'(\w+)'", line)
+            # 4) DYNAMIC ROBUSTNESS: Intelligent Contextual Macro Synthesis
+            m_undeclared = re.search(r"error:\s+use of undeclared identifier\s+'(\w+)'", line)
             if m_undeclared:
-                categories.setdefault("undeclared", set()).add(m_undeclared.group(1))
-            
-            m_expected_semi = re.search(r"error:\s+expected ';' after expression\s+(\w+)", line)
-            if m_expected_semi:
-                categories.setdefault("undeclared", set()).add(m_expected_semi.group(1))
+                categories.setdefault("undeclared_vars", set()).add(m_undeclared.group(1))
 
+            m_impl_func = re.search(r"error:\s+implicit declaration of function\s+'(\w+)'", line)
+            if m_impl_func:
+                categories.setdefault("undeclared_funcs", set()).add(m_impl_func.group(1))
+
+            if "error: expected ';' after expression" in line:
+                if i + 1 < len(lines):
+                    next_line = lines[i+1].strip()
+                    m_ident = re.search(r'^([a-zA-Z_]\w*)', next_line)
+                    if m_ident:
+                        ident = m_ident.group(1)
+                        if '(' in next_line:
+                            categories.setdefault("undeclared_funcs", set()).add(ident)
+                        else:
+                            categories.setdefault("undeclared_vars", set()).add(ident)
+
+            # 5) DYNAMIC ROBUSTNESS: Drop strict C++ when compound literals break initializations
             if "initializer element is not a compile-time constant" in line:
                 categories["remove_xcxx"] = True
 
-def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set[str]]:
+def is_func_macro(name: str) -> bool:
+    return name.startswith("rare_") or name.startswith("gs") or name.startswith("gDP") or name.startswith("gSP") or name.startswith("gDma")
+
+def apply_fixes(categories: Dict, intelligence_level: int = 4) -> Tuple[int, Set[str]]:
     fixes = 0
     fixed_files = set()
 
@@ -875,16 +912,22 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         fixes += 1
 
     # DYNAMIC ROBUSTNESS FIX: Strictly ordered injection layout based on topological dependencies
-    # Resolves standard C parsing errors when embedding unions/structs by value (e.g. LookAt encapsulating Light)
+    # Resolves standard C parsing errors when embedding unions/structs by value
     ORDERED_STRUCT_TAGS = [
-        "Mtx", "Light_t", "Light", "LookAt", "Hilite_t", "Hilite",
-        "__OSBlockInfo", "__OSTranxInfo", "OSPiHandle",
-        "__OSViCommonRegs", "__OSViFieldRegs", "OSViMode",
-        "__OSThreadContext", "OSThread", "OSMesgQueue", "OSViContext",
-        "OSMesgHdr", "OSIoMesg", "OSPfs", "OSDevMgr", "OSTimer",
-        "Vtx_t", "Vtx_n", "Vtx", "OSContStatus", "OSContPad", "OSTask_t", "OSTask",
-        "Gfx", "Acmd", "uSprite", "CPUState",
-        "MapModelDescription", "MapProgressFlagToDialogID"
+        "Mtx", "Light_t", "Hilite_t", "Vtx_t", "Vtx_n",
+        "__OSBlockInfo", "__OSViCommonRegs", "__OSViFieldRegs",
+        "__OSThreadContext", "OSContStatus", "OSContPad", "OSTask_t",
+        "Gfx", "Acmd", "uSprite", "CPUState", "MapModelDescription", "MapProgressFlagToDialogID",
+        
+        "OSThread", "__OSTranxInfo", "OSViMode", "Light", "Hilite", "Vtx", "OSTask",
+        
+        "OSMesgQueue", "OSPiHandle", "LookAt",
+        
+        "OSMesgHdr", "OSViContext", "OSDevMgr", "OSTimer",
+        
+        "OSIoMesg",
+        
+        "OSPfs"
     ]
 
     types_content = read_file(TYPES_HEADER)
@@ -903,6 +946,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         target_tags |= set(categories["need_struct_body"])
 
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
+    
+    # Safely back off from injecting structs that native headers handle
     target_tags -= redef_conflicts
 
     injected_structs = ""
@@ -944,13 +989,19 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
 
     types_content = strip_redefinition(types_content, "MACROS")
 
+    # DYNAMIC ROBUSTNESS FIX: Synthesize macro calls specifically according to object vs functional usage
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
     for m_name, m_val in PHASE_3_MACROS.items():
         macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
         
-    for m_name in sorted(categories.get("undeclared", set())):
-        if m_name.startswith("rare_") or m_name.isupper() or m_name.startswith("gs"):
+    for m_name in sorted(categories.get("undeclared_vars", set())):
+        if is_func_macro(m_name):
             macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
+        else:
+            macro_injection += f"#ifndef {m_name}\n#define {m_name} 0\n#endif\n"
+
+    for m_name in sorted(categories.get("undeclared_funcs", set())):
+        macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
             
     macro_injection += "// --- END_RECOMP_INJECT: MACROS ---\n"
     
