@@ -124,13 +124,112 @@ PHASE_3_MACROS = {
     "Z_CMP": "0x00000001",
     "Z_UPD": "0x00000002",
     "G_ZBUFFER": "0x00000001", "G_SHADE": "0x00000004",
-    "G_CULL_BACK": "0x00002000", "G_CC_SHADE": "0x00000000",
+    "G_CULL_BACK": "0x00002000",
+    # FIX: Missing geometry mode bits — absence caused fallback to non-constant
+    # function-macro stub which broke static GBI array initialisers in C.
+    "G_CULL_BOTH": "0x00003000",
+    "G_FOG": "0x00010000",
+    "G_LIGHTING": "0x00020000",
+    "G_TEXTURE_GEN": "0x00040000",
+    "G_TEXTURE_GEN_LINEAR": "0x00080000",
+    "G_LOD": "0x00100000",
+    "G_SHADING_SMOOTH": "0x00200000",
+    "G_CC_SHADE": "0x00000000",
     "G_CC_DECALRGBA": "0",
     "G_IM_FMT_RGBA": "0", "G_IM_FMT_YUV": "1", "G_IM_FMT_CI": "2",
     "G_IM_FMT_IA": "3", "G_IM_FMT_I": "4",
     "G_IM_SIZ_4b": "0", "G_IM_SIZ_8b": "1",
     "G_IM_SIZ_16b": "2", "G_IM_SIZ_32b": "3",
 }
+
+# FIX: gs* macros (compile-time / static GBI display-list builders) must expand
+# to compile-time constant brace-enclosed struct literals so that static Gfx[]
+# array initialisers are valid in C.  The old generic function-macro stub
+# `#define gsFoo(...) {0}` is NOT a constant expression in C because {0} is an
+# initialiser list, not a compound literal.  The correct stub is `{{0,0}}` which
+# matches the layout of `typedef struct { unsigned int words[2]; } Gfx`.
+_GS_MACRO_STUBS = """\
+/* AUTO-INJECTED by patch_engine.py: gs* compile-time constant GBI stubs */
+#ifndef RECOMP_GS_STUBS_DEFINED
+#define RECOMP_GS_STUBS_DEFINED
+#define gsDPPipeSync()                                                    {{0,0}}
+#define gsDPTileSync()                                                    {{0,0}}
+#define gsDPFullSync()                                                    {{0,0}}
+#define gsDPLoadSync()                                                    {{0,0}}
+#define gsSPEndDisplayList()                                              {{0,0}}
+#define gsDPSetCycleType(c)                                               {{0,0}}
+#define gsDPSetRenderMode(c1,c2)                                          {{0,0}}
+#define gsDPSetCombineMode(c1,c2)                                         {{0,0}}
+#define gsDPSetCombineLERP(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p)             {{0,0}}
+#define gsDPSetTextureFilter(f)                                           {{0,0}}
+#define gsDPSetTexturePersp(e)                                            {{0,0}}
+#define gsDPSetTextureLUT(m)                                              {{0,0}}
+#define gsDPSetTextureLOD(l)                                              {{0,0}}
+#define gsDPSetTextureDetail(d)                                           {{0,0}}
+#define gsDPSetTextureConvert(c)                                          {{0,0}}
+#define gsDPSetAlphaCompare(c)                                            {{0,0}}
+#define gsDPSetColorDither(d)                                             {{0,0}}
+#define gsDPSetAlphaDither(d)                                             {{0,0}}
+#define gsDPSetDepthSource(s)                                             {{0,0}}
+#define gsDPSetFogColor(r,g,b,a)                                          {{0,0}}
+#define gsDPSetBlendColor(r,g,b,a)                                        {{0,0}}
+#define gsDPSetPrimColor(m,l,r,g,b,a)                                     {{0,0}}
+#define gsDPSetEnvColor(r,g,b,a)                                          {{0,0}}
+#define gsDPSetFillColor(c)                                               {{0,0}}
+#define gsDPSetPrimDepth(z,dz)                                            {{0,0}}
+#define gsDPSetScissor(m,ulx,uly,lrx,lry)                                {{0,0}}
+#define gsDPSetConvert(k0,k1,k2,k3,k4,k5)                                {{0,0}}
+#define gsDPSetKeyR(cr,sr,wr)                                             {{0,0}}
+#define gsDPSetKeyGB(cg,sg,wg,cb,sb,wb)                                   {{0,0}}
+#define gsDPLoadTLUT_pal16(t,d)                                           {{0,0}}
+#define gsDPLoadTLUT_pal256(t,d)                                          {{0,0}}
+#define gsDPLoadBlock(t,ul,uh,lr,dxt)                                     {{0,0}}
+#define gsDPLoadTile(t,ul,uh,lr,lh)                                       {{0,0}}
+#define gsDPSetTile(f,s,l,t,p,pl,cms,msk,shs,cmt,mkt,sht)                {{0,0}}
+#define gsDPSetTileSize(t,ul,uh,lr,lh)                                    {{0,0}}
+#define gsDPFillRectangle(ulx,uly,lrx,lry)                               {{0,0}}
+#define gsDPScisFillRectangle(ulx,uly,lrx,lry)                           {{0,0}}
+#define gsDPTextureRectangle(xl,yl,xh,yh,t,s,tt,dsdx,dtdy)               {{0,0}}
+#define gsDPTextureRectangleFlip(xl,yl,xh,yh,t,s,tt,dsdx,dtdy)           {{0,0}}
+#define gsDPSetColorImage(f,s,w,i)                                        {{0,0}}
+#define gsDPSetDepthImage(i)                                              {{0,0}}
+#define gsDPSetTextureImage(f,s,w,i)                                      {{0,0}}
+#define gsDPNoOp()                                                        {{0,0}}
+#define gsDPLoadTextureBlock(t,f,s,w,h,p,cms,cmt,msk,mkt,shs,sht)        {{0,0}}
+#define gsDPLoadTextureBlock_4b(t,f,w,h,p,cms,cmt,msk,mkt,shs,sht)       {{0,0}}
+#define gsDPLoadTextureTile(t,f,s,sl,tl,sh,th,p,cms,cmt,msk,mkt,shs,sht) {{0,0}}
+#define gsSPMatrix(m,p)                                                   {{0,0}}
+#define gsSPPopMatrix(n)                                                  {{0,0}}
+#define gsSPVertex(v,n,v0)                                                {{0,0}}
+#define gsSP1Triangle(v0,v1,v2,f)                                         {{0,0}}
+#define gsSP2Triangles(v0,v1,v2,f0,v3,v4,v5,f1)                          {{0,0}}
+#define gsSPSetGeometryMode(w)                                            {{0,0}}
+#define gsSPClearGeometryMode(w)                                          {{0,0}}
+#define gsSPLoadGeometryMode(w)                                           {{0,0}}
+#define gsSPTexture(sc,tc,l,t,on)                                         {{0,0}}
+#define gsSPSetLights0(l)                                                 {{0,0}}
+#define gsSPSetLights1(l)                                                 {{0,0}}
+#define gsSPSetLights2(l)                                                 {{0,0}}
+#define gsSPNumLights(n)                                                  {{0,0}}
+#define gsSPLight(l,n)                                                    {{0,0}}
+#define gsSPLookAt(l,n)                                                   {{0,0}}
+#define gsSPFogPosition(min,max)                                          {{0,0}}
+#define gsSPViewport(v)                                                   {{0,0}}
+#define gsSPDisplayList(dl)                                               {{0,0}}
+#define gsSPBranchList(dl)                                                {{0,0}}
+#define gsSPLine3D(v0,v1,f)                                               {{0,0}}
+#define gsSPLineW3D(v0,v1,wd,f)                                           {{0,0}}
+#define gsSPModifyVertex(v,w,d)                                           {{0,0}}
+#define gsSPClipRatio(r)                                                  {{0,0}}
+#define gsSPNoop()                                                        {{0,0}}
+#define gsSPObjLoadTxtr(tx)                                               {{0,0}}
+#define gsSPObjMatrix(m)                                                  {{0,0}}
+#define gsSPObjSubMatrix(m)                                               {{0,0}}
+#define gsSPSelectDL(b,p,sid,xn,yn,zn)                                    {{0,0}}
+#define gsSPBranchLessZraw(b,v,z)                                         {{0,0}}
+#define gsSPBranchLessZ(b,v,zz,near,far,fl)                               {{0,0}}
+#endif /* RECOMP_GS_STUBS_DEFINED */
+"""
 
 # --- Audio DSP State Typedef Block ---
 _AUDIO_STATE_PREAMBLE = """\
@@ -176,7 +275,7 @@ typedef struct MIXER_STATE_s { long long int force_align[64]; } MIXER_STATE;
 #endif /* RECOMP_N64_AUDIO_STATES_DEFINED */
 """
 
-# --- N64 Struct Bodies (Fully Decoupled) ---
+# --- N64 Struct Bodies ---
 _N64_OS_STRUCT_BODIES = {
     "Mtx": "#ifndef Mtx_DEFINED\n#define Mtx_DEFINED\ntypedef union { long m[4][4]; struct { float mf[4][4]; } f; struct { s16 mi[4][4]; s16 pad; } i; } Mtx;\n#endif",
     "OSContStatus": "#ifndef OSContStatus_DEFINED\n#define OSContStatus_DEFINED\ntypedef struct OSContStatus_s { u16 type; u8 status; union { u8 errnum; u8 errno; }; } OSContStatus;\n#endif",
@@ -359,8 +458,9 @@ PHASE_3_STRUCTS = {
         '} OSTask;\n'
         '#endif'
     ),
-    "Gfx": "#ifndef Gfx_DEFINED\n#define Gfx_DEFINED\ntypedef struct { u32 words[2]; } Gfx;\n#endif",
-    "Acmd": "#ifndef Acmd_DEFINED\n#define Acmd_DEFINED\ntypedef union { struct { u32 w0; u32 w1; } words; long long int force_align[1]; } Acmd;\n#endif",
+    # FIX: Gfx uses plain unsigned int to avoid pulling in u32 before primitives
+    "Gfx": "#ifndef Gfx_DEFINED\n#define Gfx_DEFINED\ntypedef struct { unsigned int words[2]; } Gfx;\n#endif",
+    "Acmd": "#ifndef Acmd_DEFINED\n#define Acmd_DEFINED\ntypedef union { struct { unsigned int w0; unsigned int w1; } words; long long int force_align[1]; } Acmd;\n#endif",
     "Light_t": "#ifndef Light_t_DEFINED\n#define Light_t_DEFINED\ntypedef struct { u8 col[3]; u8 pad0; u8 colc[3]; u8 pad1; s8 dir[3]; u8 pad2; } Light_t;\n#endif",
     "Light": "#ifndef Light_DEFINED\n#define Light_DEFINED\ntypedef union { Light_t l; long long int force_align[2]; } Light;\n#endif",
     "Hilite_t": "#ifndef Hilite_t_DEFINED\n#define Hilite_t_DEFINED\ntypedef struct { int x1, y1, x2, y2; } Hilite_t;\n#endif",
@@ -388,14 +488,38 @@ PHASE_3_STRUCTS = {
         "} MapProgressFlagToDialogID;\n"
         "#endif"
     ),
+    # FIX: New game-specific structs seen in this build log
+    "LetterFloorTile": (
+        "#ifndef LetterFloorTile_DEFINED\n"
+        "#define LetterFloorTile_DEFINED\n"
+        "typedef struct LetterFloorTile_s { long long int force_align[64]; } LetterFloorTile;\n"
+        "#endif"
+    ),
+    "sChVegetable": (
+        "#ifndef sChVegetable_DEFINED\n"
+        "#define sChVegetable_DEFINED\n"
+        "typedef struct sChVegetable_s { long long int force_align[64]; } sChVegetable;\n"
+        "#endif"
+    ),
+    # FIX: Struct_core2_7AF80_1 — distinct from Struct_core1_10A00_1 in pfsmanager.h.
+    # Injected as a proper opaque typedef so gccube.c can use it without conflicting
+    # with the SDK-defined Struct_core1_10A00_1.
+    "Struct_core2_7AF80_1": (
+        "#ifndef Struct_core2_7AF80_1_DEFINED\n"
+        "#define Struct_core2_7AF80_1_DEFINED\n"
+        "typedef struct Struct_core2_7AF80_1_s { long long int force_align[64]; } Struct_core2_7AF80_1;\n"
+        "#endif"
+    ),
 }
 
-# Tag match structural forwarding safely detaches compiler dependency from local code limits
-N64_FORWARD_STRUCTS = ["Struct_core2_7AF80_1", "Struct_core1_10A00_1"]
+# FIX: N64_FORWARD_STRUCTS cleared — all structs now get proper opaque typedef
+# stubs via ALL_STRUCTS / PHASE_3_STRUCTS.  Forward decls caused conflicts with
+# SDK-defined types (gccube.c / Struct_core1_10A00_1).
+N64_FORWARD_STRUCTS: List[str] = []
 
 # --- Automatically Upgrade Struct Definitions with RECOMP Prefix ---
 ALL_STRUCTS = {**_N64_OS_STRUCT_BODIES, **PHASE_3_STRUCTS}
-for _k in ALL_STRUCTS:
+for _k in list(ALL_STRUCTS.keys()):
     ALL_STRUCTS[_k] = ALL_STRUCTS[_k].replace(f"#ifndef {_k}_DEFINED", f"#ifndef RECOMP_{_k}_DEFINED")
     ALL_STRUCTS[_k] = ALL_STRUCTS[_k].replace(f"#define {_k}_DEFINED", f"#define RECOMP_{_k}_DEFINED")
 
@@ -406,7 +530,6 @@ N64_PRIMITIVES = {
     "OSHWIntr", "ADPCM_STATE", "OSYieldResult", "OSEvent", "Vp_t", "Vp"
 }
 
-# REMOVED: "OSPfsState", "OSPfsFile", "OSPfsDir" to prevent collision with core1/pfsmanager.h definitions
 N64_OS_OPAQUE_TYPES = {
     "OSPiHandle", "OSMesgQueue", "OSThread",
     "OSIoMesg", "OSTimer", "OSScTask", "OSTask", "OSScClient", "OSScKiller",
@@ -420,12 +543,8 @@ N64_AUDIO_STATE_TYPES = {
     "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE",
 }
 
-# FIX: These are typed global variable names that source files define with real storage.
-# They must NEVER be synthesized as macros — doing so clobbers declarations like:
-#   OSPiHandle *__osPiTable = NULL;   (pimgr.c)
-#   __osPiTable = &LeoDiskHandle;     (leodiskinit.c)
-# N64_KNOWN_GLOBALS keys are merged into this set so both the scraper and
-# the macro synthesizer skip them unconditionally.
+# Typed global variable names that source files define with real storage.
+# MUST NEVER be synthesized as macros.
 N64_KNOWN_GLOBALS = {
     "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
     "__osFlashHandle": "struct OSPiHandle_s *__osFlashHandle;",
@@ -441,10 +560,12 @@ _TYPED_SOURCE_GLOBALS = {
     "osClockRate", "osViModeNtscLan1", "osViModePalLan1", "osViModeMpalLan1",
     "osPiRawStartDma", "osEPiRawStartDma",
     "__OSGlobalIntMask",
-    # FIX: All N64_KNOWN_GLOBALS keys are also typed storage; exclude from macro synthesis.
     "__osPiTable", "__osFlashHandle", "__osSfHandle",
     "__osCurrentThread", "__osRunQueue", "__osFaultedThread",
 }
+
+# Single authority: nothing in this set may ever become a #define
+_MACRO_SYNTHESIS_BLOCKLIST: Set[str] = _TYPED_SOURCE_GLOBALS | set(N64_KNOWN_GLOBALS.keys())
 
 _TYPED_SOURCE_GLOBAL_DECLS = {
     "osTvType": "extern u32 osTvType;",
@@ -587,7 +708,7 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
 
     content = read_file(path)
     flags = "-xc++ -fpermissive -Wno-narrowing -Wno-c++11-narrowing -Wno-writable-strings -Wno-constant-conversion"
-    
+
     if categories.get("remove_xcxx"):
         original = content
         content = content.replace(f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n', "")
@@ -596,7 +717,6 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
         content = content.replace(flags, "")
         content = content.replace("-xc++ ", "")
         content = content.replace("-xc++", "")
-        
         if content != original:
             write_file(path, content)
             return True
@@ -604,10 +724,8 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
     else:
         if "-xc++" in content:
             return False
-            
         content += f'\n# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n'
         content += f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n'
-        
         write_file(path, content)
         return True
 
@@ -617,19 +735,16 @@ def strip_redefinition(content: str, tag: str) -> str:
         "",
         content
     )
-
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)}(?:_s)?\s+{{[\s\S]*?}};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}(?:_s)?\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
-    
     content = re.sub(
         rf"(?m)^\s*#\s*ifndef\s+(?:RECOMP_)?{re.escape(tag)}_FWD_DEFINED\s*\r?\n\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}_FWD_DEFINED\s*\r?\n\s*struct\s+{re.escape(tag)};\s*\r?\n\s*typedef\s+struct\s+{re.escape(tag)}\s+{re.escape(tag)};\s*\r?\n\s*#\s*endif\s*\r?\n?",
         "",
         content
     )
-
     content = re.sub(
         rf"(?m)^\s*#\s*define\s+(?:RECOMP_)?{re.escape(tag)}(?:_s|_u)?_DEFINED\b.*$",
         f"/* STRIPPED DEFINE: {tag}_DEFINED */",
@@ -640,7 +755,6 @@ def strip_redefinition(content: str, tag: str) -> str:
         f"/* STRIPPED FWD: {tag} */",
         content
     )
-
     content = re.sub(
         rf"\b(?:typedef\s+(?:struct|union)|struct|union)\b[^{{;]*{{[^{{}}]*}}\s*{re.escape(tag)}(?:_s|_u)?\s*;",
         f"/* STRIPPED SIMPLE BLOCK: {tag} */",
@@ -657,25 +771,18 @@ def strip_redefinition(content: str, tag: str) -> str:
         if not match:
             new_content += content[idx:]
             break
-
         start_idx = match.start()
         brace_idx = content.find('{', start_idx)
-
         open_braces = 1
         curr_idx = brace_idx + 1
         in_line_comment = False
         in_block_comment = False
-
         while curr_idx < len(content) and open_braces > 0:
             if not in_line_comment and not in_block_comment:
                 if content[curr_idx:curr_idx+2] == '//':
-                    in_line_comment = True
-                    curr_idx += 2
-                    continue
+                    in_line_comment = True; curr_idx += 2; continue
                 elif content[curr_idx:curr_idx+2] == '/*':
-                    in_block_comment = True
-                    curr_idx += 2
-                    continue
+                    in_block_comment = True; curr_idx += 2; continue
                 elif content[curr_idx] == '{':
                     open_braces += 1
                 elif content[curr_idx] == '}':
@@ -685,13 +792,9 @@ def strip_redefinition(content: str, tag: str) -> str:
                     in_line_comment = False
             elif in_block_comment:
                 if content[curr_idx:curr_idx+2] == '*/':
-                    in_block_comment = False
-                    curr_idx += 2
-                    continue
+                    in_block_comment = False; curr_idx += 2; continue
             curr_idx += 1
-
         semi_idx = content.find(';', curr_idx)
-
         if semi_idx != -1 and '{' not in content[curr_idx:semi_idx]:
             tail = content[curr_idx:semi_idx+1]
             header = content[start_idx:brace_idx]
@@ -699,7 +802,6 @@ def strip_redefinition(content: str, tag: str) -> str:
                 new_content += content[idx:start_idx] + f"\n/* STRIPPED BLOCK: {tag} */\n"
                 idx = semi_idx + 1
                 continue
-
         new_content += content[idx:brace_idx+1]
         idx = brace_idx + 1
 
@@ -719,26 +821,31 @@ def strip_redefinition(content: str, tag: str) -> str:
 
 def _purge_known_global_macros(content: str) -> str:
     """
-    Remove any #define lines for N64_KNOWN_GLOBALS / _TYPED_SOURCE_GLOBALS names
-    that may have been injected by a previous run.  These names are typed storage
-    variables; a bare '#define __osPiTable 0' poisons every file that defines or
-    assigns through that pointer.
+    Line-by-line removal of any #define for a protected global name.
+    Also eats the wrapping #ifndef / #endif if present.
+    Never touches typedef, struct, or primitive lines.
     """
-    protected = set(N64_KNOWN_GLOBALS.keys()) | _TYPED_SOURCE_GLOBALS
-    for name in protected:
-        # Remove both bare-value and function-style defines
-        content = re.sub(
-            rf"(?m)^[ \t]*#[ \t]*(?:ifndef[ \t]+\S+\s*\n[ \t]*)?#[ \t]*define[ \t]+{re.escape(name)}\b[^\n]*\n(?:[ \t]*#[ \t]*endif[^\n]*\n)?",
-            "",
-            content,
-        )
-        # Simpler single-line fallback
-        content = re.sub(
-            rf"(?m)^[ \t]*#[ \t]*define[ \t]+{re.escape(name)}\b[^\n]*$",
-            f"/* PROTECTED GLOBAL — no macro for {name} */",
-            content,
-        )
-    return content
+    protected = _MACRO_SYNTHESIS_BLOCKLIST
+    lines = content.split('\n')
+    result: List[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r'^\s*#\s*define\s+(\w+)\b', line)
+        if m and m.group(1) in protected:
+            # Check if the immediately preceding emitted line is a #ifndef guard
+            if result and re.match(rf'^\s*#\s*ifndef\s+\S+\s*$', result[-1]):
+                result[-1] = f"/* PROTECTED-GLOBAL purged ifndef */"
+            result.append(f"/* PROTECTED-GLOBAL purged define: {m.group(1)} */")
+            i += 1
+            # Eat matching #endif on the very next line
+            if i < len(lines) and re.match(r'^\s*#\s*endif\b', lines[i]):
+                result.append(f"/* PROTECTED-GLOBAL purged endif */")
+                i += 1
+            continue
+        result.append(line)
+        i += 1
+    return '\n'.join(result)
 
 
 def _find_synth_internals() -> Optional[str]:
@@ -788,7 +895,6 @@ def ensure_types_header_base(categories: Optional[Dict] = None) -> str:
         content = read_file(TYPES_HEADER)
     else:
         content = ""
-
     content = re.sub(
         r'(?m)^#include <stdint\.h>\s*\r?\n#ifndef (?:CORE|RECOMP_CORE)_PRIMITIVES_DEFINED[\s\S]*?#endif /\* END_CORE_PRIMITIVES \*/\s*\r?\n?',
         '',
@@ -808,7 +914,6 @@ def _opaque_stub(tag: str, size: int = 64, missing_members: Set[str] = None) -> 
                 members += f"    float {m};\n"
             else:
                 members += f"    int {m};\n"
-    
     return (
         f"#ifndef RECOMP_{tag}_DEFINED\n"
         f"#define RECOMP_{tag}_DEFINED\n"
@@ -820,10 +925,6 @@ def _opaque_stub(tag: str, size: int = 64, missing_members: Set[str] = None) -> 
         f"#endif\n"
     )
 
-# Combined exclusion set used by both the scraper and the macro synthesizer.
-# Any name in this set must never become a #define — it owns real typed storage.
-_MACRO_SYNTHESIS_BLOCKLIST: Set[str] = _TYPED_SOURCE_GLOBALS | set(N64_KNOWN_GLOBALS.keys())
-
 def _scrape_logs_into_categories(categories: Dict) -> None:
     log_candidates = [
         "Android/full_build_log.txt",
@@ -831,19 +932,16 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
         "build_log.txt",
         "Android/failed_files.log"
     ]
-    
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    
+
     for log_file in log_candidates:
         if not os.path.exists(log_file):
             continue
-            
         raw_content = read_file(log_file)
         content = ansi_escape.sub('', raw_content)
         lines = content.split('\n')
-        
+
         for i, line in enumerate(lines):
-            # Linkage Conflict Extraction
             m_link = re.search(
                 r"(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage",
                 line
@@ -851,7 +949,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
             if m_link:
                 file_err = normalize_path(m_link.group(1))
                 func = m_link.group(2)
-
                 file_note = None
                 for j in range(i+1, min(i+15, len(lines))):
                     m_note = re.search(
@@ -861,27 +958,18 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                     if m_note:
                         file_note = normalize_path(m_note.group(1))
                         break
-
-                if (
-                    "sysroot" not in file_err
-                    and "toolchains" not in file_err
-                    and "ndk" not in file_err.lower()
-                ):
+                if "sysroot" not in file_err and "toolchains" not in file_err and "ndk" not in file_err.lower():
                     categories.setdefault("linkage_conflict_files", set()).add((file_err, func))
-                elif (
-                    file_note
-                    and "sysroot" not in file_note
-                    and "toolchains" not in file_note
-                    and "ndk" not in file_note.lower()
-                ):
+                elif file_note and "sysroot" not in file_note and "toolchains" not in file_note and "ndk" not in file_note.lower():
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
             m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
             if m_struct1:
                 tag = m_struct1.group(1)
-                categories.setdefault("need_struct_body", set()).add(tag)
-                if tag.endswith("_s") or tag.endswith("_u") or tag.endswith("_t"):
-                    categories["need_struct_body"].add(tag[:-2])
+                if tag not in N64_PRIMITIVES:
+                    categories.setdefault("need_struct_body", set()).add(tag)
+                    if tag.endswith("_s") or tag.endswith("_u") or tag.endswith("_t"):
+                        categories["need_struct_body"].add(tag[:-2])
 
             if "error:" in line and ("redefinition" in line or "conflicting types" in line):
                 matches = re.findall(r"'(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
@@ -899,7 +987,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 struct_tag = m_member.group(2)
                 categories.setdefault("missing_members", defaultdict(set))[struct_tag].add(member_name)
                 categories.setdefault("need_struct_body", set()).add(struct_tag)
-                
                 base_tag = struct_tag[:-2] if (struct_tag.endswith("_s") or struct_tag.endswith("_u") or struct_tag.endswith("_t")) else struct_tag
                 categories["missing_members"][base_tag].add(member_name)
                 categories["need_struct_body"].add(base_tag)
@@ -907,9 +994,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
             m_undeclared = re.search(r"error:\s+use of undeclared identifier\s+'(\w+)'", line)
             if m_undeclared:
                 name = m_undeclared.group(1)
-                # FIX: Never collect known typed-storage globals as undeclared identifiers.
-                # Doing so causes them to be synthesized as #define macros, which poisons
-                # variable declarations and assignments in source files (pimgr.c, leodiskinit.c).
                 if name not in _MACRO_SYNTHESIS_BLOCKLIST:
                     categories.setdefault("undeclared_vars", set()).add(name)
 
@@ -931,11 +1015,21 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                             else:
                                 categories.setdefault("undeclared_vars", set()).add(ident)
 
-            if "initializer element is not a compile-time constant" in line:
-                categories["remove_xcxx"] = True
+            # FIX: Do NOT set remove_xcxx for initializer-not-constant errors.
+            # These now originate from C files using gs* GBI macros that expanded
+            # to non-constant expressions via the old generic {0} stub.
+            # The fix is the _GS_MACRO_STUBS constant-expression injection, not
+            # adding -xc++ to C compilation (which would break other C files).
 
 def is_func_macro(name: str) -> bool:
-    return name.startswith("rare_") or name.startswith("gs") or name.startswith("gDP") or name.startswith("gSP") or name.startswith("gDma") or name.startswith("os") or name.startswith("gu")
+    return (name.startswith("rare_") or name.startswith("gs") or
+            name.startswith("gDP") or name.startswith("gSP") or
+            name.startswith("gDma") or name.startswith("os") or
+            name.startswith("gu"))
+
+def _is_gs_macro(name: str) -> bool:
+    """True for names covered by _GS_MACRO_STUBS — must not get generic {0} stub."""
+    return name.startswith("gs") or name.startswith("gDP") or name.startswith("gSP")
 
 def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set[str]]:
     fixes = 0
@@ -958,17 +1052,20 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
         "Mtx", "Light_t", "Hilite_t", "Vtx_t", "Vtx_n",
         "__OSBlockInfo", "__OSViCommonRegs", "__OSViFieldRegs",
         "__OSThreadContext", "OSContStatus", "OSContPad", "OSTask_t",
-        "Gfx", "Acmd", "uSprite", "CPUState", "MapModelDescription", "MapProgressFlagToDialogID",
-        
+        "Gfx", "Acmd", "uSprite", "CPUState",
+        "MapModelDescription", "MapProgressFlagToDialogID",
+        "LetterFloorTile", "sChVegetable",
+        "Struct_core2_7AF80_1",
+
         "OSThread", "__OSTranxInfo", "OSViMode", "Light", "Hilite", "Vtx", "OSTask",
-        
+
         "OSMesgQueue", "OSPiHandle", "LookAt",
-        
+
         "OSMesgHdr", "OSViContext", "OSDevMgr", "OSTimer",
-        
+
         "OSIoMesg",
-        
-        "OSPfs"
+
+        "OSPfs",
     ]
 
     types_content = read_file(TYPES_HEADER)
@@ -977,19 +1074,23 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
     if marker in types_content:
         types_content = types_content.split(marker)[0].strip()
 
-    # FIX: Purge any stale macro definitions for protected global names that may
-    # have been written by a previous run before this guard existed.
+    # Purge stale protected-global #define lines from any previous run
     types_content = _purge_known_global_macros(types_content)
 
-    redef_conflicts = set(categories.get("redefinition_conflict", set()))
+    # Purge stale gs* stub block so we always re-inject the current version
+    types_content = re.sub(
+        r'// --- RECOMP_INJECT: GS_STUBS ---[\s\S]*?// --- END_RECOMP_INJECT: GS_STUBS ---\r?\n?',
+        '',
+        types_content
+    )
 
+    redef_conflicts = set(categories.get("redefinition_conflict", set()))
     for tag in redef_conflicts:
         types_content = strip_redefinition(types_content, tag)
 
     target_tags = set(ALL_STRUCTS.keys())
     if "need_struct_body" in categories:
         target_tags |= set(categories["need_struct_body"])
-
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
     target_tags -= redef_conflicts
 
@@ -999,7 +1100,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
         return f"\n// --- RECOMP_INJECT: {tag} ---\n{inner_code}\n// --- END_RECOMP_INJECT: {tag} ---\n"
 
     for tag in ORDERED_STRUCT_TAGS:
-        if tag in target_tags:
+        if tag in target_tags or tag == "Struct_core2_7AF80_1":
             types_content = strip_redefinition(types_content, tag)
             if tag in ALL_STRUCTS:
                 injected_structs += _format_injection(tag, ALL_STRUCTS[tag])
@@ -1025,6 +1126,7 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
             missing = categories.get("missing_members", {}).get(tag, set())
             injected_structs += _format_injection(tag, _opaque_stub(tag, 64, missing))
 
+    # N64_FORWARD_STRUCTS is empty — no forward-decl injection
     for tag in N64_FORWARD_STRUCTS:
         types_content = strip_redefinition(types_content, tag)
         if tag not in redef_conflicts:
@@ -1035,13 +1137,13 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
     for m_name, m_val in PHASE_3_MACROS.items():
         macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
-        
-    # FIX: Exclude both _TYPED_SOURCE_GLOBALS and N64_KNOWN_GLOBALS keys from
-    # macro synthesis.  These names own real typed storage in source files and
-    # must never be shadowed by a bare #define.
+
     for m_name in sorted(categories.get("undeclared_vars", set())):
         if m_name in _MACRO_SYNTHESIS_BLOCKLIST:
             logger.info(f"Skipping macro synthesis for protected global: {m_name}")
+            continue
+        # gs*/gDP*/gSP* names are covered by _GS_MACRO_STUBS — skip generic stub
+        if _is_gs_macro(m_name):
             continue
         if is_func_macro(m_name):
             macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
@@ -1052,11 +1154,18 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
         if m_name in _MACRO_SYNTHESIS_BLOCKLIST:
             logger.info(f"Skipping macro synthesis for protected global: {m_name}")
             continue
+        if _is_gs_macro(m_name):
+            continue
         macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
-            
+
     macro_injection += "// --- END_RECOMP_INJECT: MACROS ---\n"
-    
-    injected_structs = macro_injection + injected_structs
+
+    # Inject gs* constant-expression stubs as a separate named block
+    gs_stubs_injection = "\n// --- RECOMP_INJECT: GS_STUBS ---\n"
+    gs_stubs_injection += _GS_MACRO_STUBS
+    gs_stubs_injection += "// --- END_RECOMP_INJECT: GS_STUBS ---\n"
+
+    injected_structs = macro_injection + gs_stubs_injection + injected_structs
 
     for var in _TYPED_SOURCE_GLOBALS:
         types_content = re.sub(
@@ -1092,7 +1201,6 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
             if os.path.exists(filepath):
                 c = read_file(filepath)
                 c = _scrub_linkage_comments(c)
-                
                 pattern = rf"(?m)^(?![^\n]*// AUTO-FIX LINKAGE)(.*?\b{re.escape(func)}\s*\(.*?;)"
                 c, n = re.subn(pattern, r"// AUTO-FIX LINKAGE: \1", c)
                 if n > 0:
