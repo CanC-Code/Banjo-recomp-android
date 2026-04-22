@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
@@ -7,12 +6,25 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(GAME_SRC ${REPO_ROOT}/src)
 set(GAME_INC ${REPO_ROOT}/include)
 
-# Source Discovery
+# Source Discovery for the Android Wrapper (Always Included)
 file(GLOB_RECURSE EMULATOR_SRC "emulator/*.cpp")
 file(GLOB_RECURSE ULTRA_SRC "ultra/*.cpp")
 file(GLOB_RECURSE TOOLS_SRC "tools/*.cpp")
 file(GLOB_RECURSE MENU_SRC "menu/*.cpp")
-file(GLOB_RECURSE GAME_CORE "${GAME_SRC}/*.c")
+
+# --- MODIFICATION START ---
+# Check if we should include the game source
+option(EXCLUDE_GAME_SRC "Exclude N64 source files for APK verification" OFF)
+
+if(NOT EXCLUDE_GAME_SRC)
+    file(GLOB_RECURSE GAME_CORE "${GAME_SRC}/*.c")
+    message(STATUS "Including Game Source files from ${GAME_SRC}")
+else()
+    set(GAME_CORE "")
+    add_definitions(-DNO_GAME_SRC)
+    message(STATUS "Excluding Game Source - Building OTR Extractor Only")
+endif()
+# --- MODIFICATION END ---
 
 # Add library
 add_library(bkawrapper SHARED
@@ -23,7 +35,7 @@ add_library(bkawrapper SHARED
     ${GAME_CORE}
 )
 
-# CRITICAL: Bridge folders must come FIRST
+# Bridge folders must come FIRST
 target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
@@ -34,10 +46,8 @@ target_include_directories(bkawrapper PRIVATE
     ${GAME_INC}/2.0L/PR
 )
 
-# Add definitions for macros
 add_definitions(-DOEPRESCRIPT=1 -DDANDROID02=1)
 
-# Compile options
 target_compile_options(bkawrapper PRIVATE
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
     -w
@@ -46,11 +56,9 @@ target_compile_options(bkawrapper PRIVATE
     -fno-strict-aliasing
 )
 
-# Find required libraries
 find_library(log-lib log)
 find_library(opensl-lib OpenSLES)
 
-# Link libraries
 target_link_libraries(bkawrapper
     android
     ${log-lib}
