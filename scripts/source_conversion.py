@@ -922,6 +922,9 @@ def apply_fixes(categories: Dict, intelligence_level: int = 3) -> Tuple[int, Set
         if tag not in redef_conflicts:
             injected_structs += _format_injection(tag, f"#ifndef RECOMP_{tag}_FWD_DEFINED\n#define RECOMP_{tag}_FWD_DEFINED\nstruct {tag};\ntypedef struct {tag} {tag};\n#endif")
 
+    # Prevent the Phase 3 Macro block from endlessly duplicating on consecutive runs
+    types_content = strip_redefinition(types_content, "MACROS")
+
     # Inject macros using the block marker system
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
     for m_name, m_val in PHASE_3_MACROS.items():
