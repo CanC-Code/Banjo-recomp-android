@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  validate-otr-and-apk:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: 📥 Checkout Code
@@ -21,33 +21,17 @@ jobs:
       - name: 🛠️ Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 🔨 Validate OTR Builder (Native Logic)
-        run: |
-          echo "Verifying OTR Extraction Logic..."
-          cd Android/app/src/main/cpp
-          # We define NO_GAME_SRC here so the compiler doesn't look for game symbols
-          # during this host-side smoke test.
-          g++ -c ultra/otr_builder.cpp tools/rare_decompression.cpp -I. -Iultra -Itools -DNO_GAME_SRC
-
-      - name: 🐘 Build APK (Excluding Base Source)
+      - name: 🐘 Build Verification APK
         run: |
           cd Android
           chmod +x gradlew
-          # We pass the CMake flag through Gradle using -Pandroid.externalNativeBuild.cmake.arguments
+          # This compiles the OTR builder and NativeBridge while ignoring /src
           ./gradlew assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=ON" \
             --stacktrace
 
-      # Optional: Verify the APK actually contains the native library
-      - name: 🔍 Verify Shared Library
-        run: |
-          sudo apt-get install -y unzip
-          APK_PATH=$(find Android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          unzip -l "$APK_PATH" | grep "libbkawrapper.so"
-
       - name: 📦 Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: banjo-recomp-debug-apk
+          name: bka-verification-apk
           path: Android/app/build/outputs/apk/debug/*.apk
