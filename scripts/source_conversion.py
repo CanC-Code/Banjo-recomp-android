@@ -420,6 +420,12 @@ N64_AUDIO_STATE_TYPES = {
     "ENVMIX_STATE2", "HIPASSLOOP_STATE", "COMPRESS_STATE", "REVERB_STATE", "MIXER_STATE",
 }
 
+# FIX: These are typed global variable names that source files define with real storage.
+# They must NEVER be synthesized as macros — doing so clobbers declarations like:
+#   OSPiHandle *__osPiTable = NULL;   (pimgr.c)
+#   __osPiTable = &LeoDiskHandle;     (leodiskinit.c)
+# N64_KNOWN_GLOBALS keys are merged into this set so both the scraper and
+# the macro synthesizer skip them unconditionally.
 N64_KNOWN_GLOBALS = {
     "__osPiTable": "struct OSPiHandle_s *__osPiTable;",
     "__osFlashHandle": "struct OSPiHandle_s *__osFlashHandle;",
@@ -435,6 +441,9 @@ _TYPED_SOURCE_GLOBALS = {
     "osClockRate", "osViModeNtscLan1", "osViModePalLan1", "osViModeMpalLan1",
     "osPiRawStartDma", "osEPiRawStartDma",
     "__OSGlobalIntMask",
+    # FIX: All N64_KNOWN_GLOBALS keys are also typed storage; exclude from macro synthesis.
+    "__osPiTable", "__osFlashHandle", "__osSfHandle",
+    "__osCurrentThread", "__osRunQueue", "__osFaultedThread",
 }
 
 _TYPED_SOURCE_GLOBAL_DECLS = {
@@ -707,6 +716,31 @@ def strip_redefinition(content: str, tag: str) -> str:
     )
     return content
 
+
+def _purge_known_global_macros(content: str) -> str:
+    """
+    Remove any #define lines for N64_KNOWN_GLOBALS / _TYPED_SOURCE_GLOBALS names
+    that may have been injected by a previous run.  These names are typed storage
+    variables; a bare '#define __osPiTable 0' poisons every file that defines or
+    assigns through that pointer.
+    """
+    protected = set(N64_KNOWN_GLOBALS.keys()) | _TYPED_SOURCE_GLOBALS
+    for name in protected:
+        # Remove both bare-value and function-style defines
+        content = re.sub(
+            rf"(?m)^[ \t]*#[ \t]*(?:ifndef[ \t]+\S+\s*\n[ \t]*)?#[ \t]*define[ \t]+{re.escape(name)}\b[^\n]*\n(?:[ \t]*#[ \t]*endif[^\n]*\n)?",
+            "",
+            content,
+        )
+        # Simpler single-line fallback
+        content = re.sub(
+            rf"(?m)^[ \t]*#[ \t]*define[ \t]+{re.escape(name)}\b[^\n]*$",
+            f"/* PROTECTED GLOBAL — no macro for {name} */",
+            content,
+        )
+    return content
+
+
 def _find_synth_internals() -> Optional[str]:
     candidates = [SYNTH_INTERNALS_H, SYNTH_INTERNALS_H_ALT, "include/synthInternals.h"]
     for root, _, files in os.walk("include"):
@@ -785,6 +819,10 @@ def _opaque_stub(tag: str, size: int = 64, missing_members: Set[str] = None) -> 
         f"typedef struct {struct_tag} {tag};\n"
         f"#endif\n"
     )
+
+# Combined exclusion set used by both the scraper and the macro synthesizer.
+# Any name in this set must never become a #define — it owns real typed storage.
+_MACRO_SYNTHESIS_BLOCKLIST: Set[str] = _TYPED_SOURCE_GLOBALS | set(N64_KNOWN_GLOBALS.keys())
 
 def _scrape_logs_into_categories(categories: Dict) -> None:
     log_candidates = [
@@ -868,11 +906,18 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
 
             m_undeclared = re.search(r"error:\s+use of undeclared identifier\s+'(\w+)'", line)
             if m_undeclared:
-                categories.setdefault("undeclared_vars", set()).add(m_undeclared.group(1))
+                name = m_undeclared.group(1)
+                # FIX: Never collect known typed-storage globals as undeclared identifiers.
+                # Doing so causes them to be synthesized as #define macros, which poisons
+                # variable declarations and assignments in source files (pimgr.c, leodiskinit.c).
+                if name not in _MACRO_SYNTHESIS_BLOCKLIST:
+                    categories.setdefault("undeclared_vars", set()).add(name)
 
             m_impl_func = re.search(r"error:\s+implicit declaration of function\s+'(\w+)'", line)
             if m_impl_func:
-                categories.setdefault("undeclared_funcs", set()).add(m_impl_func.group(1))
+                name = m_impl_func.group(1)
+                if name not in _MACRO_SYNTHESIS_BLOCKLIST:
+                    categories.setdefault("undeclared_funcs", set()).add(name)
 
             if "error: expected ';' after expression" in line:
                 if i + 1 < len(lines):
@@ -880,10 +925,11 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                     m_ident = re.search(r'^([a-zA-Z_]\w*)', next_line)
                     if m_ident:
                         ident = m_ident.group(1)
-                        if '(' in next_line:
-                            categories.setdefault("undeclared_funcs", set()).add(ident)
-                        else:
-                            categories.setdefault("undeclared_vars", set()).add(ident)
+                        if ident not in _MACRO_SYNTHESIS_BLOCKLIST:
+                            if '(' in next_line:
+                                categories.setdefault("undeclared_funcs", set()).add(ident)
+                            else:
+                                categories.setdefault("undeclared_vars", set()).add(ident)
 
             if "initializer element is not a compile-time constant" in line:
                 categories["remove_xcxx"] = True
@@ -930,6 +976,10 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
     marker = "/* Forward declarations for source-defined typed globals */"
     if marker in types_content:
         types_content = types_content.split(marker)[0].strip()
+
+    # FIX: Purge any stale macro definitions for protected global names that may
+    # have been written by a previous run before this guard existed.
+    types_content = _purge_known_global_macros(types_content)
 
     redef_conflicts = set(categories.get("redefinition_conflict", set()))
 
@@ -986,9 +1036,12 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
     for m_name, m_val in PHASE_3_MACROS.items():
         macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
         
-    # FIX: Explicitly exclude manually managed typed engine globals from macro synthesis to prevent C++ expression assignment errors
+    # FIX: Exclude both _TYPED_SOURCE_GLOBALS and N64_KNOWN_GLOBALS keys from
+    # macro synthesis.  These names own real typed storage in source files and
+    # must never be shadowed by a bare #define.
     for m_name in sorted(categories.get("undeclared_vars", set())):
-        if m_name in _TYPED_SOURCE_GLOBALS:
+        if m_name in _MACRO_SYNTHESIS_BLOCKLIST:
+            logger.info(f"Skipping macro synthesis for protected global: {m_name}")
             continue
         if is_func_macro(m_name):
             macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
@@ -996,7 +1049,8 @@ def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set
             macro_injection += f"#ifndef {m_name}\n#define {m_name} 0\n#endif\n"
 
     for m_name in sorted(categories.get("undeclared_funcs", set())):
-        if m_name in _TYPED_SOURCE_GLOBALS:
+        if m_name in _MACRO_SYNTHESIS_BLOCKLIST:
+            logger.info(f"Skipping macro synthesis for protected global: {m_name}")
             continue
         macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
             
