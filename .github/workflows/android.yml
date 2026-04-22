@@ -21,16 +21,27 @@ jobs:
       - name: 🛠️ Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # This installs Gradle so we don't need the missing 'gradlew' file
       - name: 🐘 Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.2
 
+      - name: 🖼️ Generate Android Icons
+        run: |
+          # Install ImageMagick to create the base icon
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          
+          # Create a placeholder master icon if it doesn't exist
+          if [ ! -f "icon_master.png" ]; then
+            convert -size 512x512 xc:blue icon_master.png
+          fi
+          
+          # Run your project's icon generation script
+          python3 scripts/generate_icons.py icon_master.png
+
       - name: 🐘 Build Verification APK
         run: |
           cd Android
-          # Use 'gradle' instead of './gradlew'
           gradle assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=ON" \
             --stacktrace
