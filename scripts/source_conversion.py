@@ -587,6 +587,7 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
         content = content.replace("# AUTO-INJECTED COMPILER FLAGS BY N64_RECOMP_ENGINE\n", "")
         content = content.replace(flags, "")
         content = content.replace("-xc++ ", "")
+        content = content.replace("-xc++", "")
         
         if content != original:
             write_file(path, content)
@@ -838,32 +839,34 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 ):
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
-            # 2) DYNAMIC ROBUSTNESS FIX: Base Tag Re-mapping to Prevent Blind Re-injections
-            m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?(\w+)'", line)
+            # 2) DYNAMIC ROBUSTNESS FIX: Ultra-Aggressive Redefinition Extraction
+            m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
             if m_struct1:
                 tag = m_struct1.group(1)
                 categories.setdefault("need_struct_body", set()).add(tag)
-                if tag.endswith("_s") or tag.endswith("_u"):
+                if tag.endswith("_s") or tag.endswith("_u") or tag.endswith("_t"):
                     categories["need_struct_body"].add(tag[:-2])
 
             if "error:" in line and ("redefinition" in line or "conflicting types" in line):
-                matches = re.findall(r"'(?:struct\s+|union\s+)?(\w+)'", line)
+                # Hardened regex specifically engineered to catch 'OSPfs_s' and 'OSPfs' identically regardless of formatting
+                matches = re.findall(r"'(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
                 for m in matches:
                     categories.setdefault("redefinition_conflict", set()).add(m)
-                    if m.endswith("_s") or m.endswith("_u"):
+                    if m.endswith("_s") or m.endswith("_u") or m.endswith("_t"):
                         categories["redefinition_conflict"].add(m[:-2])
                     else:
                         categories["redefinition_conflict"].add(f"{m}_s")
+                        categories["redefinition_conflict"].add(f"{m}_t")
 
             # 3) DYNAMIC ROBUSTNESS: Missing Struct Member Synthesis
-            m_member = re.search(r"error:\s+no member named '(\w+)' in '(?:struct\s+|union\s+)?(\w+)'", line)
+            m_member = re.search(r"error:\s+no member named '(\w+)' in '(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
             if m_member:
                 member_name = m_member.group(1)
                 struct_tag = m_member.group(2)
                 categories.setdefault("missing_members", defaultdict(set))[struct_tag].add(member_name)
                 categories.setdefault("need_struct_body", set()).add(struct_tag)
                 
-                base_tag = struct_tag[:-2] if (struct_tag.endswith("_s") or struct_tag.endswith("_u")) else struct_tag
+                base_tag = struct_tag[:-2] if (struct_tag.endswith("_s") or struct_tag.endswith("_u") or struct_tag.endswith("_t")) else struct_tag
                 categories["missing_members"][base_tag].add(member_name)
                 categories["need_struct_body"].add(base_tag)
 
@@ -892,7 +895,7 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 categories["remove_xcxx"] = True
 
 def is_func_macro(name: str) -> bool:
-    return name.startswith("rare_") or name.startswith("gs") or name.startswith("gDP") or name.startswith("gSP") or name.startswith("gDma")
+    return name.startswith("rare_") or name.startswith("gs") or name.startswith("gDP") or name.startswith("gSP") or name.startswith("gDma") or name.startswith("os") or name.startswith("gu")
 
 def apply_fixes(categories: Dict, intelligence_level: int = 4) -> Tuple[int, Set[str]]:
     fixes = 0
