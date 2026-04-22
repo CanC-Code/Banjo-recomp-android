@@ -28,20 +28,20 @@ jobs:
 
       - name: 🖼️ Generate Android Icons
         run: |
-          # Install ImageMagick to create the base icon
           sudo apt-get update && sudo apt-get install -y imagemagick
-          
-          # Create a placeholder master icon if it doesn't exist
           if [ ! -f "icon_master.png" ]; then
             convert -size 512x512 xc:blue icon_master.png
           fi
-          
-          # Run your project's icon generation script
           python3 scripts/generate_icons.py icon_master.png
+
+      - name: 🧹 Pre-Patching (Sanitizer)
+        # This step might generate headers or fix directory structures
+        run: python3 scripts/sanitize_codebase.py .
 
       - name: 🐘 Build Verification APK
         run: |
           cd Android
+          # Passing EXCLUDE_GAME_SRC to skip the massive /src folder
           gradle assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=ON" \
             --stacktrace
