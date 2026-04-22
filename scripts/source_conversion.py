@@ -579,7 +579,6 @@ def patch_cmake_compiler_flags(categories: Dict) -> bool:
     content = read_file(path)
     flags = "-xc++ -fpermissive -Wno-narrowing -Wno-c++11-narrowing -Wno-writable-strings -Wno-constant-conversion"
     
-    # DYNAMIC ROBUSTNESS: Complete eradication of C++ strictness for valid C initialization
     if categories.get("remove_xcxx"):
         original = content
         content = content.replace(f'set(CMAKE_C_FLAGS "${{CMAKE_C_FLAGS}} {flags}")\n', "")
@@ -806,7 +805,7 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
         lines = content.split('\n')
         
         for i, line in enumerate(lines):
-            # 1) Robust Linkage Scanner
+            # Linkage Conflict Extraction
             m_link = re.search(
                 r"(/?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cpp|h)):\d+:\d+:\s+error:\s+declaration of '(\w+)' has a different language linkage",
                 line
@@ -839,7 +838,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 ):
                     categories.setdefault("linkage_conflict_files", set()).add((file_note, func))
 
-            # 2) DYNAMIC ROBUSTNESS FIX: Ultra-Aggressive Redefinition Extraction
             m_struct1 = re.search(r"error:\s+(?:unknown type name|member access into incomplete type|variable has incomplete type|incomplete type)\s+'(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
             if m_struct1:
                 tag = m_struct1.group(1)
@@ -848,7 +846,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                     categories["need_struct_body"].add(tag[:-2])
 
             if "error:" in line and ("redefinition" in line or "conflicting types" in line):
-                # Hardened regex specifically engineered to catch 'OSPfs_s' and 'OSPfs' identically regardless of formatting
                 matches = re.findall(r"'(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
                 for m in matches:
                     categories.setdefault("redefinition_conflict", set()).add(m)
@@ -858,7 +855,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                         categories["redefinition_conflict"].add(f"{m}_s")
                         categories["redefinition_conflict"].add(f"{m}_t")
 
-            # 3) DYNAMIC ROBUSTNESS: Missing Struct Member Synthesis
             m_member = re.search(r"error:\s+no member named '(\w+)' in '(?:struct\s+|union\s+)?([A-Za-z0-9_]+)'", line)
             if m_member:
                 member_name = m_member.group(1)
@@ -870,7 +866,6 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                 categories["missing_members"][base_tag].add(member_name)
                 categories["need_struct_body"].add(base_tag)
 
-            # 4) DYNAMIC ROBUSTNESS: Intelligent Contextual Macro Synthesis
             m_undeclared = re.search(r"error:\s+use of undeclared identifier\s+'(\w+)'", line)
             if m_undeclared:
                 categories.setdefault("undeclared_vars", set()).add(m_undeclared.group(1))
@@ -890,14 +885,13 @@ def _scrape_logs_into_categories(categories: Dict) -> None:
                         else:
                             categories.setdefault("undeclared_vars", set()).add(ident)
 
-            # 5) DYNAMIC ROBUSTNESS: Drop strict C++ when compound literals break initializations
             if "initializer element is not a compile-time constant" in line:
                 categories["remove_xcxx"] = True
 
 def is_func_macro(name: str) -> bool:
     return name.startswith("rare_") or name.startswith("gs") or name.startswith("gDP") or name.startswith("gSP") or name.startswith("gDma") or name.startswith("os") or name.startswith("gu")
 
-def apply_fixes(categories: Dict, intelligence_level: int = 4) -> Tuple[int, Set[str]]:
+def apply_fixes(categories: Dict, intelligence_level: int = 5) -> Tuple[int, Set[str]]:
     fixes = 0
     fixed_files = set()
 
@@ -914,8 +908,6 @@ def apply_fixes(categories: Dict, intelligence_level: int = 4) -> Tuple[int, Set
     if patch_cmake_compiler_flags(categories):
         fixes += 1
 
-    # DYNAMIC ROBUSTNESS FIX: Strictly ordered injection layout based on topological dependencies
-    # Resolves standard C parsing errors when embedding unions/structs by value
     ORDERED_STRUCT_TAGS = [
         "Mtx", "Light_t", "Hilite_t", "Vtx_t", "Vtx_n",
         "__OSBlockInfo", "__OSViCommonRegs", "__OSViFieldRegs",
@@ -949,8 +941,6 @@ def apply_fixes(categories: Dict, intelligence_level: int = 4) -> Tuple[int, Set
         target_tags |= set(categories["need_struct_body"])
 
     target_tags = {t for t in target_tags if t not in SDK_DEFINES_THESE and t not in N64_PRIMITIVES}
-    
-    # Safely back off from injecting structs that native headers handle
     target_tags -= redef_conflicts
 
     injected_structs = ""
@@ -992,18 +982,22 @@ def apply_fixes(categories: Dict, intelligence_level: int = 4) -> Tuple[int, Set
 
     types_content = strip_redefinition(types_content, "MACROS")
 
-    # DYNAMIC ROBUSTNESS FIX: Synthesize macro calls specifically according to object vs functional usage
     macro_injection = "\n// --- RECOMP_INJECT: MACROS ---\n"
     for m_name, m_val in PHASE_3_MACROS.items():
         macro_injection += f"#ifndef {m_name}\n#define {m_name} {m_val}\n#endif\n"
         
+    # FIX: Explicitly exclude manually managed typed engine globals from macro synthesis to prevent C++ expression assignment errors
     for m_name in sorted(categories.get("undeclared_vars", set())):
+        if m_name in _TYPED_SOURCE_GLOBALS:
+            continue
         if is_func_macro(m_name):
             macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
         else:
             macro_injection += f"#ifndef {m_name}\n#define {m_name} 0\n#endif\n"
 
     for m_name in sorted(categories.get("undeclared_funcs", set())):
+        if m_name in _TYPED_SOURCE_GLOBALS:
+            continue
         macro_injection += f"#ifndef {m_name}\n#define {m_name}(...) {{0}}\n#endif\n"
             
     macro_injection += "// --- END_RECOMP_INJECT: MACROS ---\n"
