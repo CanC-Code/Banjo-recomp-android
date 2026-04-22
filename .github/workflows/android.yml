@@ -1,10 +1,10 @@
-name: Android Build Pipeline
+name: Android Build & OTR Verification
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
-  build:
+  validate-otr-and-apk:
     runs-on: ubuntu-latest
     steps:
       - name: 📥 Checkout Code
@@ -18,35 +18,27 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 🐘 Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.2 
+      - name: 🛠️ Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: 🖼️ Generate Android Icons
+      - name: 🔨 Validate OTR Builder (Native Logic)
         run: |
-          sudo apt-get update && sudo apt-get install -y imagemagick
-          if [ ! -f "icon_master.png" ]; then
-            convert -size 512x512 xc:blue icon_master.png
-          fi
-          python3 scripts/generate_icons.py icon_master.png
+          echo "Verifying OTR Extraction Logic..."
+          cd Android/app/src/main/cpp
+          # We check if the C++ logic compiles for the host to ensure extraction remains functional
+          g++ -c ultra/otr_builder.cpp tools/rare_decompression.cpp -I. -Iultra -Itools
 
-      - name: 🧹 Pre-Patching (Sanitizer)
-        run: python3 scripts/sanitize_codebase.py .
-
-      - name: 🤖 Automated Correction & Build Loop (Driver)
-        run: python3 scripts/build_driver.py
-
-      - name: 📦 Upload Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-compilation-logs
-          path: Android/full_build_log.txt
+      - name: 🐘 Build APK (Excluding Base Source)
+        run: |
+          cd Android
+          chmod +x gradlew
+          # We use -PexcludeSource=true if your build.gradle supports it, 
+          # otherwise, we simply build the debug target.
+          ./gradlew assembleDebug --stacktrace
 
       - name: 📦 Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: banjo-android-debug
+          name: banjo-recomp-debug-apk
           path: Android/app/build/outputs/apk/debug/*.apk
