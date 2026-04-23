@@ -174,4 +174,72 @@ typedef struct {
     u8 samplePan;
     u8 sampleVolume;
     u8 flags;
-} ALSound
+} ALSound;
+
+typedef struct {
+    u8 volume; u8 pan; u8 priority; u8 soundCount; ALSound *sounds[1];
+} ALInstrument;
+
+typedef struct { s16 instCount; ALInstrument *instArray[1]; } ALBank;
+typedef struct { s16 revision; s16 bankCount; ALBank *bankArray[1]; } ALBankFile;
+
+typedef struct { u8 *offset; s32 len; } ALSeqData;
+typedef struct { s16 seqCount; ALSeqData seqArray[1]; } ALSeqFile;
+
+// --- AUDIO EVENTS & PLAYERS ---
+typedef struct {
+    s16 type;
+    union {
+        struct { f32 unk0; f32 unk4; } unk18;
+        s32 word;
+    } msg;
+} ALEvent;
+
+#define AL_UNK18_EVT    18
+
+typedef struct {
+    struct ALFilter_s *source;
+    int32_t (*handler)(void *, int16_t *, int32_t, int32_t, void *);
+} ALFilter;
+
+typedef struct {
+    ALFilter filter;
+    u8 evtq[64]; 
+} ALCSPlayer;
+
+typedef ALCSPlayer N_ALCSPlayer;
+
+typedef struct {
+    u8 data[1024];
+} ALSyn;
+
+typedef struct {
+    ALSyn *drvr;
+    u8    reserved[1024];
+} ALGlobals;
+
+// --- GLOBALS & PROTOTYPES ---
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern ALGlobals *alGlobals;
+extern ALSyn *n_syn;
+extern OSThread *__osRunningThread;
+
+void alEvtqPostEvent(void *evtq, ALEvent *evt, ALMicroTime delta);
+void n_alEnvmixerParam(void *v, s32 p, void *ptr);
+s32 _n_timeToSamples(ALMicroTime t);
+#ifdef __cplusplus
+}
+#endif
+
+#endif // _BKA_ANDROID_N64_TYPES_H_
+"""
+    
+    os.makedirs(os.path.dirname(types_path), exist_ok=True)
+    with open(types_path, 'w') as f:
+        f.write(content)
+    print(f"✅ Updated: {types_path}")
+
+if __name__ == '__main__':
+    fix_n64_types()
