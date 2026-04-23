@@ -43,14 +43,13 @@ jobs:
       - name: 📐 Auto-Fix Struct Ordering
         run: python3 scripts/fix_struct_ordering.py
 
-      - name: 🔧 Auto-Fix Missing vu32 Types
-        run: python3 scripts/fix_vu32.py
+      # --- CONSOLIDATED TYPE FIXER ---
+      # This replaces the old fix_vu32 and fix_n64_bool steps
+      - name: 🛠️ Auto-Fix All N64 Types (Global)
+        run: python3 scripts/fix_n64_types.py
 
       - name: 🎮 Auto-Fix Missing Graphics Macros
         run: python3 scripts/fix_missing_macros.py
-
-      - name: 🛠️ Auto-Generate n64_bool.h
-        run: python3 scripts/fix_n64_bool.py
 
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
@@ -58,16 +57,12 @@ jobs:
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
-          # Ensure this script uses lowercase 'import'
           python3 scripts/generate_manifest.py
 
       - name: 🐘 Build Full Game APK
         run: |
           cd Android
-          # `pipefail` ensures the action catches the error even if `tee` succeeds
           set -o pipefail
-          
-          # We pipe standard output and standard error (2>&1) into tee
           gradle clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
             --info \
@@ -80,12 +75,11 @@ jobs:
           name: bka-full-game-apk
           path: Android/app/build/outputs/apk/debug/*.apk
 
-      # --- DIAGNOSTIC STEPS (Only run if the build fails) ---
+      # --- DIAGNOSTIC STEPS ---
       
       - name: 🔍 Run Failure Analyzer
         if: failure()
         run: |
-          # Run the script we just created against the captured log
           python3 scripts/analyze_build_log.py build.log
 
       - name: 🚑 Upload Failure Logs
