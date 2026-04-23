@@ -6,7 +6,6 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 # 1. Define sources
 set(VERIFICATION_SOURCES
     "ultra/NativeBridge.cpp"
-    "ultra/manifest_generator.cpp"  # <--- ADD THIS LINE HERE
     "ultra/otr_builder.cpp"
     "ultra/parameters.cpp"
     "ultra/libm_vals.cpp"
