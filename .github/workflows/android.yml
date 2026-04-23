@@ -52,8 +52,8 @@ jobs:
       - name: 🛠️ Auto-Generate n64_bool.h
         run: python3 scripts/fix_n64_bool.py
 
-      - name: 💉 Auto-Fix Missing Method Types
-        run: python3 scripts/fix_missing_methods.py
+      - name: 🏗️ Auto-Hoist Function Pointers
+        run: python3 scripts/fix_function_pointers.py
 
       - name: 🗺️ Generate Asset Manifests
         run: |
