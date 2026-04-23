@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
-# 1. Force CMake to recognize the command-line flag
-# Default is ON so it stays fast unless we explicitly flip it in GitHub
+# 1. Define the option
 option(EXCLUDE_GAME_SRC "Exclude game source" ON)
 
-set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
+# 2. Establish the Repo Root
+# Current: Android/app/src/main/cpp -> ../../../../../ -> Root
+set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
+get_filename_component(REAL_ROOT "${REPO_ROOT}" ABSOLUTE)
 
-# 2. Base bridge sources
 set(LIB_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -19,44 +20,47 @@ set(LIB_SOURCES
     "tools/rare_decompression.cpp" 
 )
 
-# 3. The Game Source Logic
+# 3. The Logic
 if(EXCLUDE_GAME_SRC)
-    message(STATUS "!!! BKA: BUILDING BRIDGE ONLY (FAST MODE) !!!")
+    message(STATUS "BKA-BUILD: Bridge only mode enabled.")
 else()
-    message(STATUS "!!! BKA: BUILDING FULL GAME ENGINE (SLOW MODE) !!!")
+    message(STATUS "BKA-BUILD: Attempting full game build...")
+    message(STATUS "BKA-BUILD: Looking for source in: ${REAL_ROOT}/src")
+
+    file(GLOB_RECURSE GAME_C "${REAL_ROOT}/src/*.c")
+    file(GLOB_RECURSE GAME_CPP "${REAL_ROOT}/src/*.cpp")
     
-    # Recursively find all C files in the repo root /src
-    file(GLOB_RECURSE GAME_C_FILES "${REPO_ROOT}/src/*.c")
-    file(GLOB_RECURSE GAME_CPP_FILES "${REPO_ROOT}/src/*.cpp")
-    
-    list(APPEND LIB_SOURCES ${GAME_C_FILES} ${GAME_CPP_FILES})
-    
-    # Debug: Print how many files we found
-    list(LENGTH LIB_SOURCES TOTAL_FILE_COUNT)
-    message(STATUS "BKA: Total files added to build: ${TOTAL_FILE_COUNT}")
+    set(GAME_FILES ${GAME_C} ${GAME_CPP})
+    list(LENGTH GAME_FILES FILE_COUNT)
+
+    # --- FAIL-SAFE CHECK ---
+    if(FILE_COUNT EQUAL 0)
+        message(FATAL_ERROR "
+        CRITICAL ERROR: No game source files found! 
+        Looked in: ${REAL_ROOT}/src
+        Make sure the /src folder exists in your repository root.
+        ")
+    endif()
+
+    message(STATUS "BKA-BUILD: Found ${FILE_COUNT} files. Compiling...")
+    list(APPEND LIB_SOURCES ${GAME_FILES})
 endif()
 
 add_library(bkawrapper SHARED ${LIB_SOURCES})
 
-# 4. Include Paths
+# 4. Includes
 target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
     ${CMAKE_CURRENT_SOURCE_DIR}/emulator
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
-    ${REPO_ROOT}/include
-    ${REPO_ROOT}/include/2.0L
-    ${REPO_ROOT}/src
-    ${REPO_ROOT}/tools/bk_rom_compressor/modules/rarezip
+    ${REAL_ROOT}/include
+    ${REAL_ROOT}/include/2.0L
+    ${REAL_ROOT}/src
+    ${REAL_ROOT}/tools/bk_rom_compressor/modules/rarezip
 )
 
-# 5. Options
-target_compile_options(bkawrapper PRIVATE 
-    "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w"
-    "-O3" 
-)
-
-# 6. Linking
+# 5. Options & Linking
+target_compile_options(bkawrapper PRIVATE "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h" "-w" "-O3")
 find_library(log-lib log)
 target_link_libraries(bkawrapper android ${log-lib} GLESv3 EGL z)
