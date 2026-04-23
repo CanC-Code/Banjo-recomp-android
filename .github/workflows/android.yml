@@ -40,6 +40,9 @@ jobs:
       - name: 🩹 Auto-Fix N64 NULL Floats
         run: python3 scripts/fix_null_floats.py
 
+      - name: 📐 Auto-Fix Struct Ordering
+        run: python3 scripts/fix_struct_ordering.py
+
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
