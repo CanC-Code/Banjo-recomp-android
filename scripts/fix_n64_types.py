@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Applying N64 SDK header-silencing guards to {filepath}...")
+    print(f"🚀 Exhausting all possible SDK guards in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -49,43 +49,47 @@ typedef union Vtx {
     long long int  force_structure_alignment;
 } Vtx;
 
-// --- SDK COMPATIBILITY: SILENCING ORIGINAL HEADERS ---
-// We define these guards to prevent the original PR/*.h headers 
-// from defining these types again.
+// --- SDK SILENCING: THE NUCLEAR LIST ---
+// We define every possible variation of header guards to stop the SDK 
+// from trying to define its own versions of these types.
 
-#ifndef _IMAGE_H_
+// 1. Graphics Silencing (gu.h / gbi.h)
+#define _GU_H_
+#define __GU_H__
+#define _GBI_H_
+#define __GBI_H__
 #define _IMAGE_H_
 #define __IMAGE_H__
 typedef struct Image { u8 data[128]; } Image;
-#endif
-
-#ifndef _GU_H_
-#define _GU_H_
-#define __GU_H__
 typedef struct Light { u8 data[32]; } Light;
 typedef struct PositionalLight { u8 data[64]; } PositionalLight;
 typedef struct LookAt { u8 data[64]; } LookAt;
 typedef struct Hilite { u8 data[64]; } Hilite;
-#endif
 
-#ifndef _LIBAUDIO_H_
+// 2. Audio Silencing (libaudio.h / al.h)
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
+#define _LIB_AUDIO_H_
+#define __LIB_AUDIO_H__
+#define _LIBAUDIO_
+#define __LIBAUDIO__
+#define _PR_LIBAUDIO_H_
+#define _AL_H_
+#define __AL_H__
+#define _AL_
+#define __AL__
 typedef struct ALGlobals { u8 data[1024]; } ALGlobals;
 typedef struct ADPCM_STATE { s16 data[16]; } ADPCM_STATE;
-#endif
 
-#ifndef _OSTASK_H_
+// 3. OS / Task Silencing (os.h / ostask.h)
+#define _OS_H_
+#define __OS_H__
 #define _OSTASK_H_
 #define __OSTASK_H__
-typedef struct OSTask { u8 data[128]; } OSTask;
-#endif
-
-#ifndef _SPRITE_H_
 #define _SPRITE_H_
 #define __SPRITE_H__
+typedef struct OSTask { u8 data[128]; } OSTask;
 typedef struct uSprite { u8 data[64]; } uSprite;
-#endif
 
 // --- OS / Kernel Types ---
 typedef s32 OSPri;
@@ -98,9 +102,6 @@ typedef struct OSContPad {
     u8  errno;
 } OSContPad;
 
-#ifndef _OS_H_
-#define _OS_H_
-#define __OS_H__
 typedef struct OSMesgQueue {
     u32 valid;
     u32 msgCount;
@@ -122,7 +123,6 @@ typedef struct OSPiHandle {
 typedef struct OSThread {
     u8 data[4096];
 } OSThread;
-#endif
 
 // Boolean definitions
 #ifndef N64_BOOL_DEFINED
@@ -138,7 +138,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with SDK-specific silencing guards!")
+    print("✅ n64_types.h updated with exhaustive silence guards!")
 
 if __name__ == '__main__':
     fix_n64_types()
