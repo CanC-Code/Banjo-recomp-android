@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🚀 Deploying the Mega-Silencer to {filepath}...")
+    print(f"🛠️ Adding missing SDK dummy types (ALHeap, etc.) to {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -50,10 +50,6 @@ typedef union Vtx {
 } Vtx;
 
 // --- SDK SILENCING: THE MEGA-LIST ---
-// We define these guards BEFORE the SDK headers can load.
-// This fools them into thinking they've already been included.
-
-// 1. Audio Guards (The most likely culprit)
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _LIB_AUDIO_H_
@@ -68,16 +64,12 @@ typedef union Vtx {
 #define __AL__
 #define _PR_AL_H_
 #define __PR_AL_H__
-
-// 2. Graphics Guards (Already mostly fixed, but keeping for safety)
 #define _GU_H_
 #define __GU_H__
 #define _GBI_H_
 #define __GBI_H__
 #define _IMAGE_H_
 #define __IMAGE_H__
-
-// 3. OS & Task Guards
 #define _OS_H_
 #define __OS_H__
 #define _ULTRA64_H_
@@ -88,15 +80,23 @@ typedef union Vtx {
 #define __SPRITE_H__
 
 // --- Our Custom Dummy Definitions ---
+// These satisfy the compiler since the original headers are silenced.
 typedef struct { u8 data[1024]; } ALGlobals;
-typedef struct { s16 data[16]; } ADPCM_STATE;
+typedef struct { u8 data[64]; }   ALHeap;
+typedef struct { u8 data[64]; }   ALBank;
+typedef struct { u8 data[64]; }   ALBankFile;
+typedef struct { u8 data[64]; }   ALSeq;
+typedef struct { u8 data[64]; }   ALSeqPlayer;
+typedef struct { u8 data[128]; }  ALSeqpConfig;
+typedef struct { s16 data[16]; }  ADPCM_STATE;
+
 typedef struct { u8 data[128]; } Image;
-typedef struct { u8 data[32]; } Light;
-typedef struct { u8 data[64]; } PositionalLight;
-typedef struct { u8 data[64]; } LookAt;
-typedef struct { u8 data[64]; } Hilite;
+typedef struct { u8 data[32]; }  Light;
+typedef struct { u8 data[64]; }  PositionalLight;
+typedef struct { u8 data[64]; }  LookAt;
+typedef struct { u8 data[64]; }  Hilite;
 typedef struct { u8 data[128]; } OSTask;
-typedef struct { u8 data[64]; } uSprite;
+typedef struct { u8 data[64]; }  uSprite;
 
 // --- OS / Kernel Types ---
 typedef s32 OSPri;
@@ -145,7 +145,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with mega-silence guards!")
+    print("✅ n64_types.h updated with ALHeap and friends!")
 
 if __name__ == '__main__':
     fix_n64_types()
