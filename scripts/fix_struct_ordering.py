@@ -7,8 +7,7 @@ def fix_struct_ordering(directory):
 
     for root, _, files in os.walk(directory):
         for file in files:
-            # FIX: ONLY process .c files! Header files are already properly ordered
-            # and hoisting them breaks macros and `#defines`!
+            # Only process .c files
             if file.endswith('.c'):
                 filepath = os.path.join(root, file)
 
@@ -31,27 +30,53 @@ def fix_struct_ordering(directory):
                     new_text += text[idx:start]
 
                     brace_start = idx + match.end() - 1
-                    brace_count = 0
+                    
+                    # Robust brace matching that ignores comments and strings
+                    count = 0
+                    in_string = False
+                    in_char = False
+                    in_line_comment = False
+                    in_block_comment = False
                     brace_end = -1
-
-                    # Smart brace matching to extract the entire block safely
+                    
                     for i in range(brace_start, len(text)):
-                        if text[i] == '{':
-                            brace_count += 1
-                        elif text[i] == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                brace_end = i
-                                break
+                        if in_string:
+                            if text[i] == '"' and text[i-1] != '\\': in_string = False
+                        elif in_char:
+                            if text[i] == "'" and text[i-1] != '\\': in_char = False
+                        elif in_line_comment:
+                            if text[i] == '\n': in_line_comment = False
+                        elif in_block_comment:
+                            if text[i-1:i+1] == '*/': in_block_comment = False
+                        else:
+                            if text[i:i+2] == '//': in_line_comment = True
+                            elif text[i:i+2] == '/*': in_block_comment = True
+                            elif text[i] == '"': in_string = True
+                            elif text[i] == "'": in_char = True
+                            elif text[i] == '{': count += 1
+                            elif text[i] == '}':
+                                count -= 1
+                                if count == 0:
+                                    brace_end = i
+                                    break
 
                     if brace_end != -1:
                         semi_end = text.find(';', brace_end)
-                        # Ensure we found a semicolon and it belongs to the block
-                        if semi_end != -1 and (semi_end - brace_end) < 50:
-                            type_def = text[start:semi_end+1]
-                            types.append(type_def)
-                            idx = semi_end + 1
-                            changed = True
+                        # Ensure we found a semicolon and it belongs strictly to the block
+                        if semi_end != -1 and (semi_end - brace_end) < 100:
+                            tail = text[brace_end+1:semi_end].strip()
+                            is_typedef = "typedef" in text[start:start+20]
+                            
+                            # If it's NOT a typedef, and the tail contains variable names, DO NOT hoist it!
+                            # We only want to hoist true type definitions, not inline variable declarations.
+                            if not is_typedef and tail != "" and not tail.startswith('__attribute__'):
+                                new_text += text[start:brace_end+1]
+                                idx = brace_end + 1
+                            else:
+                                type_def = text[start:semi_end+1]
+                                types.append(type_def)
+                                idx = semi_end + 1
+                                changed = True
                         else:
                             new_text += text[start:brace_end+1]
                             idx = brace_end + 1
@@ -68,7 +93,7 @@ def fix_struct_ordering(directory):
                     top_part = new_text[:last_include_end]
                     bottom_part = new_text[last_include_end:]
 
-                    # Hoist all types to the top
+                    # Hoist all genuine types to the top
                     final_text = top_part + "\n/* AUTO-HOISTED TYPES */\n" + "\n\n".join(types) + "\n" + bottom_part
 
                     with open(filepath, 'w', encoding='utf-8') as f:
