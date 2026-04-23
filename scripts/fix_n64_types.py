@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\\nStep 2: Injecting Audio Resource and Event Types into {types_path}...")
+    print(f"\nStep 2: Injecting PI and Audio Global types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -55,7 +55,35 @@ typedef double    f64;
 typedef s32  OSPri;
 typedef void* OSMesg;
 typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
-typedef struct { struct OSThread_s *next; OSPri priority; struct OSThread_s **queue; struct OSThread_s *tnext; u16 state; u16 flags; s32 id; int fp; } OSThread;
+
+typedef struct {
+    OSMesg      hdr;
+    u32         devAddr;
+    void        *dramAddr;
+    u32         size;
+    OSMesgQueue *retQueue;
+} OSIoMesg;
+
+typedef struct {
+    u8  type;
+    u32 baseAddr;
+    u32 latency;
+    u32 pulse;
+    u32 pageSize;
+    u32 relDuration;
+    u32 domain;
+} OSPiHandle;
+
+typedef struct OSThread_s { 
+    struct OSThread_s *next; 
+    OSPri priority; 
+    struct OSThread_s **queue; 
+    struct OSThread_s *tnext; 
+    u16 state; 
+    u16 flags; 
+    s32 id; 
+    int fp; 
+} OSThread;
 
 // --- GRAPHICS ---
 typedef uint64_t Gfx;
@@ -69,103 +97,62 @@ typedef s32 ALPan;
 #define AL_ADPCM_WAVE   0
 #define AL_RAW16_WAVE   1
 
-typedef struct {
-    u32 start;
-    u32 end;
-    u32 count;
-} ALRawLoop;
-
-typedef struct {
-    u32 start;
-    u32 end;
-    u32 count;
-    s16 state[16];
-} ALADPCMloop;
-
+typedef struct { u32 start; u32 end; u32 count; } ALRawLoop;
+typedef struct { u32 start; u32 end; u32 count; s16 state[16]; } ALADPCMloop;
 typedef struct { u32 order; u32 npredictors; s16 book[1]; } ALADPCMBook;
 
-typedef struct {
-    ALADPCMloop     *loop;
-    ALADPCMBook     *book;
-} ALADPCMWaveInfo;
+typedef struct { ALADPCMloop *loop; ALADPCMBook *book; } ALADPCMWaveInfo;
 
 typedef union {
     ALADPCMWaveInfo adpcmWave;
-    struct {
-        ALRawLoop   *loop;
-    } rawWave;
+    struct { ALRawLoop *loop; } rawWave;
 } ALWaveInfo;
 
 typedef struct {
-    u8              *base;
-    s32             len;
-    u8              type;
-    u8              flags;
-    ALWaveInfo      waveInfo;
+    u8 *base;
+    s32 len;
+    u8 type;
+    u8 flags;
+    ALWaveInfo waveInfo;
 } ALWaveTable;
 
 typedef struct {
-    ALMicroTime     attackTime;
-    ALMicroTime     decayTime;
-    ALMicroTime     releaseTime;
-    u8              attackVolume;
-    u8              decayVolume;
+    ALMicroTime attackTime;
+    ALMicroTime decayTime;
+    ALMicroTime releaseTime;
+    u8 attackVolume;
+    u8 decayVolume;
 } ALEnvelope;
 
 typedef struct {
-    u8              velocityMin;
-    u8              velocityMax;
-    u8              keyMin;
-    u8              keyMax;
-    u8              keyBase;
-    s8              detune;
+    u8 velocityMin; u8 velocityMax; u8 keyMin; u8 keyMax; u8 keyBase; s8 detune;
 } ALKeyMap;
 
 typedef struct {
-    ALWaveTable     *wavetable;
-    ALEnvelope      *envelope;
-    ALKeyMap        *keyMap;
-    u8              samplePan;
-    u8              sampleVolume;
-    u8              flags;
+    ALWaveTable *wavetable;
+    ALEnvelope *envelope;
+    ALKeyMap *keyMap;
+    u8 samplePan;
+    u8 sampleVolume;
+    u8 flags;
 } ALSound;
 
 typedef struct {
-    u8              volume;
-    u8              pan;
-    u8              priority;
-    u8              soundCount;
-    ALSound         *sounds[1];
+    u8 volume; u8 pan; u8 priority; u8 soundCount; ALSound *sounds[1];
 } ALInstrument;
 
-typedef struct {
-    s16             instCount;
-    ALInstrument    *instArray[1];
-} ALBank;
+typedef struct { s16 instCount; ALInstrument *instArray[1]; } ALBank;
+typedef struct { s16 revision; s16 bankCount; ALBank *bankArray[1]; } ALBankFile;
 
-typedef struct {
-    s16             revision;
-    s16             bankCount;
-    ALBank          *bankArray[1];
-} ALBankFile;
-
-// --- SEQUENCES ---
-typedef struct {
-    u8              *offset;
-    s32             len;
-} ALSeqData;
-
-typedef struct {
-    s16             seqCount;
-    ALSeqData       seqArray[1];
-} ALSeqFile;
+typedef struct { u8 *offset; s32 len; } ALSeqData;
+typedef struct { s16 seqCount; ALSeqData seqArray[1]; } ALSeqFile;
 
 // --- AUDIO EVENTS & PLAYERS ---
 typedef struct {
-    s16             type;
+    s16 type;
     union {
         struct { f32 unk0; f32 unk4; } unk18;
-        s32         word;
+        s32 word;
     } msg;
 } ALEvent;
 
@@ -177,21 +164,26 @@ typedef struct {
 } ALFilter;
 
 typedef struct {
-    ALFilter        filter;
-    // Simple placeholder for event queue logic
-    u8              evtq[64]; 
+    ALFilter filter;
+    u8 evtq[64]; 
 } ALCSPlayer;
 
 typedef ALCSPlayer N_ALCSPlayer;
 
 typedef struct {
-    u8              data[1024];
+    u8 data[1024];
 } ALSyn;
+
+typedef struct {
+    ALSyn *drvr;
+    u8    reserved[1024];
+} ALGlobals;
 
 // --- GLOBALS & PROTOTYPES ---
 #ifdef __cplusplus
 extern "C" {
 #endif
+extern ALGlobals *alGlobals;
 extern ALSyn *n_syn;
 extern OSThread *__osRunningThread;
 
