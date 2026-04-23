@@ -3,7 +3,6 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
-    # Headers to wipe to prevent duplicate definition conflicts
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -18,10 +17,10 @@ def fix_n64_types():
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py to prevent redefinition conflicts\n")
+                f.write("// Silenced by fix_n64_types.py\\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Deploying the Master Types Header...")
+    print(f"\\nStep 2: Updating {types_path} with Linkage Guards...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -66,20 +65,8 @@ typedef volatile int32_t   vs32;
 typedef s32  OSPri;
 typedef void* OSMesg;
 
-typedef struct {
-    u32 valid;
-    u32 msgCount;
-    OSMesg *msg;
-} OSMesgQueue;
-
-typedef struct {
-    OSMesg      hdr;
-    u32         devAddr;
-    void        *dramAddr;
-    u32         size;
-    OSMesgQueue *retQueue;
-} OSIoMesg;
-
+typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
+typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
 typedef struct { u8 data[32]; }   OSContPad;
 typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
 typedef struct { u8 data[128]; }  OSTask;
@@ -94,7 +81,6 @@ typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn
 typedef union { Vtx_t v; long long int force_alignment; } Vtx;
 typedef struct { short vscale[4]; short vtrans[4]; } Vp_t;
 typedef union { Vp_t v; long long int force_alignment; } Vp;
-
 typedef struct { u8 data[64]; }  LookAt;
 typedef struct { u8 data[64]; }  Hilite;
 typedef struct { u8 data[32]; }  Light;
@@ -104,23 +90,15 @@ typedef struct { u8 data[128]; } uSprite;
 // --- AUDIO TYPES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
-
 typedef struct { u32 data[4]; } ALWaveTable;
 typedef struct { u32 offset; }  ALVoice;
-
-typedef struct {
-    ALVoice *pvoice;
-    f32     unityPitch;
-} N_ALVoice;
+typedef struct { ALVoice *pvoice; f32 unityPitch; } N_ALVoice;
 
 typedef struct ALParam_s {
     struct ALParam_s *next;
     s32              delta;
     u32              type;
-    union {
-        ALWaveTable *wave;
-        void        *ptr;
-    };
+    union { ALWaveTable *wave; void *ptr; };
     f32              unity;
 } ALStartParam;
 
@@ -135,19 +113,20 @@ typedef struct {
 } ALStartParamAlt;
 
 typedef struct { s32 paramSamples; } ALSyn;
-
-// Master Globals/Heaps for NativeBridge and structs.h
 typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[64]; }   ALHeap;
-typedef struct { u8 data[64]; }   ALBank;
-typedef struct { u8 data[64]; }   ALBankFile;
-typedef struct { u8 data[64]; }   ALSeq;
-typedef struct { u8 data[64]; }   ALSeqPlayer;
-typedef struct { u8 data[128]; }  ALSeqpConfig;
-typedef struct { s16 data[16]; }  ADPCM_STATE;
+
+// --- EXTERNAL SYMBOLS (CROSS-LANGUAGE) ---
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 extern ALSyn     *n_syn;
 extern ALGlobals *alGlobals;
+
+#ifdef __cplusplus
+}
+#endif
 
 // Constants & Macros
 #define AL_FILTER_START_VOICE     1
@@ -162,7 +141,7 @@ extern ALGlobals *alGlobals;
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Master types successfully deployed to {types_path}")
+    print(f"✅ Created: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
