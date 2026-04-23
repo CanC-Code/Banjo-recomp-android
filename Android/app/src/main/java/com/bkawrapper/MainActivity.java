@@ -4,17 +4,19 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.res.AssetManager; // FIX: Added missing import
+import android.content.res.AssetManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "BKA-MainActivity";
     private static final int PICK_ROM_REQUEST = 1001;
 
     private View menuOverlay;
@@ -23,13 +25,24 @@ public class MainActivity extends AppCompatActivity {
     private TextView progressText;
     private TextView currentArtifactText;
 
-    // The listener that catches updates from OtrService
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            int percent = intent.getIntExtra("percent", 0);
-            String status = intent.getStringExtra("status");
-            updateUI(percent, status);
+            String action = intent.getAction();
+
+            if (OtrService.ACTION_OTR_PROGRESS.equals(action)) {
+                int percent = intent.getIntExtra("percent", 0);
+                String status = intent.getStringExtra("status");
+                updateUI(percent, status);
+
+            } else if (OtrService.ACTION_OTR_COMPLETE.equals(action)) {
+                // The "Final Boss" has been defeated. Boot the game!
+                handleExtractionComplete();
+
+            } else if (OtrService.ACTION_OTR_ERROR.equals(action)) {
+                String error = intent.getStringExtra("message");
+                handleExtractionError(error);
+            }
         }
     };
 
@@ -44,22 +57,22 @@ public class MainActivity extends AppCompatActivity {
         progressText = findViewById(R.id.otr_progress_text);
         currentArtifactText = findViewById(R.id.otr_current_artifact);
 
-        // Note: nativeInit is now called by the OtrService itself
         new MenuController(this);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // Start listening for progress updates when the app is visible
-        LocalBroadcastManager.getInstance(this).registerReceiver(
-                progressReceiver, new IntentFilter("OTR_PROGRESS"));
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(OtrService.ACTION_OTR_PROGRESS);
+        filter.addAction(OtrService.ACTION_OTR_COMPLETE);
+        filter.addAction(OtrService.ACTION_OTR_ERROR);
+        LocalBroadcastManager.getInstance(this).registerReceiver(progressReceiver, filter);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        // Stop listening when the app goes to background to save battery
         LocalBroadcastManager.getInstance(this).unregisterReceiver(progressReceiver);
     }
 
@@ -74,8 +87,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_ROM_REQUEST && resultCode == RESULT_OK && data != null) {
-            Uri uri = data.getData();
-            startExtraction(uri);
+            startExtraction(data.getData());
         }
     }
 
@@ -83,7 +95,6 @@ public class MainActivity extends AppCompatActivity {
         menuOverlay.setVisibility(View.GONE);
         otrContainer.setVisibility(View.VISIBLE);
 
-        // Instead of a thread here, we start the Service
         Intent serviceIntent = new Intent(this, OtrService.class);
         serviceIntent.putExtra("uri", romUri.toString());
         serviceIntent.putExtra("outDir", getFilesDir().getAbsolutePath());
@@ -91,27 +102,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateUI(int percent, String fileName) {
-        // Broadcasts already run on the UI thread, but runOnUiThread is safe
         progressBar.setProgress(percent);
         progressText.setText(percent + "%");
         currentArtifactText.setText(fileName);
+    }
 
-        if (percent >= 100) {
-            currentArtifactText.setText("Extraction Complete! Booting Game...");
+    private void handleExtractionComplete() {
+        currentArtifactText.setText("Booting Banjo-Kazooie Engine...");
+        
+        // Brief delay to let the user see the 100% state before the game starts
+        otrContainer.postDelayed(() -> {
+            otrContainer.setVisibility(View.GONE);
+            bootGameEngine();
+        }, 1000);
+    }
 
-            // Start the game engine in a background thread to prevent ANR (Application Not Responding) crashes
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    // FIX: Explicitly use MainActivity.this to resolve context symbols
-                    String otrPath = MainActivity.this.getFilesDir().getAbsolutePath();
-                    AssetManager assetManager = MainActivity.this.getAssets();
+    private void handleExtractionError(String message) {
+        otrContainer.setVisibility(View.GONE);
+        menuOverlay.setVisibility(View.VISIBLE);
+        Toast.makeText(this, "Extraction Failed: " + message, Toast.LENGTH_LONG).show();
+    }
 
-                    // Call the C++ NativeBridge function to boot the engine
-                    // Passing the internal files path and the Android Asset Manager
-                    NativeBridge.nativeGameBoot(otrPath, assetManager);
-                }
-            }).start();
-        }
+    private void bootGameEngine() {
+        new Thread(() -> {
+            Log.i(TAG, "Entering nativeGameBoot...");
+            String otrPath = getFilesDir().getAbsolutePath();
+            AssetManager assetManager = getAssets();
+            
+            // This starts the infinite N64 main loop in C++
+            NativeBridge.nativeGameBoot(otrPath, assetManager);
+        }).start();
     }
 }
