@@ -3,22 +3,25 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
+    # Expanded wipe list to stop the Redefinition War
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
         'include/2.0L/PR/os.h',
+        'include/2.0L/PR/gu.h',   # Added: Stops PositionalLight errors
+        'include/2.0L/PR/gbi.h',  # Added: Prevents Gfx/Vtx conflicts
         'include/n_synth.h',
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Keeping conflicting headers zeroed...")
+    print("Step 1: Zeroing out conflicting SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py\n")
+                f.write(f"// Silenced by fix_n64_types.py to prevent redefinition of types\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with the full roster...")
+    print(f"\nStep 2: Updating {types_path}...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -63,14 +66,24 @@ typedef union {
     long long int force_alignment;
 } Vtx;
 
-// --- MISSING TYPES FOUND IN LOG ---
+// Viewport and Geometry types
+typedef struct {
+    short vscale[4];
+    short vtrans[4];
+} Vp_t;
+
+typedef union {
+    Vp_t v;
+    long long int force_alignment;
+} Vp;
+
 typedef struct { u8 data[64]; }  LookAt;
 typedef struct { u8 data[64]; }  Hilite;
 typedef struct { u8 data[32]; }  Light;
 typedef struct { u8 data[128]; } uSprite;
 typedef struct { u8 data[64]; }  PositionalLight;
 
-// Audio & Synth (Dummies)
+// Audio & Synth
 typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[64]; }   ALHeap;
 typedef struct { u8 data[64]; }   ALBank;
@@ -80,7 +93,7 @@ typedef struct { u8 data[64]; }   ALSeqPlayer;
 typedef struct { u8 data[128]; }  ALSeqpConfig;
 typedef struct { s16 data[16]; }  ADPCM_STATE;
 
-// --- OS / Kernel Structures ---
+// OS / Kernel Structures
 typedef s32 OSPri;
 typedef void* OSMesg;
 
@@ -90,7 +103,6 @@ typedef struct {
     OSMesg *msg;
 } OSMesgQueue;
 
-// OSIoMesg - Fields required by pi_hle.cpp
 typedef struct {
     OSMesg      hdr;
     u32         devAddr;
@@ -104,11 +116,15 @@ typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
 typedef struct { u8 data[128]; } OSTask;
 typedef struct { u8 data[4096]; } OSThread;
 
+// Standard N64 defines
 #ifndef TRUE
 #define TRUE 1
 #endif
 #ifndef FALSE
 #define FALSE 0
+#endif
+#ifndef NULL
+#define NULL 0
 #endif
 
 #endif // N64_TYPES_H
