@@ -17,10 +17,10 @@ def fix_n64_types():
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py\\n")
+                f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\\nStep 2: Updating {types_path} with Linkage Guards...")
+    print(f"\nStep 2: Updating {types_path} with Complete Audio Payloads...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -64,7 +64,6 @@ typedef volatile int32_t   vs32;
 // --- OS / KERNEL TYPES ---
 typedef s32  OSPri;
 typedef void* OSMesg;
-
 typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
 typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
 typedef struct { u8 data[32]; }   OSContPad;
@@ -81,11 +80,6 @@ typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn
 typedef union { Vtx_t v; long long int force_alignment; } Vtx;
 typedef struct { short vscale[4]; short vtrans[4]; } Vp_t;
 typedef union { Vp_t v; long long int force_alignment; } Vp;
-typedef struct { u8 data[64]; }  LookAt;
-typedef struct { u8 data[64]; }  Hilite;
-typedef struct { u8 data[32]; }  Light;
-typedef struct { u8 data[64]; }  PositionalLight;
-typedef struct { u8 data[128]; } uSprite;
 
 // --- AUDIO TYPES ---
 typedef s32 ALMicroTime;
@@ -98,25 +92,32 @@ typedef struct ALParam_s {
     struct ALParam_s *next;
     s32              delta;
     u32              type;
-    union { ALWaveTable *wave; void *ptr; };
+    union {
+        ALWaveTable *wave;
+        void        *ptr;
+    };
     f32              unity;
 } ALStartParam;
 
+// Expanded for n_synstartvoiceparam.c
 typedef struct {
     struct ALParam_s *next;
     s32              delta;
     u32              type;
+    ALWaveTable      *wave;  // Added
+    f32              pitch; // Added
     f32              unity;
     ALPan            pan;
     s16              volume;
     u8               fxMix;
+    s32              samples; // Added for N_AL timing
 } ALStartParamAlt;
 
 typedef struct { s32 paramSamples; } ALSyn;
 typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[64]; }   ALHeap;
 
-// --- EXTERNAL SYMBOLS (CROSS-LANGUAGE) ---
+// --- CROSS-LANGUAGE SYMBOLS ---
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -124,11 +125,14 @@ extern "C" {
 extern ALSyn     *n_syn;
 extern ALGlobals *alGlobals;
 
+// Audio Internal Helper
+s32 _n_timeToSamples(ALMicroTime t);
+
 #ifdef __cplusplus
 }
 #endif
 
-// Constants & Macros
+// Audio Macros
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
