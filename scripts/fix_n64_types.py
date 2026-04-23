@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🚀 Exhausting all possible SDK guards in {filepath}...")
+    print(f"🚀 Deploying the Mega-Silencer to {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -49,24 +49,11 @@ typedef union Vtx {
     long long int  force_structure_alignment;
 } Vtx;
 
-// --- SDK SILENCING: THE NUCLEAR LIST ---
-// We define every possible variation of header guards to stop the SDK 
-// from trying to define its own versions of these types.
+// --- SDK SILENCING: THE MEGA-LIST ---
+// We define these guards BEFORE the SDK headers can load.
+// This fools them into thinking they've already been included.
 
-// 1. Graphics Silencing (gu.h / gbi.h)
-#define _GU_H_
-#define __GU_H__
-#define _GBI_H_
-#define __GBI_H__
-#define _IMAGE_H_
-#define __IMAGE_H__
-typedef struct Image { u8 data[128]; } Image;
-typedef struct Light { u8 data[32]; } Light;
-typedef struct PositionalLight { u8 data[64]; } PositionalLight;
-typedef struct LookAt { u8 data[64]; } LookAt;
-typedef struct Hilite { u8 data[64]; } Hilite;
-
-// 2. Audio Silencing (libaudio.h / al.h)
+// 1. Audio Guards (The most likely culprit)
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _LIB_AUDIO_H_
@@ -74,22 +61,42 @@ typedef struct Hilite { u8 data[64]; } Hilite;
 #define _LIBAUDIO_
 #define __LIBAUDIO__
 #define _PR_LIBAUDIO_H_
+#define __PR_LIBAUDIO_H__
 #define _AL_H_
 #define __AL_H__
 #define _AL_
 #define __AL__
-typedef struct ALGlobals { u8 data[1024]; } ALGlobals;
-typedef struct ADPCM_STATE { s16 data[16]; } ADPCM_STATE;
+#define _PR_AL_H_
+#define __PR_AL_H__
 
-// 3. OS / Task Silencing (os.h / ostask.h)
+// 2. Graphics Guards (Already mostly fixed, but keeping for safety)
+#define _GU_H_
+#define __GU_H__
+#define _GBI_H_
+#define __GBI_H__
+#define _IMAGE_H_
+#define __IMAGE_H__
+
+// 3. OS & Task Guards
 #define _OS_H_
 #define __OS_H__
+#define _ULTRA64_H_
+#define __ULTRA64_H__
 #define _OSTASK_H_
 #define __OSTASK_H__
 #define _SPRITE_H_
 #define __SPRITE_H__
-typedef struct OSTask { u8 data[128]; } OSTask;
-typedef struct uSprite { u8 data[64]; } uSprite;
+
+// --- Our Custom Dummy Definitions ---
+typedef struct { u8 data[1024]; } ALGlobals;
+typedef struct { s16 data[16]; } ADPCM_STATE;
+typedef struct { u8 data[128]; } Image;
+typedef struct { u8 data[32]; } Light;
+typedef struct { u8 data[64]; } PositionalLight;
+typedef struct { u8 data[64]; } LookAt;
+typedef struct { u8 data[64]; } Hilite;
+typedef struct { u8 data[128]; } OSTask;
+typedef struct { u8 data[64]; } uSprite;
 
 // --- OS / Kernel Types ---
 typedef s32 OSPri;
@@ -138,7 +145,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with exhaustive silence guards!")
+    print("✅ n64_types.h updated with mega-silence guards!")
 
 if __name__ == '__main__':
     fix_n64_types()
