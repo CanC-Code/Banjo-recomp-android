@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Global Audio State...")
+    print(f"\nStep 2: Updating {types_path} with Voice & Parameter types...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -135,11 +135,45 @@ typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[1024]; } ALHeap;
 typedef struct { s32 paramSamples; } ALSyn;
 
+// Event & Parameter Pipeline
 typedef struct { s16 unk0; s16 unk4; } ALUnk18Evt;
 typedef union { ALUnk18Evt unk18; } ALEventMsg;
 typedef struct { u16 type; ALEventMsg msg; } ALEvent;
 typedef struct { u8 data[128]; } ALEvtQueue;
 typedef struct { ALEvtQueue evtq; } ALCSPlayer;
+
+typedef struct {
+    u32         offset;
+} ALVoice;
+
+typedef struct {
+    ALVoice     *pvoice;
+    f32         unityPitch;
+} N_ALVoice;
+
+typedef struct ALParam_s {
+    struct ALParam_s    *next;
+    s32                 delta;
+    u32                 type;
+    union {
+        ALWaveTable     *wave;
+        void            *ptr;
+    };
+    f32                 unity;
+} ALStartParam;
+
+typedef struct {
+    struct ALParam_s    *next;
+    s32                 delta;
+    u32                 type;
+    ALWaveTable         *wave;
+    f32                 pitch;
+    f32                 unity;
+    ALPan               pan;
+    s16                 volume;
+    u8                  fxMix;
+    s32                 samples;
+} ALStartParamAlt;
 
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
@@ -172,6 +206,11 @@ void alSeqFileNew(ALSeqFile *file, u8 *base);
 void alEvtqPostEvent(ALEvtQueue *evtq, ALEvent *evt, ALMicroTime delta);
 void aClearBuffer(u32 ptr, u32 addr, u32 count);
 
+// Syn Internal helpers
+void* __n_allocParam();
+void  n_alEnvmixerParam(ALVoice *v, s32 type, void *ptr);
+s32   _n_timeToSamples(ALMicroTime t);
+
 #ifdef __cplusplus
 }
 #endif
@@ -184,16 +223,11 @@ void aClearBuffer(u32 ptr, u32 addr, u32 count);
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
 #define AL_FILTER_ADD_SOURCE      4
+#define ERR_ALSYN_NO_UPDATE       0
+
 #define AL_AUX_L_OUT              0x1100
 #define AL_AUX_R_OUT              0x1101
 
-#endif // N64_TYPES_H
-"""
-    
-    os.makedirs(os.path.dirname(types_path), exist_ok=True)
-    with open(types_path, 'w') as f:
-        f.write(content)
-    print(f"✅ Created: {types_path}")
+#define ALFailIf(cond, err)       if(cond) return
 
-if __name__ == '__main__':
-    fix_n64_types()
+#endif // N64_TYPES_H
