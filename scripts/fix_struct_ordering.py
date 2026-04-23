@@ -7,7 +7,9 @@ def fix_struct_ordering(directory):
 
     for root, _, files in os.walk(directory):
         for file in files:
-            if file.endswith('.c') or file.endswith('.h'):
+            # FIX: ONLY process .c files! Header files are already properly ordered
+            # and hoisting them breaks macros and `#defines`!
+            if file.endswith('.c'):
                 filepath = os.path.join(root, file)
 
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
