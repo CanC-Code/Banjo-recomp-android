@@ -2,8 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Note: n64_types.h is automatically included via CMake, 
-// providing the real definition of ALGlobals.
+// Note: ALGlobals and other N64 types are provided by n64_types.h, 
+// which is force-included via your CMakeLists.txt.
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -11,13 +11,12 @@
 extern "C" {
 
 /**
- * Global Variable Definitions
+ * Game Engine Symbols
  * These resolve "undefined symbol" errors during linking.
  */
 
-// The type 'ALGlobals' is defined in the SDK's libaudio.h.
-// We just need to define the actual pointer variable here.
-void* alGlobals = nullptr; 
+// Define the pointer using the exact type declared in the SDK (libaudio.h)
+ALGlobals* alGlobals = nullptr; 
 
 // Engine entry points required by NativeBridge.cpp
 void initInterruptTables() {
@@ -25,7 +24,7 @@ void initInterruptTables() {
 }
 
 void mainLoop() {
-    // Stubbed: Prevents the app from entering an empty infinite loop
+    // Stubbed: Prevents an infinite loop during verification builds
 }
 
 /**
@@ -33,7 +32,7 @@ void mainLoop() {
  */
 
 void n_audioStep() {
-    // Native audio processing placeholder
+    // Placeholder for audio processing
 }
 
 void core1_loadOTR(uint8_t* data, size_t size) {
