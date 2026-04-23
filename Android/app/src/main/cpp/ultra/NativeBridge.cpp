@@ -5,64 +5,45 @@
 #include <stdint.h>
 #include <stdlib.h> 
 #include <string.h>
-#include <string>
 
-// Include our custom types first
 #include "n64_types.h"
 
-// Wrap N64 headers in extern "C" so C++ understands they are C functions
 extern "C" {
     #include "ultra64.h"
-    #include "PR/sched.h"
-    #include "PR/libaudio.h"
+    // alGlobals is defined in our stubs.cpp
+    extern ALGlobals* alGlobals; 
+    extern void ResourceMgr_Init(const char* otrPath, uint8_t* manifestBuf, uint32_t manifestSize);
+    extern void initInterruptTables();
 }
 
 #define TAG "BKA-NativeBridge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
-// Corrected linkage for alGlobals
-#ifdef NO_GAME_SRC
-    // Use a different name for our stub to avoid collision with the header's extern
-    ALGlobals* myAlGlobals = nullptr;
-    #define alGlobals myAlGlobals
-#else
-    extern "C" { extern ALGlobals* alGlobals; }
-#endif
-
-extern "C" {
-    void ResourceMgr_Init(const char* otrPath, uint8_t* manifestBuf, uint32_t manifestSize);
-    extern void initInterruptTables();
-
-    #ifndef NO_GAME_SRC
-        void mainLoop(void);
-    #endif
-}
-
 extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstring otrPath, jobject assetManager) {
-    LOGI("Starting Native Game Boot (Verification Mode)...");
+    LOGI("Starting Native Game Boot...");
 
-    // 1. Initialize Audio Globals
+    // 1. Safe Audio Globals Init
     if (alGlobals == nullptr) {
-        size_t allocSize = (sizeof(ALGlobals) + 15) & ~15; 
+        // Allocate 16-byte aligned memory for N64 audio structures
         void* ptr = nullptr;
-        if (posix_memalign(&ptr, 16, allocSize) == 0) {
-            // Using a cast to resolve the pointer
-            *((ALGlobals**)&alGlobals) = (ALGlobals*)ptr;
-            memset((void*)alGlobals, 0, allocSize);
-            LOGI("Audio globals initialized.");
+        if (posix_memalign(&ptr, 16, sizeof(ALGlobals)) == 0) {
+            memset(ptr, 0, sizeof(ALGlobals));
+            alGlobals = (ALGlobals*)ptr;
+            LOGI("Audio globals initialized at %p", alGlobals);
         }
     }
 
     initInterruptTables();
 
-    const char* nativeOtrPath = nullptr;
-    if (otrPath != nullptr) nativeOtrPath = env->GetStringUTFChars(otrPath, nullptr);
-
-    if (nativeOtrPath != nullptr && assetManager != nullptr) {
+    // 2. Resource Manager Setup
+    if (otrPath != nullptr && assetManager != nullptr) {
+        const char* nativeOtrPath = env->GetStringUTFChars(otrPath, nullptr);
         AAssetManager* nativeAssetManager = AAssetManager_fromJava(env, assetManager);
+        
+        // Open the manifest we included in the APK assets
         AAsset* manifestAsset = AAssetManager_open(nativeAssetManager, "assets_manifest.bin", AASSET_MODE_BUFFER);
 
         if (manifestAsset != nullptr) {
@@ -74,15 +55,6 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
         env->ReleaseStringUTFChars(otrPath, nativeOtrPath);
     }
 
-    #ifdef NO_GAME_SRC
-        LOGI("Verification Complete. Skipping mainLoop().");
-    #else
-        mainLoop();
-    #endif
+    LOGI("Boot Sequence Complete.");
 }
-
-JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* env, jclass clazz, jint buttonMask, jfloat stickX, jfloat stickY) {
-}
-
 }
