@@ -4,13 +4,16 @@ def create_n64_bool():
     filepath = 'Android/app/src/main/cpp/ultra/n64_bool.h'
     print(f"🔧 Creating missing header: {filepath}...")
     
-    # Standard C boolean definitions safely wrapped
+    # Define n64_bool along with TRUE and FALSE
     content = """#ifndef N64_BOOL_H
 #define N64_BOOL_H
 
 #ifndef __cplusplus
 #include <stdbool.h>
 #endif
+
+// The actual type definition the compiler is looking for!
+typedef int n64_bool;
 
 #ifndef TRUE
 #define TRUE 1
@@ -28,7 +31,7 @@ def create_n64_bool():
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_bool.h created successfully!")
+    print("✅ n64_bool.h created successfully with typedef!")
 
 if __name__ == '__main__':
     create_n64_bool()
