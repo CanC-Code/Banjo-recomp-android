@@ -2,38 +2,38 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// Note: n64_types.h is automatically included via CMake, 
+// providing the real definition of ALGlobals.
+
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 extern "C" {
 
 /**
- * Game Engine Symbols
- * These are required by NativeBridge.cpp but are located in the /src folder
- * which we are currently excluding from the build.
+ * Global Variable Definitions
+ * These resolve "undefined symbol" errors during linking.
  */
 
-// Dummy type for the Audio Global structure
-typedef struct { uint8_t dummy; } ALGlobals;
-ALGlobals* alGlobals = nullptr;
+// The type 'ALGlobals' is defined in the SDK's libaudio.h.
+// We just need to define the actual pointer variable here.
+void* alGlobals = nullptr; 
 
-// Engine initialization called during nativeGameBoot
+// Engine entry points required by NativeBridge.cpp
 void initInterruptTables() {
     LOGI("initInterruptTables: Stubbed");
 }
 
-// The main loop that drives the recompiled game logic
 void mainLoop() {
-    // Stubbed to prevent the app from hanging on a loop that does nothing
+    // Stubbed: Prevents the app from entering an empty infinite loop
 }
 
 /**
- * Audio and OTR Logic
- * Placeholders for the bridge to communicate with the asset and audio systems.
+ * Audio and OTR System Stubs
  */
 
 void n_audioStep() {
-    // Stub: Native audio processing placeholder
+    // Native audio processing placeholder
 }
 
 void core1_loadOTR(uint8_t* data, size_t size) {
