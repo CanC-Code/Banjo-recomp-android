@@ -20,13 +20,28 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Injecting Engine & Kernel Types into {types_path}...")
+    print(f"\\nStep 2: Injecting Math Constants and Kernel Types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
+
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+
+// --- MATH CONSTANTS ---
+// Explicitly define M_PI if the compiler's math.h is being shy
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// Degrees to Radians conversion used in many N64 games
+#ifndef M_DTOR
+#define M_DTOR 0.017453292519943295
+#endif
 
 // --- BASIC N64 TYPES ---
 typedef uint8_t   u8;
@@ -61,11 +76,7 @@ typedef volatile int32_t   vs32;
 typedef s32  OSPri;
 typedef void* OSMesg;
 
-typedef struct { 
-    u32 valid; 
-    u32 msgCount; 
-    OSMesg *msg; 
-} OSMesgQueue;
+typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
 
 typedef struct {
     OSMesg      hdr;
@@ -79,7 +90,6 @@ typedef struct {
     u32 type; u32 baseAddr; u8 latency; u8 pulse; u8 pageSize; u8 relDuration;
 } OSPiHandle;
 
-// OSThread: Required for main.h
 typedef struct OSThread_s {
     struct OSThread_s *next;
     OSPri             priority;
@@ -92,17 +102,16 @@ typedef struct OSThread_s {
 } OSThread;
 
 // --- INPUT / CONTROLLER ---
-// OSContPad: Required for pfsmanager.h
 typedef struct {
-    u16     button;     /* Button mask */
-    s8      stick_x;    /* -80 <= stick_x <= 80 */
-    s8      stick_y;    /* -80 <= stick_y <= 80 */
+    u16     button;
+    s8      stick_x;
+    s8      stick_y;
     u8      errno;
 } OSContPad;
 
 typedef struct {
-    u16     type;       /* Controller type */
-    u8      status;     /* Controller status */
+    u16     type;
+    u8      status;
     u8      errno;
 } OSContStatus;
 
