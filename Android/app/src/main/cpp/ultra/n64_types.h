@@ -5,7 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// 2. N64 Type Definitions (Must be above the SDK includes)
+// 2. Basic N64 Integer Types
+// These are required by almost every other header.
 typedef uint8_t   u8;
 typedef uint16_t  u16;
 typedef uint32_t  u32;
@@ -19,11 +20,14 @@ typedef int64_t   s64;
 typedef float     f32;
 typedef double    f64;
 
-// 3. SDK Includes adjusted for your project structure
-// 'ultra64.h' is in the '2.0L' folder directly
-#include <ultra64.h> 
+// 3. Core N64 Interface Headers
+// We include these explicitly to define Gfx, Mtx, Acmd, etc.
+// to prevent "unknown type" errors in libaudio.h and gu.h.
+#include <PR/gbi.h>
+#include <PR/abi.h>
 
-// 'sched.h' is inside the 'PR' subfolder of '2.0L'
-#include <PR/sched.h>
+// 4. Master SDK Header
+// Now that Gfx/Acmd are defined, this will load correctly.
+#include <ultra64.h> 
 
 #endif // N64_TYPES_H
