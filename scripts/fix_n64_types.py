@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Audio Filter Pipeline...")
+    print(f"\nStep 2: Updating {types_path} with Final Audio Constants...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -104,14 +104,12 @@ typedef struct { u32 data[4]; } ALWaveTable;
 typedef struct { u32 offset; }  ALVoice;
 typedef struct { ALVoice *pvoice; f32 unityPitch; } N_ALVoice;
 
-// The Filter Base
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
     s32                 (*handler)(void *, s32 *, s32, s32, s32);
     s32                 (*setParam)(void *, s32, void *);
 } ALFilter;
 
-// The Aux Bus (Added for auxbus.c)
 typedef struct {
     ALFilter            filter;
     ALFilter            **sources;
@@ -158,8 +156,6 @@ void __osEnqueueThread(OSThread **queue, OSThread *t);
 OSThread *__osPopThread(OSThread **queue);
 void __osDequeueThread(OSThread **queue, OSThread *t);
 s32 _n_timeToSamples(ALMicroTime t);
-
-// DSP Helper (Dummy for auxbus.c)
 void aClearBuffer(u32 ptr, u32 addr, u32 count);
 
 #ifdef __cplusplus
@@ -170,10 +166,10 @@ void aClearBuffer(u32 ptr, u32 addr, u32 count);
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
+#define AL_FILTER_ADD_SOURCE      4  // The missing piece
 #define ERR_ALSYN_NO_UPDATE       0
 #define ALFailIf(cond, err)       if(cond) return
 
-// Bus indices used by the mixer
 #define AL_AUX_L_OUT              0x1100
 #define AL_AUX_R_OUT              0x1101
 
