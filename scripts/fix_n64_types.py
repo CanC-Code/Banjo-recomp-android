@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Refining N64 SDK structures in {filepath}...")
+    print(f"🔧 Hardening N64 SDK types in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -31,8 +31,21 @@ typedef volatile int32_t   vs32;
 typedef volatile uint64_t  vu64;
 typedef volatile int64_t   vs64;
 
-// --- SDK Structures needed for Bridge/Emulator layers ---
+// --- Graphics & Audio Primitives ---
+// These are needed by PR/libaudio.h and PR/gu.h
+typedef uint64_t Acmd;
+typedef uint64_t Gfx;
+typedef int32_t  Mtx_t[4][4];
+typedef struct { Mtx_t m; } Mtx;
 
+typedef struct { s16 data[16]; } ADPCM_STATE;
+typedef struct { u8 data[64]; }  LookAt;
+typedef struct { u8 data[64]; }  Hilite;
+typedef struct { u8 data[128]; } Image;
+
+// --- SDK Handles (Guarded to prevent redefinition) ---
+
+#ifndef _OS_H_
 typedef void* OSMesg;
 
 typedef struct {
@@ -57,14 +70,13 @@ typedef struct {
     u32 pageSize;
     u32 relDuration;
 } OSPiHandle;
+#endif
 
+#ifndef _AL_H_
 typedef struct {
-    u8 data[4096]; // Sufficient padding for N64 Thread context
-} OSThread;
-
-typedef struct {
-    u8 data[1024]; // Generic buffer for Audio Globals
+    u8 data[1024]; 
 } ALGlobals;
+#endif
 
 // Boolean definitions
 #ifndef N64_BOOL_DEFINED
@@ -80,7 +92,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with required SDK fields!")
+    print("✅ n64_types.h updated with guarded SDK primitives!")
 
 if __name__ == '__main__':
     fix_n64_types()
