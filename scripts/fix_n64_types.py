@@ -3,6 +3,7 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
+    # We keep the silencing logic to ensure the NDK doesn't fight the game headers
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -13,14 +14,14 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Wiping conflicting SDK headers...")
+    print("Step 1: Maintaining silenced SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Injecting comprehensive N64 types into {types_path}...")
+    print(f"\nStep 2: Injecting Math constants and N64 types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -31,6 +32,18 @@ def fix_n64_types():
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+
+// --- MATH CONSTANTS ---
+// Manual fallback because M_PI is non-standard C
+#ifndef M_PI
+#define M_PI    3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2  1.57079632679489661923
+#endif
+#ifndef M_DTOR
+#define M_DTOR  0.017453292519943295
+#endif
 
 // --- BASIC TYPES ---
 typedef uint8_t   u8;
