@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\\nStep 2: Injecting Audio Synthesis Graph and Kernel Types into {types_path}...")
+    print(f"\\nStep 2: Injecting Audio Filter Parameters and Engine Types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -134,6 +134,14 @@ typedef struct {
 #define AL_AUX_L_OUT    0
 #define AL_AUX_R_OUT    1
 
+// Audio Filter Parameters
+#define AL_FILTER_SET_SOURCE      1
+#define AL_FILTER_ADD_SOURCE      2
+#define AL_FILTER_ADD_UPDATE      3
+#define AL_FILTER_RESET           4
+#define AL_FILTER_START_VOICE     5
+#define AL_FILTER_START_VOICE_ALT 6
+
 // --- AUDIO ENGINE ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
@@ -170,9 +178,6 @@ OSContPad *func_8024F3F4(void);
 }
 #endif
 
-#define AL_FILTER_START_VOICE     1
-#define AL_FILTER_START_VOICE_ALT 2
-#define AL_FILTER_ADD_UPDATE      3
 #define ALFailIf(cond, err)       if(cond) return
 
 #endif // _BKA_ANDROID_N64_TYPES_H_
