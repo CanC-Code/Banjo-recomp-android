@@ -19,8 +19,9 @@ def fix_struct_ordering(directory):
                 changed = False
 
                 while idx < len(text):
-                    # Find struct or enum definitions, avoiding variable assignments (=)
-                    match = re.search(r'\b((?:typedef\s+)?(?:struct|enum)\b[^{;=]*)\{', text[idx:])
+                    # Find struct or enum definitions.
+                    # By forbidding parentheses '()', we ensure we don't accidentally rip apart function parameters!
+                    match = re.search(r'\b((?:typedef\s+)?(?:struct|enum)\b[^{;=()]*)\{', text[idx:])
                     if not match:
                         new_text += text[idx:]
                         break
