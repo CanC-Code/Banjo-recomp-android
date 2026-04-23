@@ -1,10 +1,8 @@
 import os
 
 def fix_n64_types():
-    # 1. The Single Source of Truth
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
-    # 2. List of SDK headers to "Zero Out" to prevent redefinition errors
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -13,16 +11,14 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Zeroing out conflicting SDK headers...")
+    print("Step 1: Keeping conflicting headers zeroed...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Wiped by fix_n64_types.py to prevent redefinitions\n")
-            print(f"  ✅ Zeroed: {header}")
-        else:
-            print(f"  ⚠️  Skipped (not found): {header}")
+                f.write("// Silenced by fix_n64_types.py\n")
+            print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path}...")
+    print(f"\nStep 2: Updating {types_path} with the full roster...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -49,7 +45,7 @@ typedef volatile int16_t   vs16;
 typedef volatile uint32_t  vu32;
 typedef volatile int32_t   vs32;
 
-// Graphics Primitives
+// Graphics & Matrix Primitives
 typedef uint64_t Gfx;
 typedef uint64_t Acmd;
 typedef int32_t  Mtx_t[4][4];
@@ -67,8 +63,14 @@ typedef union {
     long long int force_alignment;
 } Vtx;
 
-// Audio Types (The ones causing the current crash)
-// We use simple tags to avoid "struct already defined" issues
+// --- MISSING TYPES FOUND IN LOG ---
+typedef struct { u8 data[64]; }  LookAt;
+typedef struct { u8 data[64]; }  Hilite;
+typedef struct { u8 data[32]; }  Light;
+typedef struct { u8 data[128]; } uSprite;
+typedef struct { u8 data[64]; }  PositionalLight;
+
+// Audio & Synth (Dummies)
 typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[64]; }   ALHeap;
 typedef struct { u8 data[64]; }   ALBank;
@@ -78,12 +80,27 @@ typedef struct { u8 data[64]; }   ALSeqPlayer;
 typedef struct { u8 data[128]; }  ALSeqpConfig;
 typedef struct { s16 data[16]; }  ADPCM_STATE;
 
-// OS / Kernel Dummies
+// --- OS / Kernel Structures ---
 typedef s32 OSPri;
 typedef void* OSMesg;
-typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
+
+typedef struct {
+    u32 valid;
+    u32 msgCount;
+    OSMesg *msg;
+} OSMesgQueue;
+
+// OSIoMesg - Fields required by pi_hle.cpp
+typedef struct {
+    OSMesg      hdr;
+    u32         devAddr;
+    void        *dramAddr;
+    u32         size;
+    OSMesgQueue *retQueue;
+} OSIoMesg;
+
 typedef struct { u8 data[32]; } OSContPad;
-typedef struct { u8 data[64]; } OSPiHandle;
+typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
 typedef struct { u8 data[128]; } OSTask;
 typedef struct { u8 data[4096]; } OSThread;
 
