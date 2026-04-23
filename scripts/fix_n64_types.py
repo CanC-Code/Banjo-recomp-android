@@ -9,6 +9,7 @@ def fix_n64_types():
         'include/2.0L/PR/os.h',
         'include/2.0L/PR/gu.h',
         'include/2.0L/PR/gbi.h',
+        'include/2.0L/PR/ultra64.h',
         'include/n_synth.h',
         'include/synthInternals.h'
     ]
@@ -20,13 +21,14 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Audio Skeletal Structures...")
+    print(f"\nStep 2: Building the Omni-Header at {types_path}...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+#include <string.h>
 
 // --- MATH ---
 #ifndef M_PI
@@ -64,22 +66,16 @@ typedef struct { u8 data[64]; } Hilite;
 typedef struct { u8 data[32]; } Light;
 typedef struct { u8 data[64]; } PositionalLight;
 
-// --- AUDIO TYPES (REQUIRED BY CORE1/AUDIO) ---
+// --- AUDIO TYPES ---
 typedef s32  ALMicroTime;
 typedef s32  ALPan;
 
-typedef struct {
-    u32 data[4];
-} ALWaveTable;
-
-typedef struct {
-    u32 offset;
-} ALVoice;
-
-typedef struct {
-    ALVoice *pvoice;
-    f32     unityPitch;
-} N_ALVoice;
+typedef struct { u32 data[4]; } ALWaveTable;
+typedef struct { u32 offset; } ALVoice;
+typedef struct { ALVoice *pvoice; f32 unityPitch; } N_ALVoice;
+typedef struct { u8 data[1024]; } ALGlobals;
+typedef struct { u8 data[64]; }   ALHeap;
+typedef struct { u8 data[64]; }   ALBank;
 
 typedef struct {
     struct ALParam_s *next;
@@ -102,14 +98,13 @@ typedef struct {
     u8               fxMix;
 } ALStartParamAlt;
 
-typedef struct {
-    s32 paramSamples;
-} ALSyn;
+typedef struct { s32 paramSamples; } ALSyn;
 
-// Globals used by the audio engine
-extern ALSyn *n_syn;
+// Global Audio State
+extern ALSyn     *n_syn;
+extern ALGlobals *alGlobals;
 
-// Audio Macros & Constants
+// Audio Macros
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
@@ -117,10 +112,14 @@ extern ALSyn *n_syn;
 #define ALFailIf(cond, err)       if(cond) return
 
 // --- OS / KERNEL ---
+typedef s32 OSPri;
 typedef void* OSMesg;
 typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
 typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
 typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
+typedef struct { u8 data[32]; } OSContPad;
+typedef struct { u8 data[128]; } OSTask;
+typedef struct { u8 data[4096]; } OSThread;
 
 #ifndef TRUE
 #define TRUE 1
@@ -133,12 +132,3 @@ typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
 #endif
 
 #endif // N64_TYPES_H
-"""
-    
-    os.makedirs(os.path.dirname(types_path), exist_ok=True)
-    with open(types_path, 'w') as f:
-        f.write(content)
-    print(f"✅ Created: {types_path}")
-
-if __name__ == '__main__':
-    fix_n64_types()
