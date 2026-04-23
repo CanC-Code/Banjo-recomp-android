@@ -3,13 +3,12 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
-    # Expanded wipe list to stop the Redefinition War
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
         'include/2.0L/PR/os.h',
-        'include/2.0L/PR/gu.h',   # Added: Stops PositionalLight errors
-        'include/2.0L/PR/gbi.h',  # Added: Prevents Gfx/Vtx conflicts
+        'include/2.0L/PR/gu.h',
+        'include/2.0L/PR/gbi.h',
         'include/n_synth.h',
         'include/synthInternals.h'
     ]
@@ -18,16 +17,28 @@ def fix_n64_types():
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write(f"// Silenced by fix_n64_types.py to prevent redefinition of types\n")
+                f.write(f"// Silenced by fix_n64_types.py\\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path}...")
+    print(f"\\nStep 2: Updating {types_path} with Math Constants...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
+
+// --- MATH CONSTANTS ---
+// Manually defining these since Android NDK math.h might hide them
+#ifndef M_PI
+#define M_PI    3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2  1.57079632679489661923
+#endif
+#ifndef M_DTOR
+#define M_DTOR  0.01745329251994329577
+#endif
 
 // Basic N64 Types
 typedef uint8_t   u8;
@@ -66,7 +77,6 @@ typedef union {
     long long int force_alignment;
 } Vtx;
 
-// Viewport and Geometry types
 typedef struct {
     short vscale[4];
     short vtrans[4];
@@ -126,6 +136,10 @@ typedef struct { u8 data[4096]; } OSThread;
 #ifndef NULL
 #define NULL 0
 #endif
+
+// Recomp specific helpers
+#define SCREEN_WIDTH  320
+#define SCREEN_HEIGHT 240
 
 #endif // N64_TYPES_H
 """
