@@ -20,9 +20,9 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Injecting RCP Vertex Union and Hardware Types into {types_path}...")
-    content = """#ifndef N64_TYPES_H
-#define N64_TYPES_H
+    print(f"\nStep 2: Injecting Engine & Kernel Types into {types_path}...")
+    content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
+#define _BKA_ANDROID_N64_TYPES_H_
 
 #include <stdint.h>
 #include <stddef.h>
@@ -57,11 +57,15 @@ typedef volatile int32_t   vs32;
 #define NULL 0
 #endif
 
-// --- OS / HARDWARE ---
+// --- OS / KERNEL / THREADING ---
 typedef s32  OSPri;
 typedef void* OSMesg;
 
-typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
+typedef struct { 
+    u32 valid; 
+    u32 msgCount; 
+    OSMesg *msg; 
+} OSMesgQueue;
 
 typedef struct {
     OSMesg      hdr;
@@ -75,36 +79,55 @@ typedef struct {
     u32 type; u32 baseAddr; u8 latency; u8 pulse; u8 pageSize; u8 relDuration;
 } OSPiHandle;
 
-// --- GRAPHICS (RCP) STRUCTURES ---
+// OSThread: Required for main.h
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri             priority;
+    struct OSThread_s **queue;
+    struct OSThread_s *tnext;
+    u16               state;
+    u16               flags;
+    s32               id;
+    int               fp;
+} OSThread;
+
+// --- INPUT / CONTROLLER ---
+// OSContPad: Required for pfsmanager.h
+typedef struct {
+    u16     button;     /* Button mask */
+    s8      stick_x;    /* -80 <= stick_x <= 80 */
+    s8      stick_y;    /* -80 <= stick_y <= 80 */
+    u8      errno;
+} OSContPad;
+
+typedef struct {
+    u16     type;       /* Controller type */
+    u8      status;     /* Controller status */
+    u8      errno;
+} OSContStatus;
+
+typedef struct { u8 data[128]; } OSTask;
+
+// --- GRAPHICS (RCP) ---
 typedef uint64_t Gfx;
 typedef uint64_t Acmd;
 typedef struct { int32_t m[4][4]; } Mtx;
 
-// The Vtx Union: The core of the current build failure
 typedef struct {
-    short           ob[3];   /* x, y, z */
-    unsigned short  flag;
-    short           tc[2];   /* texture coordinates s, t */
-    unsigned char   cn[4];   /* color/alpha: r, g, b, a */
+    short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4];
 } Vtx_t;
 
 typedef struct {
-    short           ob[3];   /* x, y, z */
-    unsigned short  flag;
-    short           tc[2];   /* texture coordinates s, t */
-    signed char     n[3];    /* normal: nx, ny, nz */
-    unsigned char   a;       /* alpha */
+    short ob[3]; unsigned short flag; short tc[2]; signed char n[3]; unsigned char a;
 } Vtx_n;
 
 typedef union {
-    Vtx_t           v;
-    Vtx_n           n;
-    long long int   force_structure_alignment;
+    Vtx_t v; Vtx_n n; long long int force_align;
 } Vtx;
 
 typedef struct { short vscale[4]; short vtrans[4]; } Vp;
 
-// --- AUDIO ASSETS & ENGINE ---
+// --- AUDIO ENGINE ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 
@@ -132,6 +155,7 @@ typedef struct {
 typedef struct { ALWaveTable *wavetable; u8 priority; } ALSound;
 typedef struct { u8 volume; u8 pan; u8 priority; u8 soundCount; ALSound *sounds[1]; } ALInstrument;
 typedef struct { s16 instCount; ALInstrument *instArray[1]; } ALBank;
+typedef struct { s16 revision; s16 bankCount; ALBank *bankArray[1]; } ALBankFile;
 typedef struct { s16 seqCount; u8 *data; } ALSeqFile;
 
 typedef struct { u8 data[1024]; } ALGlobals;
@@ -152,6 +176,8 @@ extern ALSyn *n_syn;
 void n_alEnvmixerParam(ALVoice *v, s32 p, void *ptr);
 void* __n_allocParam(void);
 s32 _n_timeToSamples(ALMicroTime t);
+OSThread *mainThread_get(void);
+OSContPad *func_8024F3F4(void);
 #ifdef __cplusplus
 }
 #endif
@@ -161,7 +187,7 @@ s32 _n_timeToSamples(ALMicroTime t);
 #define AL_FILTER_ADD_UPDATE      3
 #define ALFailIf(cond, err)       if(cond) return
 
-#endif // N64_TYPES_H
+#endif // _BKA_ANDROID_N64_TYPES_H_
 """
     
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
