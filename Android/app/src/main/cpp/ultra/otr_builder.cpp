@@ -8,6 +8,8 @@
 #include "rare_decompression.h"
 
 #define LOG_TAG "OtrBuilder"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 static uint32_t read_u32_safe(uint8_t* ptr) {
     uint32_t val;
@@ -22,7 +24,7 @@ void ensure_directories(const char* path) {
     for (p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
-            mkdir(tmp, 0777); // Permissions for internal storage
+            mkdir(tmp, 0777); 
             *p = '/';
         }
     }
@@ -33,7 +35,19 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                                            int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
                                            const char* outDirPath) {
     
+    if (!manifestPtr) {
+        LOGE("run_native_otr: Manifest pointer is NULL!");
+        return;
+    }
+
     uint32_t entryCount = read_u32_safe(manifestPtr);
+    LOGI("run_native_otr: Start! Entry Count detected: %u", entryCount);
+
+    if (entryCount == 0 || entryCount > 50000) { // Safety check
+        LOGE("run_native_otr: Invalid entry count!");
+        return;
+    }
+
     uint8_t* recordStart = manifestPtr + 4;
 
     for (uint32_t i = 0; i < entryCount; i++) {
@@ -45,13 +59,17 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
         memcpy(fileName, record + 8, 32);
         fileName[32] = '\0';
 
+        // Log the first 5 files specifically to confirm life
+        if (i < 5) LOGI("Extracting [%u/%u]: %s (Offset: %u, Size: %u)", i+1, entryCount, fileName, romOffset, fileSize);
+
         char fullPath[512];
         snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
         ensure_directories(fullPath);
 
         uint8_t* compressedBuffer = (uint8_t*)malloc(fileSize);
         if (compressedBuffer) {
-            if (pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
+            ssize_t bytesRead = pread(romFd, compressedBuffer, fileSize, romOffset);
+            if (bytesRead == (ssize_t)fileSize) {
                 uint32_t decompSize = 0;
                 uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompSize);
 
@@ -62,15 +80,18 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                     close(outFd);
                 }
                 if (finalBuffer) free(finalBuffer);
+            } else {
+                LOGE("Failed to read ROM at offset %u. Expected %u, got %zd", romOffset, fileSize, bytesRead);
             }
             free(compressedBuffer);
         }
 
-        // Send progress back to Java UI
+        // Update Java UI
         int percentage = (int)(((i + 1) * 100) / entryCount);
         jstring jName = env->NewStringUTF(fileName);
         env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
         env->DeleteLocalRef(jName);
     }
+    LOGI("run_native_otr: All entries processed successfully.");
 }
 }
