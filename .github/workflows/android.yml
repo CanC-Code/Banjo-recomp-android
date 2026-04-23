@@ -35,8 +35,14 @@ jobs:
           python3 scripts/generate_icons.py icon_master.png
 
       - name: 🧹 Pre-Patching (Sanitizer)
-        # This step might generate headers or fix directory structures
         run: python3 scripts/sanitize_codebase.py .
+
+      # --- NEW STEP ADDED HERE ---
+      - name: 🗺️ Generate Asset Manifests
+        run: |
+          pip3 install pyyaml
+          python3 scripts/generate_manifest.py
+      # ---------------------------
 
       - name: 🐘 Build Verification APK
         run: |
