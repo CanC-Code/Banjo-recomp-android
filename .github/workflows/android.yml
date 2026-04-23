@@ -37,24 +37,26 @@ jobs:
       - name: 🧹 Pre-Patching (Sanitizer)
         run: python3 scripts/sanitize_codebase.py .
 
-      # --- NEW STEP ADDED HERE ---
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
+          # Ensure this script has 'import' (lowercase) fixed
           python3 scripts/generate_manifest.py
-      # ---------------------------
 
-      - name: 🐘 Build Verification APK
+      - name: 🐘 Build Full Game APK
         run: |
           cd Android
-          # Passing EXCLUDE_GAME_SRC to skip the massive /src folder
-          gradle assembleDebug \
+          chmod +x gradlew
+          # 'clean' ensures CMake re-evaluates the EXCLUDE_GAME_SRC flag
+          # '--info' allows us to see the 'message(STATUS ...)' logs from CMakeLists.txt
+          ./gradlew clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
+            --info \
             --stacktrace
 
       - name: 📦 Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-verification-apk
+          name: bka-full-game-apk
           path: Android/app/build/outputs/apk/debug/*.apk
