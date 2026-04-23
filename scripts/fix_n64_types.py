@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Expanding N64 types and SDK structures in {filepath}...")
+    print(f"🔧 Refining N64 SDK structures in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -10,7 +10,7 @@ def fix_n64_types():
 #include <stdint.h>
 #include <stddef.h>
 
-// Basic Types
+// Basic N64 Fixed-Width Types
 typedef uint8_t   u8;
 typedef int8_t    s8;
 typedef uint16_t  u16;
@@ -22,7 +22,6 @@ typedef int64_t   s64;
 typedef float     f32;
 typedef double    f64;
 
-// Volatile variants
 typedef volatile uint8_t   vu8;
 typedef volatile int8_t    vs8;
 typedef volatile uint16_t  vu16;
@@ -32,32 +31,42 @@ typedef volatile int32_t   vs32;
 typedef volatile uint64_t  vu64;
 typedef volatile int64_t   vs64;
 
-// SDK Handles and Dummy Structs
-// These satisfy 'unknown type' and 'sizeof' errors in the emulator layer
+// --- SDK Structures needed for Bridge/Emulator layers ---
+
 typedef void* OSMesg;
 
 typedef struct {
     u32 valid;
+    u32 msgCount;
+    OSMesg *msg;
 } OSMesgQueue;
 
-typedef struct {
-    u32 valid;
+typedef struct OSIoMesg_s {
+    OSMesg      hdr;
+    u32         devAddr;
+    void        *dramAddr;
+    u32         size;
+    OSMesgQueue *retQueue;
 } OSIoMesg;
 
 typedef struct {
-    u32 valid;
+    u32 type;
+    u32 baseAddr;
+    u32 latency;
+    u32 pulse;
+    u32 pageSize;
+    u32 relDuration;
 } OSPiHandle;
 
 typedef struct {
-    u32 valid;
+    u8 data[4096]; // Sufficient padding for N64 Thread context
 } OSThread;
 
-// Audio Library Globals
 typedef struct {
-    u8 data[1024]; // Generic buffer for ALGlobals
+    u8 data[1024]; // Generic buffer for Audio Globals
 } ALGlobals;
 
-// Boolean type
+// Boolean definitions
 #ifndef N64_BOOL_DEFINED
 #define N64_BOOL_DEFINED
 typedef int n64_bool;
@@ -71,7 +80,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with SDK structures!")
+    print("✅ n64_types.h updated with required SDK fields!")
 
 if __name__ == '__main__':
     fix_n64_types()
