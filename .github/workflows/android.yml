@@ -46,6 +46,9 @@ jobs:
       - name: 🔧 Auto-Fix Missing vu32 Types
         run: python3 scripts/fix_vu32.py
 
+      - name: 🎮 Auto-Fix Missing Graphics Macros
+        run: python3 scripts/fix_missing_macros.py
+
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
