@@ -2,7 +2,7 @@ import os
 import re
 
 def fix_struct_ordering(directory):
-    print(f"📐 Reordering structs and enums in {directory}...")
+    print(f"📐 Reordering structs, enums, and unions in {directory}...")
     match_count = 0
 
     for root, _, files in os.walk(directory):
@@ -19,9 +19,8 @@ def fix_struct_ordering(directory):
                 changed = False
 
                 while idx < len(text):
-                    # Find struct or enum definitions.
-                    # By forbidding parentheses '()', we ensure we don't accidentally rip apart function parameters!
-                    match = re.search(r'\b((?:typedef\s+)?(?:struct|enum)\b[^{;=()]*)\{', text[idx:])
+                    # Find struct, enum, OR union definitions.
+                    match = re.search(r'\b((?:typedef\s+)?(?:struct|enum|union)\b[^{;=()]*)\{', text[idx:])
                     if not match:
                         new_text += text[idx:]
                         break
@@ -33,7 +32,7 @@ def fix_struct_ordering(directory):
                     brace_count = 0
                     brace_end = -1
 
-                    # Smart brace matching to extract the entire struct safely
+                    # Smart brace matching to extract the entire block safely
                     for i in range(brace_start, len(text)):
                         if text[i] == '{':
                             brace_count += 1
@@ -45,7 +44,7 @@ def fix_struct_ordering(directory):
 
                     if brace_end != -1:
                         semi_end = text.find(';', brace_end)
-                        # Ensure we found a semicolon and it belongs to the struct (distance < 50 chars)
+                        # Ensure we found a semicolon and it belongs to the block
                         if semi_end != -1 and (semi_end - brace_end) < 50:
                             type_def = text[start:semi_end+1]
                             types.append(type_def)
