@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Hardening N64 SDK types in {filepath}...")
+    print(f"🔧 Applying SDK-compatible guards to {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -31,23 +31,64 @@ typedef volatile int32_t   vs32;
 typedef volatile uint64_t  vu64;
 typedef volatile int64_t   vs64;
 
-// --- Graphics & Audio Primitives ---
-// These are needed by PR/libaudio.h and PR/gu.h
+// --- Graphics & GBI Primitives ---
 typedef uint64_t Acmd;
 typedef uint64_t Gfx;
 typedef int32_t  Mtx_t[4][4];
 typedef struct { Mtx_t m; } Mtx;
 
-typedef struct { s16 data[16]; } ADPCM_STATE;
-typedef struct { u8 data[64]; }  LookAt;
-typedef struct { u8 data[64]; }  Hilite;
+// Vtx: Standard N64 Vertex structure
+typedef struct {
+    short           ob[3];
+    unsigned short  flag;
+    short           tc[2];
+    unsigned char   cn[4];
+} Vtx_t;
+typedef union {
+    Vtx_t          v;
+    long long int  force_structure_alignment;
+} Vtx;
+
+// --- SDK Compatibility Guards ---
+// We define these macros to prevent 'typedef redefinition' errors 
+// when the real SDK headers are included later.
+
+#ifndef _IMAGE_H_
+#define _IMAGE_H_
 typedef struct { u8 data[128]; } Image;
+#endif
 
-// --- SDK Handles (Guarded to prevent redefinition) ---
+#ifndef _LIGHTS_H_
+#define _LIGHTS_H_
+typedef struct { u8 data[32]; } Light;
+typedef struct { u8 data[64]; } PositionalLight;
+#endif
 
-#ifndef _OS_H_
+#ifndef _OSTASK_H_
+#define _OSTASK_H_
+typedef struct { u8 data[128]; } OSTask;
+#endif
+
+#ifndef _SPRITE_H_
+#define _SPRITE_H_
+typedef struct { u8 data[64]; } uSprite;
+#endif
+
+typedef struct { s16 data[16]; } ADPCM_STATE;
+typedef struct { u8 data[64]; } LookAt;
+typedef struct { u8 data[64]; } Hilite;
+
+// --- OS / Kernel Types ---
+typedef s32 OSPri;
 typedef void* OSMesg;
 
+typedef struct {
+    u16 button;
+    s8  stick_x; stick_y;
+    u8  errno;
+} OSContPad;
+
+#ifndef _OS_H_
 typedef struct {
     u32 valid;
     u32 msgCount;
@@ -63,19 +104,17 @@ typedef struct OSIoMesg_s {
 } OSIoMesg;
 
 typedef struct {
-    u32 type;
-    u32 baseAddr;
-    u32 latency;
-    u32 pulse;
-    u32 pageSize;
-    u32 relDuration;
+    u32 type, baseAddr, latency, pulse, pageSize, relDuration;
 } OSPiHandle;
+
+typedef struct {
+    u8 data[4096];
+} OSThread;
 #endif
 
 #ifndef _AL_H_
-typedef struct {
-    u8 data[1024]; 
-} ALGlobals;
+#define _AL_H_
+typedef struct { u8 data[1024]; } ALGlobals;
 #endif
 
 // Boolean definitions
@@ -92,7 +131,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with guarded SDK primitives!")
+    print("✅ n64_types.h updated with SDK header guards!")
 
 if __name__ == '__main__':
     fix_n64_types()
