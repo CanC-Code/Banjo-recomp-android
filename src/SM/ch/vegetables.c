@@ -28,12 +28,14 @@ typedef struct ch_vegatable {
     u32 pad10_8;
 } sChVegetable;
 
+// Forward declarations MUST go after the typedef
 static Actor* __chVegetables_draw(ActorMarker*, Gfx**, Mtx**, Vtx **);
 static void __chVegetables_update(Actor*);
+static bool __chVegetables_func_80387FA8(Actor* this, sChVegetable* local, s32 yaw, s32 arg3);
 
 /* .data */
 static ActorAnimationInfo sChCarrotAnimations[5] = {
-    {NULL, NULL},
+    {0, 0.0f},
     {ASSET_223_ANIM_TOPPER_UNKNOWN, 1000000.0f},
     {ASSET_223_ANIM_TOPPER_UNKNOWN, 1.0f},
     {ASSET_224_ANIM_TOPPER_UNKNOWN, 0.75f},
@@ -53,7 +55,7 @@ ActorInfo gChVegetablesTopperB = {
 };
 
 static ActorAnimationInfo sChOnionAnimations[5] = {
-    {NULL, NULL},
+    {0, 0.0f},
     {ASSET_226_ANIM_BAWL_UNKNOWN, 1000000.0f},
     {ASSET_226_ANIM_BAWL_UNKNOWN, 1.0f},
     {ASSET_227_ANIM_BAWL_UNKNOWN, 0.75f},
@@ -73,7 +75,7 @@ ActorInfo gChVegetablesBawlB = {
 };
 
 static ActorAnimationInfo sChCauliflowerAnimations[5] = {
-    {NULL, NULL},
+    {0, 0.0f},
     {ASSET_225_ANIM_COLLYWOBBLE_UNKNOWN, 10000000.0f},
     {ASSET_225_ANIM_COLLYWOBBLE_UNKNOWN, 1.0f},
     {ASSET_225_ANIM_COLLYWOBBLE_UNKNOWN, 10000000.0f},
@@ -260,7 +262,7 @@ static void __chVegetables_moveVegetable(Actor* this) {
 
 static void __chVegetables_elevateAndMoveVegetable(Actor* this) {
     sChVegetable* local = (sChVegetable*)&this->local;
-    
+
     this->position_y += (
         mapSpecificFlags_get(SM_SPECIFIC_FLAG_C) ||
         volatileFlag_get(VOLATILE_FLAG_C1_IN_FINAL_CHARACTER_PARADE)
@@ -278,7 +280,7 @@ static void __chVegetables_elevateAndMoveVegetable(Actor* this) {
 static bool __chVegetables_func_80387FA8(Actor* this, sChVegetable* local, s32 yaw, s32 arg3) {
     f32 sp24[3];
     f32 sp18[3];
-    
+
     sp18[0] = arg3;
     sp18[1] = 0.0f;
     sp18[2] = 0.0f;
@@ -488,10 +490,10 @@ static void __chVegetables_update(Actor* this) {
             }
         }
         subaddie_turnToYaw(this, 2.0f);
-        
+
         if (local->vegetable_type != CH_VEGETABLE_3_COLLIWOBBLE && actor_animationIsAt(this, 0.3f))
             sfx_playFadeShorthandDefault(SFX_3F2_BOING, 1.0f, 22000, this->position, 1000, 2000);
-        
+
         if (local->vegetable_type == CH_VEGETABLE_3_COLLIWOBBLE && actor_animationIsAt(this, 0.4f))
             sfx_playFadeShorthandDefault(SFX_2_CLAW_SWIPE, 0.9f, 8000, this->position, 1000, 2000);
 
@@ -506,7 +508,7 @@ static void __chVegetables_update(Actor* this) {
             this->has_met_before = FALSE;
             __chVegetables_setParticlesForModel2(partEmitMgr_newEmitter(3), sp54, 3, (local->vegetable_type == CH_VEGETABLE_1_TOPPER) ? ASSET_4F0_MODEL_TOPPER_UNKNOWN: ASSET_4F1_MODEL_BAWL_OR_COLLIWOBBLE_UNKNOWN);
         }
-        
+
         if (actor_animationIsAt(this, 0.75f))
             func_80326310(this);
         break;
