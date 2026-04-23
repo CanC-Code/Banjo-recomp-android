@@ -49,7 +49,7 @@ jobs:
           cd Android
           # Passing EXCLUDE_GAME_SRC to skip the massive /src folder
           gradle assembleDebug \
-            -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=ON" \
+            -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
             --stacktrace
 
       - name: 📦 Upload APK
