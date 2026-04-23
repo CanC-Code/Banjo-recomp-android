@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Kernel Structures...")
+    print(f"\nStep 2: Updating {types_path} with Audio Filter Pipeline...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -67,7 +67,6 @@ typedef void* OSMesg;
 typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
 typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
 
-// Thread Structure (Expanded from logs)
 typedef struct OSThread_s {
     struct OSThread_s *next;
     OSPri             priority;
@@ -79,7 +78,6 @@ typedef struct OSThread_s {
     int               fp;
 } OSThread;
 
-// Thread States
 #define OS_STATE_STOPPED    1
 #define OS_STATE_RUNNABLE   2
 #define OS_STATE_RUNNING    4
@@ -105,6 +103,21 @@ typedef s32 ALPan;
 typedef struct { u32 data[4]; } ALWaveTable;
 typedef struct { u32 offset; }  ALVoice;
 typedef struct { ALVoice *pvoice; f32 unityPitch; } N_ALVoice;
+
+// The Filter Base
+typedef struct ALFilter_s {
+    struct ALFilter_s   *source;
+    s32                 (*handler)(void *, s32 *, s32, s32, s32);
+    s32                 (*setParam)(void *, s32, void *);
+} ALFilter;
+
+// The Aux Bus (Added for auxbus.c)
+typedef struct {
+    ALFilter            filter;
+    ALFilter            **sources;
+    s32                 sourceCount;
+    s32                 maxSources;
+} ALAuxBus;
 
 typedef struct ALParam_s {
     struct ALParam_s *next;
@@ -136,28 +149,33 @@ typedef struct { u8 data[64]; }   ALHeap;
 extern "C" {
 #endif
 
-// Kernel Globals
 extern OSThread *__osRunQueue;
 extern OSThread *__osRunningThread;
 extern ALSyn    *n_syn;
 extern ALGlobals *alGlobals;
 
-// Kernel Functions
 void __osEnqueueThread(OSThread **queue, OSThread *t);
 OSThread *__osPopThread(OSThread **queue);
 void __osDequeueThread(OSThread **queue, OSThread *t);
 s32 _n_timeToSamples(ALMicroTime t);
 
+// DSP Helper (Dummy for auxbus.c)
+void aClearBuffer(u32 ptr, u32 addr, u32 count);
+
 #ifdef __cplusplus
 }
 #endif
 
-// Audio Macros
+// Audio Macros & Bus Constants
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
 #define ERR_ALSYN_NO_UPDATE       0
 #define ALFailIf(cond, err)       if(cond) return
+
+// Bus indices used by the mixer
+#define AL_AUX_L_OUT              0x1100
+#define AL_AUX_R_OUT              0x1101
 
 #endif // N64_TYPES_H
 """
