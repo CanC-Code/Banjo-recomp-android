@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Audio Asset Structures...")
+    print(f"\nStep 2: Updating {types_path} with Global Audio State...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -97,11 +97,10 @@ typedef union { Vtx_t v; long long int force_alignment; } Vtx;
 typedef struct { short vscale[4]; short vtrans[4]; } Vp_t;
 typedef union { Vp_t v; long long int force_alignment; } Vp;
 
-// --- AUDIO TYPES ---
+// --- AUDIO TYPES (ASSETS) ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 
-// ADPCM Structures
 typedef struct { u32 order; u32 npredictors; s16 book[1]; } ALADPCMBook;
 typedef struct { u32 start; u32 end; u32 count; s16 state[16]; } ALADPCMloop;
 
@@ -125,57 +124,23 @@ typedef struct {
     ALWaveInfo      waveInfo;
 } ALWaveTable;
 
-typedef struct {
-    ALWaveTable     *wavetable;
-    u8              priority;
-} ALSound;
+typedef struct { ALWaveTable *wavetable; u8 priority; } ALSound;
+typedef struct { u8 volume; u8 pan; u8 priority; u8 soundCount; ALSound *sounds[1]; } ALInstrument;
+typedef struct { s16 instCount; ALInstrument *instArray[1]; } ALBank;
+typedef struct { s16 revision; s16 bankCount; ALBank *bankArray[1]; } ALBankFile;
+typedef struct { s16 seqCount; u8 *data; } ALSeqFile;
 
-typedef struct {
-    u8              volume;
-    u8              pan;
-    u8              priority;
-    u8              soundCount;
-    ALSound         *sounds[1];
-} ALInstrument;
+// --- AUDIO TYPES (ENGINE & GLOBALS) ---
+typedef struct { u8 data[1024]; } ALGlobals;
+typedef struct { u8 data[1024]; } ALHeap;
+typedef struct { s32 paramSamples; } ALSyn;
 
-typedef struct {
-    s16             instCount;
-    ALInstrument    *instArray[1];
-} ALBank;
-
-typedef struct {
-    s16             revision;
-    s16             bankCount;
-    ALBank          *bankArray[1];
-} ALBankFile;
-
-typedef struct {
-    s16             seqCount;
-    u8              *data;
-} ALSeqFile;
-
-// Event System
-typedef struct {
-    s16 unk0;
-    s16 unk4;
-} ALUnk18Evt;
-
-typedef union {
-    ALUnk18Evt unk18;
-} ALEventMsg;
-
-typedef struct {
-    u16 type;
-    ALEventMsg msg;
-} ALEvent;
-
+typedef struct { s16 unk0; s16 unk4; } ALUnk18Evt;
+typedef union { ALUnk18Evt unk18; } ALEventMsg;
+typedef struct { u16 type; ALEventMsg msg; } ALEvent;
 typedef struct { u8 data[128]; } ALEvtQueue;
+typedef struct { ALEvtQueue evtq; } ALCSPlayer;
 
-typedef struct {
-    ALEvtQueue      evtq;
-} ALCSPlayer;
-
-// Audio Filter Base
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
     s32                 (*handler)(void *, s32 *, s32, s32, s32);
@@ -194,13 +159,15 @@ typedef struct {
 extern "C" {
 #endif
 
-extern OSThread *__osRunQueue;
-extern OSThread *__osRunningThread;
+extern OSThread  *__osRunQueue;
+extern OSThread  *__osRunningThread;
+extern ALGlobals *alGlobals;
+extern ALSyn     *n_syn;
+
 void __osEnqueueThread(OSThread **queue, OSThread *t);
 OSThread *__osPopThread(OSThread **queue);
 void __osDequeueThread(OSThread **queue, OSThread *t);
 
-// Audio Protos
 void alSeqFileNew(ALSeqFile *file, u8 *base);
 void alEvtqPostEvent(ALEvtQueue *evtq, ALEvent *evt, ALMicroTime delta);
 void aClearBuffer(u32 ptr, u32 addr, u32 count);
@@ -213,12 +180,10 @@ void aClearBuffer(u32 ptr, u32 addr, u32 count);
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
 #define AL_UNK18_EVT              18
-
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
 #define AL_FILTER_ADD_SOURCE      4
-
 #define AL_AUX_L_OUT              0x1100
 #define AL_AUX_R_OUT              0x1101
 
