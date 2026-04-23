@@ -45,12 +45,15 @@ jobs:
 
       - name: 🐘 Build Full Game APK
         run: |
-          # Use the system 'gradle' command since 'gradlew' is missing from the repo
           cd Android
+          # `pipefail` ensures the action catches the error even if `tee` succeeds
+          set -o pipefail
+          
+          # We pipe standard output and standard error (2>&1) into tee
           gradle clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
             --info \
-            --stacktrace
+            --stacktrace 2>&1 | tee ../build.log
 
       - name: 📦 Upload APK
         if: success()
@@ -58,3 +61,20 @@ jobs:
         with:
           name: bka-full-game-apk
           path: Android/app/build/outputs/apk/debug/*.apk
+
+      # --- DIAGNOSTIC STEPS (Only run if the build fails) ---
+      
+      - name: 🔍 Run Failure Analyzer
+        if: failure()
+        run: |
+          # Run the script we just created against the captured log
+          python3 scripts/analyze_build_log.py build.log
+
+      - name: 🚑 Upload Failure Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bka-failure-logs
+          path: |
+            build.log
+            build_failure_summary.txt
