@@ -37,6 +37,9 @@ jobs:
       - name: 🧹 Pre-Patching (Sanitizer)
         run: python3 scripts/sanitize_codebase.py .
 
+      - name: 🩹 Auto-Fix N64 NULL Floats
+        run: python3 scripts/fix_null_floats.py
+
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
