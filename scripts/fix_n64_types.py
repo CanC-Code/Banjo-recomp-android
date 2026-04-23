@@ -13,14 +13,14 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Keeping SDK headers zeroed...")
+    print("Step 1: Silencing SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Voice & Parameter types...")
+    print(f"\nStep 2: Injecting n-audio Synthesis Types into {types_path}...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -28,21 +28,7 @@ def fix_n64_types():
 #include <stddef.h>
 #include <math.h>
 
-// --- MATH & CONSTANTS ---
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-#ifndef TRUE
-#define TRUE 1
-#endif
-#ifndef FALSE
-#define FALSE 0
-#endif
-#ifndef NULL
-#define NULL 0
-#endif
-
-// --- BASIC N64 TYPES ---
+// --- CORE N64 ARCHITECTURE TYPES ---
 typedef uint8_t   u8;
 typedef int8_t    s8;
 typedef uint16_t  u16;
@@ -61,11 +47,20 @@ typedef volatile int16_t   vs16;
 typedef volatile uint32_t  vu32;
 typedef volatile int32_t   vs32;
 
-// --- OS / KERNEL TYPES ---
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef NULL
+#define NULL 0
+#endif
+
+// --- OS & KERNEL OBJECTS ---
 typedef s32  OSPri;
 typedef void* OSMesg;
 typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
-typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
 
 typedef struct OSThread_s {
     struct OSThread_s *next;
@@ -78,26 +73,17 @@ typedef struct OSThread_s {
     int               fp;
 } OSThread;
 
-#define OS_STATE_STOPPED    1
-#define OS_STATE_RUNNABLE   2
-#define OS_STATE_RUNNING    4
-#define OS_STATE_WAITING    8
+typedef struct { u8 data[32]; } OSContPad;
+typedef struct { u8 data[128]; } OSTask;
 
-typedef struct { u8 data[32]; }   OSContPad;
-typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
-typedef struct { u8 data[128]; }  OSTask;
-
-// --- GRAPHICS TYPES ---
+// --- GRAPHICS STRUCTURES ---
 typedef uint64_t Gfx;
 typedef uint64_t Acmd;
-typedef int32_t  Mtx_t[4][4];
-typedef struct { Mtx_t m; } Mtx;
-typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
-typedef union { Vtx_t v; long long int force_alignment; } Vtx;
-typedef struct { short vscale[4]; short vtrans[4]; } Vp_t;
-typedef union { Vp_t v; long long int force_alignment; } Vp;
+typedef struct { int32_t m[4][4]; } Mtx;
+typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx;
+typedef struct { short vscale[4]; short vtrans[4]; } Vp;
 
-// --- AUDIO TYPES (ASSETS) ---
+// --- AUDIO TYPES (ASSETS & LIBRARIES) ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 
@@ -109,11 +95,9 @@ typedef struct {
     ALADPCMBook     *book;
 } ALADPCMWaveInfo;
 
-typedef struct { u32 u; } ALRAWWaveInfo;
-
 typedef union {
     ALADPCMWaveInfo adpcmWave;
-    ALRAWWaveInfo   rawWave;
+    struct { u32 u; } rawWave;
 } ALWaveInfo;
 
 typedef struct {
@@ -127,53 +111,17 @@ typedef struct {
 typedef struct { ALWaveTable *wavetable; u8 priority; } ALSound;
 typedef struct { u8 volume; u8 pan; u8 priority; u8 soundCount; ALSound *sounds[1]; } ALInstrument;
 typedef struct { s16 instCount; ALInstrument *instArray[1]; } ALBank;
-typedef struct { s16 revision; s16 bankCount; ALBank *bankArray[1]; } ALBankFile;
 typedef struct { s16 seqCount; u8 *data; } ALSeqFile;
 
-// --- AUDIO TYPES (ENGINE & GLOBALS) ---
-typedef struct { u8 data[1024]; } ALGlobals;
-typedef struct { u8 data[1024]; } ALHeap;
-typedef struct { s32 paramSamples; } ALSyn;
-
-// Event & Parameter Pipeline
-typedef struct { s16 unk0; s16 unk4; } ALUnk18Evt;
-typedef union { ALUnk18Evt unk18; } ALEventMsg;
-typedef struct { u16 type; ALEventMsg msg; } ALEvent;
-typedef struct { u8 data[128]; } ALEvtQueue;
-typedef struct { ALEvtQueue evtq; } ALCSPlayer;
-
-typedef struct {
-    u32         offset;
+// --- AUDIO SYNTHESIS ENGINE (n-audio) ---
+typedef struct { 
+    u32 offset; 
 } ALVoice;
 
 typedef struct {
-    ALVoice     *pvoice;
-    f32         unityPitch;
+    ALVoice         *pvoice;
+    f32             unityPitch;
 } N_ALVoice;
-
-typedef struct ALParam_s {
-    struct ALParam_s    *next;
-    s32                 delta;
-    u32                 type;
-    union {
-        ALWaveTable     *wave;
-        void            *ptr;
-    };
-    f32                 unity;
-} ALStartParam;
-
-typedef struct {
-    struct ALParam_s    *next;
-    s32                 delta;
-    u32                 type;
-    ALWaveTable         *wave;
-    f32                 pitch;
-    f32                 unity;
-    ALPan               pan;
-    s16                 volume;
-    u8                  fxMix;
-    s32                 samples;
-} ALStartParamAlt;
 
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
@@ -181,53 +129,67 @@ typedef struct ALFilter_s {
     s32                 (*setParam)(void *, s32, void *);
 } ALFilter;
 
-typedef struct {
-    ALFilter            filter;
-    ALFilter            **sources;
-    s32                 sourceCount;
-    s32                 maxSources;
-} ALAuxBus;
+// Synthesis Parameter Command Packets
+typedef struct ALStartParam_s {
+    struct ALStartParam_s *next;
+    s32                   delta;
+    u32                   type;
+    ALWaveTable           *wave;
+    f32                   unity;
+} ALStartParam;
 
-// --- CROSS-LANGUAGE SYMBOLS ---
+typedef struct ALStartParamAlt_s {
+    struct ALStartParamAlt_s *next;
+    s32                      delta;
+    u32                      type;
+    ALWaveTable              *wave;
+    f32                      pitch;
+    f32                      unity;
+    s16                      volume;
+    ALPan                    pan;
+    u8                       fxMix;
+    s32                      samples;
+} ALStartParamAlt;
+
+typedef struct { s32 paramSamples; } ALSyn;
+typedef struct { u8 data[1024]; } ALGlobals;
+
+// --- CROSS-LANGUAGE SYMBOLS & PROTOTYPES ---
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-extern OSThread  *__osRunQueue;
-extern OSThread  *__osRunningThread;
 extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 
-void __osEnqueueThread(OSThread **queue, OSThread *t);
-OSThread *__osPopThread(OSThread **queue);
-void __osDequeueThread(OSThread **queue, OSThread *t);
-
-void alSeqFileNew(ALSeqFile *file, u8 *base);
-void alEvtqPostEvent(ALEvtQueue *evtq, ALEvent *evt, ALMicroTime delta);
-void aClearBuffer(u32 ptr, u32 addr, u32 count);
-
-// Syn Internal helpers
-void* __n_allocParam();
-void  n_alEnvmixerParam(ALVoice *v, s32 type, void *ptr);
+// n-audio internal allocators and handlers
+void* __n_allocParam(void);
+void  n_alEnvmixerParam(ALVoice *v, s32 paramID, void *ptr);
 s32   _n_timeToSamples(ALMicroTime t);
+
+void  alSeqFileNew(ALSeqFile *file, u8 *base);
+void  aClearBuffer(u32 ptr, u32 addr, u32 count);
 
 #ifdef __cplusplus
 }
 #endif
 
-// Audio Macros
-#define AL_ADPCM_WAVE             0
-#define AL_RAW16_WAVE             1
-#define AL_UNK18_EVT              18
+// --- MACROS & CONSTANTS ---
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
 #define AL_FILTER_ADD_SOURCE      4
+
 #define ERR_ALSYN_NO_UPDATE       0
-
-#define AL_AUX_L_OUT              0x1100
-#define AL_AUX_R_OUT              0x1101
-
 #define ALFailIf(cond, err)       if(cond) return
 
 #endif // N64_TYPES_H
+"""
+    
+    os.makedirs(os.path.dirname(types_path), exist_ok=True)
+    with open(types_path, 'w') as f:
+        f.write(content)
+    print(f"✅ Updated: {types_path}")
+
+if __name__ == '__main__':
+    fix_n64_types()
