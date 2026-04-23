@@ -1,15 +1,14 @@
 import os
 
 def fix_n64_types():
-    # This is the path the compiler is looking at via the -include flag
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Ensuring comprehensive N64 types in {filepath}...")
+    print(f"🔧 Expanding N64 types and SDK structures in {filepath}...")
     
-    # Standard N64 types used throughout the Banjo codebase
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // Basic Types
 typedef uint8_t   u8;
@@ -20,11 +19,10 @@ typedef uint32_t  u32;
 typedef int32_t   s32;
 typedef uint64_t  u64;
 typedef int64_t   s64;
-
 typedef float     f32;
 typedef double    f64;
 
-// Volatile variants (for hardware registers)
+// Volatile variants
 typedef volatile uint8_t   vu8;
 typedef volatile int8_t    vs8;
 typedef volatile uint16_t  vu16;
@@ -34,10 +32,32 @@ typedef volatile int32_t   vs32;
 typedef volatile uint64_t  vu64;
 typedef volatile int64_t   vs64;
 
-typedef volatile float     vf32;
-typedef volatile double    vf64;
+// SDK Handles and Dummy Structs
+// These satisfy 'unknown type' and 'sizeof' errors in the emulator layer
+typedef void* OSMesg;
 
-// Boolean type often used in the N64 SDK
+typedef struct {
+    u32 valid;
+} OSMesgQueue;
+
+typedef struct {
+    u32 valid;
+} OSIoMesg;
+
+typedef struct {
+    u32 valid;
+} OSPiHandle;
+
+typedef struct {
+    u32 valid;
+} OSThread;
+
+// Audio Library Globals
+typedef struct {
+    u8 data[1024]; // Generic buffer for ALGlobals
+} ALGlobals;
+
+// Boolean type
 #ifndef N64_BOOL_DEFINED
 #define N64_BOOL_DEFINED
 typedef int n64_bool;
@@ -47,13 +67,11 @@ typedef int n64_bool;
 
 #endif // N64_TYPES_H
 """
-    # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h is now fully populated!")
+    print("✅ n64_types.h updated with SDK structures!")
 
 if __name__ == '__main__':
     fix_n64_types()
