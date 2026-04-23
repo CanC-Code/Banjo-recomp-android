@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
-# 1. Define the Option (This allows the -DEXCLUDE_GAME_SRC flag to work)
-option(EXCLUDE_GAME_SRC "Exclude game source files for faster verification" ON)
+# 1. Force CMake to recognize the command-line flag
+# Default is ON so it stays fast unless we explicitly flip it in GitHub
+option(EXCLUDE_GAME_SRC "Exclude game source" ON)
 
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
-# 2. Base Bridge Sources (Always compiled)
+# 2. Base bridge sources
 set(LIB_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -18,23 +19,23 @@ set(LIB_SOURCES
     "tools/rare_decompression.cpp" 
 )
 
-# 3. Conditionally Add the Full Game Source
-if(NOT EXCLUDE_GAME_SRC)
-    message(STATUS "BKA: EXCLUDE_GAME_SRC is OFF. Collecting game source files...")
-    
-    # This finds every .c and .cpp file in your /src directory recursively
-    file(GLOB_RECURSE GAME_SOURCES 
-        "${REPO_ROOT}/src/*.c"
-        "${REPO_ROOT}/src/*.cpp"
-    )
-    
-    # Add them to our list of files to compile
-    list(APPEND LIB_SOURCES ${GAME_SOURCES})
+# 3. The Game Source Logic
+if(EXCLUDE_GAME_SRC)
+    message(STATUS "!!! BKA: BUILDING BRIDGE ONLY (FAST MODE) !!!")
 else()
-    message(STATUS "BKA: EXCLUDE_GAME_SRC is ON. Compiling bridge only.")
+    message(STATUS "!!! BKA: BUILDING FULL GAME ENGINE (SLOW MODE) !!!")
+    
+    # Recursively find all C files in the repo root /src
+    file(GLOB_RECURSE GAME_C_FILES "${REPO_ROOT}/src/*.c")
+    file(GLOB_RECURSE GAME_CPP_FILES "${REPO_ROOT}/src/*.cpp")
+    
+    list(APPEND LIB_SOURCES ${GAME_C_FILES} ${GAME_CPP_FILES})
+    
+    # Debug: Print how many files we found
+    list(LENGTH LIB_SOURCES TOTAL_FILE_COUNT)
+    message(STATUS "BKA: Total files added to build: ${TOTAL_FILE_COUNT}")
 endif()
 
-# Create the library using our full list of sources
 add_library(bkawrapper SHARED ${LIB_SOURCES})
 
 # 4. Include Paths
@@ -45,23 +46,17 @@ target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
     ${REPO_ROOT}/include
     ${REPO_ROOT}/include/2.0L
-    ${REPO_ROOT}/src            # <--- Added so game files can find their internal headers
+    ${REPO_ROOT}/src
     ${REPO_ROOT}/tools/bk_rom_compressor/modules/rarezip
 )
 
-# 5. Compilation Options
+# 5. Options
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w"        # Suppresses the massive wall of warnings from the original C code
-    "-O3"       # Maximum optimization for the game engine
+    "-w"
+    "-O3" 
 )
 
 # 6. Linking
 find_library(log-lib log)
-target_link_libraries(bkawrapper 
-    android 
-    ${log-lib} 
-    GLESv3 
-    EGL
-    z
-)
+target_link_libraries(bkawrapper android ${log-lib} GLESv3 EGL z)
