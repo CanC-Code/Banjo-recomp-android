@@ -43,8 +43,10 @@ add_library(bkawrapper SHARED ${LIB_SOURCES})
 target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools       # <-- FIX 1: For rare_decompression.h
     ${REPO_ROOT}/include
     ${REPO_ROOT}/include/2.0L
+    ${REPO_ROOT}/include/2.0L/PR            # <-- FIX 2: For ultratypes.h
     ${REPO_ROOT}/src
 )
 
