@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Applying SDK-compatible guards to {filepath}...")
+    print(f"🔧 Fixing syntax error and updating guards in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -44,15 +44,13 @@ typedef struct {
     short           tc[2];
     unsigned char   cn[4];
 } Vtx_t;
+
 typedef union {
     Vtx_t          v;
     long long int  force_structure_alignment;
 } Vtx;
 
 // --- SDK Compatibility Guards ---
-// We define these macros to prevent 'typedef redefinition' errors 
-// when the real SDK headers are included later.
-
 #ifndef _IMAGE_H_
 #define _IMAGE_H_
 typedef struct { u8 data[128]; } Image;
@@ -84,11 +82,13 @@ typedef void* OSMesg;
 
 typedef struct {
     u16 button;
-    s8  stick_x; stick_y;
+    s8  stick_x;
+    s8  stick_y;
     u8  errno;
 } OSContPad;
 
 #ifndef _OS_H_
+#define _OS_H_
 typedef struct {
     u32 valid;
     u32 msgCount;
@@ -131,7 +131,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with SDK header guards!")
+    print("✅ n64_types.h fixed!")
 
 if __name__ == '__main__':
     fix_n64_types()
