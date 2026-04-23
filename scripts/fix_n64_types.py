@@ -2,13 +2,23 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🛠️ Adding missing SDK dummy types (ALHeap, etc.) to {filepath}...")
+    print(f"📐 Adding math constants and finishing SDK dummies in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h>
+
+// --- Math Constants ---
+// Modern Clang/NDK often hide these; we define them here for game logic.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_PI_F
+#define M_PI_F 3.14159265358979323846f
+#endif
 
 // Basic N64 Fixed-Width Types
 typedef uint8_t   u8;
@@ -80,7 +90,6 @@ typedef union Vtx {
 #define __SPRITE_H__
 
 // --- Our Custom Dummy Definitions ---
-// These satisfy the compiler since the original headers are silenced.
 typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[64]; }   ALHeap;
 typedef struct { u8 data[64]; }   ALBank;
@@ -145,7 +154,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with ALHeap and friends!")
+    print("✅ n64_types.h updated with math constants!")
 
 if __name__ == '__main__':
     fix_n64_types()
