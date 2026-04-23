@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Fixing syntax error and updating guards in {filepath}...")
+    print(f"🔧 Refining guards and struct tags in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -35,52 +35,66 @@ typedef volatile int64_t   vs64;
 typedef uint64_t Acmd;
 typedef uint64_t Gfx;
 typedef int32_t  Mtx_t[4][4];
-typedef struct { Mtx_t m; } Mtx;
+typedef struct Mtx { Mtx_t m; } Mtx;
 
 // Vtx: Standard N64 Vertex structure
-typedef struct {
+typedef struct Vtx_t {
     short           ob[3];
     unsigned short  flag;
     short           tc[2];
     unsigned char   cn[4];
 } Vtx_t;
 
-typedef union {
+typedef union Vtx {
     Vtx_t          v;
     long long int  force_structure_alignment;
 } Vtx;
 
 // --- SDK Compatibility Guards ---
+// We use tagged structs and common SDK guard names to prevent redefinition errors.
+
 #ifndef _IMAGE_H_
+#ifndef __IMAGE_H__
 #define _IMAGE_H_
-typedef struct { u8 data[128]; } Image;
+#define __IMAGE_H__
+typedef struct Image { u8 data[128]; } Image;
+#endif
 #endif
 
 #ifndef _LIGHTS_H_
+#ifndef __LIGHTS_H__
 #define _LIGHTS_H_
-typedef struct { u8 data[32]; } Light;
-typedef struct { u8 data[64]; } PositionalLight;
+#define __LIGHTS_H__
+typedef struct Light { u8 data[32]; } Light;
+typedef struct PositionalLight { u8 data[64]; } PositionalLight;
+#endif
 #endif
 
 #ifndef _OSTASK_H_
+#ifndef __OSTASK_H__
 #define _OSTASK_H_
-typedef struct { u8 data[128]; } OSTask;
+#define __OSTASK_H__
+typedef struct OSTask { u8 data[128]; } OSTask;
+#endif
 #endif
 
 #ifndef _SPRITE_H_
+#ifndef __SPRITE_H__
 #define _SPRITE_H_
-typedef struct { u8 data[64]; } uSprite;
+#define __SPRITE_H__
+typedef struct uSprite { u8 data[64]; } uSprite;
+#endif
 #endif
 
-typedef struct { s16 data[16]; } ADPCM_STATE;
-typedef struct { u8 data[64]; } LookAt;
-typedef struct { u8 data[64]; } Hilite;
+typedef struct ADPCM_STATE { s16 data[16]; } ADPCM_STATE;
+typedef struct LookAt { u8 data[64]; } LookAt;
+typedef struct Hilite { u8 data[64]; } Hilite;
 
 // --- OS / Kernel Types ---
 typedef s32 OSPri;
 typedef void* OSMesg;
 
-typedef struct {
+typedef struct OSContPad {
     u16 button;
     s8  stick_x;
     s8  stick_y;
@@ -88,33 +102,39 @@ typedef struct {
 } OSContPad;
 
 #ifndef _OS_H_
+#ifndef __OS_H__
 #define _OS_H_
-typedef struct {
+#define __OS_H__
+typedef struct OSMesgQueue {
     u32 valid;
     u32 msgCount;
     OSMesg *msg;
 } OSMesgQueue;
 
-typedef struct OSIoMesg_s {
+typedef struct OSIoMesg {
     OSMesg      hdr;
     u32         devAddr;
     void        *dramAddr;
     u32         size;
-    OSMesgQueue *retQueue;
+    struct OSMesgQueue *retQueue;
 } OSIoMesg;
 
-typedef struct {
+typedef struct OSPiHandle {
     u32 type, baseAddr, latency, pulse, pageSize, relDuration;
 } OSPiHandle;
 
-typedef struct {
+typedef struct OSThread {
     u8 data[4096];
 } OSThread;
 #endif
+#endif
 
 #ifndef _AL_H_
+#ifndef __AL_H__
 #define _AL_H_
-typedef struct { u8 data[1024]; } ALGlobals;
+#define __AL_H__
+typedef struct ALGlobals { u8 data[1024]; } ALGlobals;
+#endif
 #endif
 
 // Boolean definitions
@@ -131,7 +151,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h fixed!")
+    print("✅ n64_types.h updated with dual guards and struct tags!")
 
 if __name__ == '__main__':
     fix_n64_types()
