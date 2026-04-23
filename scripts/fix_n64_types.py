@@ -13,14 +13,14 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Zeroing out conflicting SDK headers...")
+    print("Step 1: Keeping conflicting SDK headers zeroed...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write(f"// Silenced by fix_n64_types.py\\n")
+                f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\\nStep 2: Updating {types_path} with Math Constants...")
+    print(f"\nStep 2: Updating {types_path} with Audio Skeletal Structures...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -28,16 +28,9 @@ def fix_n64_types():
 #include <stddef.h>
 #include <math.h>
 
-// --- MATH CONSTANTS ---
-// Manually defining these since Android NDK math.h might hide them
+// --- MATH ---
 #ifndef M_PI
-#define M_PI    3.14159265358979323846
-#endif
-#ifndef M_PI_2
-#define M_PI_2  1.57079632679489661923
-#endif
-#ifndef M_DTOR
-#define M_DTOR  0.01745329251994329577
+#define M_PI 3.14159265358979323846
 #endif
 
 // Basic N64 Types
@@ -59,74 +52,76 @@ typedef volatile int16_t   vs16;
 typedef volatile uint32_t  vu32;
 typedef volatile int32_t   vs32;
 
-// Graphics & Matrix Primitives
+// Graphics
 typedef uint64_t Gfx;
 typedef uint64_t Acmd;
 typedef int32_t  Mtx_t[4][4];
 typedef struct { Mtx_t m; } Mtx;
+typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx;
+typedef struct { short vscale[4]; short vtrans[4]; } Vp;
+typedef struct { u8 data[64]; } LookAt;
+typedef struct { u8 data[64]; } Hilite;
+typedef struct { u8 data[32]; } Light;
+typedef struct { u8 data[64]; } PositionalLight;
+
+// --- AUDIO TYPES (REQUIRED BY CORE1/AUDIO) ---
+typedef s32  ALMicroTime;
+typedef s32  ALPan;
 
 typedef struct {
-    short ob[3];
-    unsigned short flag;
-    short tc[2];
-    unsigned char cn[4];
-} Vtx_t;
-
-typedef union {
-    Vtx_t v;
-    long long int force_alignment;
-} Vtx;
+    u32 data[4];
+} ALWaveTable;
 
 typedef struct {
-    short vscale[4];
-    short vtrans[4];
-} Vp_t;
+    u32 offset;
+} ALVoice;
 
-typedef union {
-    Vp_t v;
-    long long int force_alignment;
-} Vp;
+typedef struct {
+    ALVoice *pvoice;
+    f32     unityPitch;
+} N_ALVoice;
 
-typedef struct { u8 data[64]; }  LookAt;
-typedef struct { u8 data[64]; }  Hilite;
-typedef struct { u8 data[32]; }  Light;
-typedef struct { u8 data[128]; } uSprite;
-typedef struct { u8 data[64]; }  PositionalLight;
+typedef struct {
+    struct ALParam_s *next;
+    s32              delta;
+    u32              type;
+    union {
+        ALWaveTable *wave;
+        void        *ptr;
+    };
+    f32              unity;
+} ALStartParam;
 
-// Audio & Synth
-typedef struct { u8 data[1024]; } ALGlobals;
-typedef struct { u8 data[64]; }   ALHeap;
-typedef struct { u8 data[64]; }   ALBank;
-typedef struct { u8 data[64]; }   ALBankFile;
-typedef struct { u8 data[64]; }   ALSeq;
-typedef struct { u8 data[64]; }   ALSeqPlayer;
-typedef struct { u8 data[128]; }  ALSeqpConfig;
-typedef struct { s16 data[16]; }  ADPCM_STATE;
+typedef struct {
+    struct ALParam_s *next;
+    s32              delta;
+    u32              type;
+    f32              unity;
+    ALPan            pan;
+    s16              volume;
+    u8               fxMix;
+} ALStartParamAlt;
 
-// OS / Kernel Structures
-typedef s32 OSPri;
+typedef struct {
+    s32 paramSamples;
+} ALSyn;
+
+// Globals used by the audio engine
+extern ALSyn *n_syn;
+
+// Audio Macros & Constants
+#define AL_FILTER_START_VOICE     1
+#define AL_FILTER_START_VOICE_ALT 2
+#define AL_FILTER_ADD_UPDATE      3
+#define ERR_ALSYN_NO_UPDATE       0
+#define ALFailIf(cond, err)       if(cond) return
+
+// --- OS / KERNEL ---
 typedef void* OSMesg;
-
-typedef struct {
-    u32 valid;
-    u32 msgCount;
-    OSMesg *msg;
-} OSMesgQueue;
-
-typedef struct {
-    OSMesg      hdr;
-    u32         devAddr;
-    void        *dramAddr;
-    u32         size;
-    OSMesgQueue *retQueue;
-} OSIoMesg;
-
-typedef struct { u8 data[32]; } OSContPad;
+typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
+typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
 typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
-typedef struct { u8 data[128]; } OSTask;
-typedef struct { u8 data[4096]; } OSThread;
 
-// Standard N64 defines
 #ifndef TRUE
 #define TRUE 1
 #endif
@@ -136,10 +131,6 @@ typedef struct { u8 data[4096]; } OSThread;
 #ifndef NULL
 #define NULL 0
 #endif
-
-// Recomp specific helpers
-#define SCREEN_WIDTH  320
-#define SCREEN_HEIGHT 240
 
 #endif // N64_TYPES_H
 """
