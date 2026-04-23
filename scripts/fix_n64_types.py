@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Injecting Geometry, Input, and Audio types into {types_path}...")
+    print(f"\nStep 2: Injecting comprehensive N64 types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -92,22 +92,23 @@ typedef struct OSThread_s {
     int fp; 
 } OSThread;
 
-// --- GRAPHICS & GEOMETRY ---
+// --- GRAPHICS (GBI) ---
 typedef uint64_t Gfx;
-typedef struct { int32_t m[4][4]; } Mtx;
+typedef uint64_t Acmd;
 
-// Vertex structure used for 3D models
 typedef struct {
-    short   ob[3];   /* x, y, z */
+    short   ob[3];     /* x, y, z */
     u16     flag;
-    short   tc[2];   /* texture coord s, t */
-    u8      cn[4];   /* color/normal r, g, b, a */
+    short   tc[2];     /* texture coord */
+    u8      cn[4];     /* color & alpha */
 } Vtx_t;
 
 typedef union {
-    Vtx_t          v;
-    long long int  force_structure_alignment;
+    Vtx_t       v;
+    long long   force_structure_alignment;
 } Vtx;
+
+typedef struct { int32_t m[4][4]; } Mtx;
 
 typedef struct {
     u8      col[3];
@@ -119,8 +120,8 @@ typedef struct {
 } Light_t;
 
 typedef union {
-    Light_t         l;
-    long long int   force_structure_alignment;
+    Light_t     l;
+    long long   force_structure_alignment;
 } Light;
 
 // --- AUDIO DATA STRUCTURES ---
@@ -128,10 +129,10 @@ typedef s32 ALMicroTime;
 typedef s32 ALPan;
 
 typedef struct {
-    u8      *base;
-    u8      *cur;
-    s32     len;
-    s32     count;
+    u8 *base;
+    u8 *cur;
+    s32 len;
+    s32 count;
 } ALHeap;
 
 #define AL_ADPCM_WAVE   0
@@ -140,6 +141,7 @@ typedef struct {
 typedef struct { u32 start; u32 end; u32 count; } ALRawLoop;
 typedef struct { u32 start; u32 end; u32 count; s16 state[16]; } ALADPCMloop;
 typedef struct { u32 order; u32 npredictors; s16 book[1]; } ALADPCMBook;
+
 typedef struct { ALADPCMloop *loop; ALADPCMBook *book; } ALADPCMWaveInfo;
 
 typedef union {
