@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Injecting PI/DMA and Audio Heap Types into {types_path}...")
+    print(f"\nStep 2: Injecting Corrected Types into {types_path}...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -72,11 +72,11 @@ typedef struct {
 } OSMesgQueue;
 
 typedef struct {
-    OSMesg      hdr;         // Message header for queueing
-    u32         devAddr;     // Device (Cartridge) address
-    void        *dramAddr;   // Memory address
-    u32         size;        // Size of transfer
-    OSMesgQueue *retQueue;   // Queue to notify when DMA is done
+    OSMesg      hdr;
+    u32         devAddr;
+    void        *dramAddr;
+    u32         size;
+    OSMesgQueue *retQueue;
 } OSIoMesg;
 
 typedef struct {
@@ -135,8 +135,10 @@ typedef struct {
 } ALWaveTable;
 
 typedef struct { ALWaveTable *wavetable; u8 priority; } ALSound;
-typedef struct { u8 volume; u8 pan; u8 priority; soundCount; ALSound *sounds[1]; } ALInstrument;
+// FIXED: Added u8 type specifier to soundCount
+typedef struct { u8 volume; u8 pan; u8 priority; u8 soundCount; ALSound *sounds[1]; } ALInstrument;
 typedef struct { s16 instCount; ALInstrument *instArray[1]; } ALBank;
+typedef struct { s16 revision; s16 bankCount; ALBank *bankArray[1]; } ALBankFile;
 typedef struct { s16 seqCount; u8 *data; } ALSeqFile;
 
 // --- AUDIO TYPES (ENGINE) ---
