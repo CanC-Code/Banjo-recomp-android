@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"📐 Adding math constants and finishing SDK dummies in {filepath}...")
+    print(f"🔊 Hardening the Audio Silencer in {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -12,7 +12,6 @@ def fix_n64_types():
 #include <math.h>
 
 // --- Math Constants ---
-// Modern Clang/NDK often hide these; we define them here for game logic.
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -60,20 +59,19 @@ typedef union Vtx {
 } Vtx;
 
 // --- SDK SILENCING: THE MEGA-LIST ---
+// Audio Guards
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
+#define _N_LIBAUDIO_H_
+#define __N_LIBAUDIO_H__
+#define _PR_N_LIBAUDIO_H_
+#define __PR_N_LIBAUDIO_H__
 #define _LIB_AUDIO_H_
 #define __LIB_AUDIO_H__
-#define _LIBAUDIO_
-#define __LIBAUDIO__
-#define _PR_LIBAUDIO_H_
-#define __PR_LIBAUDIO_H__
 #define _AL_H_
 #define __AL_H__
-#define _AL_
-#define __AL__
-#define _PR_AL_H_
-#define __PR_AL_H__
+
+// Graphics & OS Guards
 #define _GU_H_
 #define __GU_H__
 #define _GBI_H_
@@ -90,6 +88,7 @@ typedef union Vtx {
 #define __SPRITE_H__
 
 // --- Our Custom Dummy Definitions ---
+// Audio Globals & Heaps
 typedef struct { u8 data[1024]; } ALGlobals;
 typedef struct { u8 data[64]; }   ALHeap;
 typedef struct { u8 data[64]; }   ALBank;
@@ -99,6 +98,13 @@ typedef struct { u8 data[64]; }   ALSeqPlayer;
 typedef struct { u8 data[128]; }  ALSeqpConfig;
 typedef struct { s16 data[16]; }  ADPCM_STATE;
 
+// Missing Synth Internal States
+typedef struct { u8 data[128]; }  RESAMPLE_STATE;
+typedef struct { u8 data[128]; }  ENVMIX_STATE;
+typedef struct { u8 data[128]; }  POLEF_STATE;
+typedef struct { u8 data[128]; }  FILTER_STATE;
+
+// Graphics / Other
 typedef struct { u8 data[128]; } Image;
 typedef struct { u8 data[32]; }  Light;
 typedef struct { u8 data[64]; }  PositionalLight;
@@ -154,7 +160,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with math constants!")
+    print("✅ n64_types.h updated for the Audio Boss!")
 
 if __name__ == '__main__':
     fix_n64_types()
