@@ -40,16 +40,14 @@ jobs:
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
-          # Ensure this script has 'import' (lowercase) fixed
+          # Ensure this script uses lowercase 'import'
           python3 scripts/generate_manifest.py
 
       - name: 🐘 Build Full Game APK
         run: |
+          # Use the system 'gradle' command since 'gradlew' is missing from the repo
           cd Android
-          chmod +x gradlew
-          # 'clean' ensures CMake re-evaluates the EXCLUDE_GAME_SRC flag
-          # '--info' allows us to see the 'message(STATUS ...)' logs from CMakeLists.txt
-          ./gradlew clean assembleDebug \
+          gradle clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
             --info \
             --stacktrace
