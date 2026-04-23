@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\\nStep 2: Injecting Math Constants and Kernel Types into {types_path}...")
+    print(f"\\nStep 2: Injecting Thread States and OS Globals into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -33,12 +33,9 @@ def fix_n64_types():
 #include <math.h>
 
 // --- MATH CONSTANTS ---
-// Explicitly define M_PI if the compiler's math.h is being shy
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
-// Degrees to Radians conversion used in many N64 games
 #ifndef M_DTOR
 #define M_DTOR 0.017453292519943295
 #endif
@@ -89,6 +86,12 @@ typedef struct {
 typedef struct {
     u32 type; u32 baseAddr; u8 latency; u8 pulse; u8 pageSize; u8 relDuration;
 } OSPiHandle;
+
+// OSThread States
+#define OS_STATE_STOPPED    1
+#define OS_STATE_RUNNABLE   2
+#define OS_STATE_RUNNING    4
+#define OS_STATE_WAITING    8
 
 typedef struct OSThread_s {
     struct OSThread_s *next;
@@ -177,11 +180,13 @@ typedef struct { ALVoice *pvoice; f32 unityPitch; } N_ALVoice;
 typedef struct { void *next; s32 delta; u32 type; ALWaveTable *wave; f32 unity; } ALStartParam;
 typedef struct { void *next; s32 delta; u32 type; ALWaveTable *wave; f32 pitch; f32 unity; s16 volume; ALPan pan; u8 fxMix; s32 samples; } ALStartParamAlt;
 
-// --- PROTOTYPES ---
+// --- PROTOTYPES & GLOBALS ---
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern ALSyn *n_syn;
+extern OSThread *__osRunningThread; // Pointer to the currently active thread
+
 void n_alEnvmixerParam(ALVoice *v, s32 p, void *ptr);
 void* __n_allocParam(void);
 s32 _n_timeToSamples(ALMicroTime t);
