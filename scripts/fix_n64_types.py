@@ -20,7 +20,7 @@ def fix_n64_types():
                 f.write("// Silenced by fix_n64_types.py\n")
             print(f"  ✅ {header}")
 
-    print(f"\nStep 2: Updating {types_path} with Complete Audio Payloads...")
+    print(f"\nStep 2: Updating {types_path} with Kernel Structures...")
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
 
@@ -66,10 +66,28 @@ typedef s32  OSPri;
 typedef void* OSMesg;
 typedef struct { u32 valid; u32 msgCount; OSMesg *msg; } OSMesgQueue;
 typedef struct { OSMesg hdr; u32 devAddr; void *dramAddr; u32 size; OSMesgQueue *retQueue; } OSIoMesg;
+
+// Thread Structure (Expanded from logs)
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri             priority;
+    struct OSThread_s **queue;
+    struct OSThread_s *tnext;
+    u16               state;
+    u16               flags;
+    s32               id;
+    int               fp;
+} OSThread;
+
+// Thread States
+#define OS_STATE_STOPPED    1
+#define OS_STATE_RUNNABLE   2
+#define OS_STATE_RUNNING    4
+#define OS_STATE_WAITING    8
+
 typedef struct { u8 data[32]; }   OSContPad;
 typedef struct { u32 type; u32 baseAddr; u8 extra[32]; } OSPiHandle;
 typedef struct { u8 data[128]; }  OSTask;
-typedef struct { u8 data[4096]; } OSThread;
 
 // --- GRAPHICS TYPES ---
 typedef uint64_t Gfx;
@@ -92,25 +110,21 @@ typedef struct ALParam_s {
     struct ALParam_s *next;
     s32              delta;
     u32              type;
-    union {
-        ALWaveTable *wave;
-        void        *ptr;
-    };
+    union { ALWaveTable *wave; void *ptr; };
     f32              unity;
 } ALStartParam;
 
-// Expanded for n_synstartvoiceparam.c
 typedef struct {
     struct ALParam_s *next;
     s32              delta;
     u32              type;
-    ALWaveTable      *wave;  // Added
-    f32              pitch; // Added
+    ALWaveTable      *wave;
+    f32              pitch;
     f32              unity;
     ALPan            pan;
     s16              volume;
     u8               fxMix;
-    s32              samples; // Added for N_AL timing
+    s32              samples;
 } ALStartParamAlt;
 
 typedef struct { s32 paramSamples; } ALSyn;
@@ -122,10 +136,16 @@ typedef struct { u8 data[64]; }   ALHeap;
 extern "C" {
 #endif
 
-extern ALSyn     *n_syn;
+// Kernel Globals
+extern OSThread *__osRunQueue;
+extern OSThread *__osRunningThread;
+extern ALSyn    *n_syn;
 extern ALGlobals *alGlobals;
 
-// Audio Internal Helper
+// Kernel Functions
+void __osEnqueueThread(OSThread **queue, OSThread *t);
+OSThread *__osPopThread(OSThread **queue);
+void __osDequeueThread(OSThread **queue, OSThread *t);
 s32 _n_timeToSamples(ALMicroTime t);
 
 #ifdef __cplusplus
