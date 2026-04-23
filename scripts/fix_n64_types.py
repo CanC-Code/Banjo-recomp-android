@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔧 Refining guards and struct tags in {filepath}...")
+    print(f"🔧 Applying N64 SDK header-silencing guards to {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -37,7 +37,6 @@ typedef uint64_t Gfx;
 typedef int32_t  Mtx_t[4][4];
 typedef struct Mtx { Mtx_t m; } Mtx;
 
-// Vtx: Standard N64 Vertex structure
 typedef struct Vtx_t {
     short           ob[3];
     unsigned short  flag;
@@ -50,45 +49,43 @@ typedef union Vtx {
     long long int  force_structure_alignment;
 } Vtx;
 
-// --- SDK Compatibility Guards ---
-// We use tagged structs and common SDK guard names to prevent redefinition errors.
+// --- SDK COMPATIBILITY: SILENCING ORIGINAL HEADERS ---
+// We define these guards to prevent the original PR/*.h headers 
+// from defining these types again.
 
 #ifndef _IMAGE_H_
-#ifndef __IMAGE_H__
 #define _IMAGE_H_
 #define __IMAGE_H__
 typedef struct Image { u8 data[128]; } Image;
 #endif
-#endif
 
-#ifndef _LIGHTS_H_
-#ifndef __LIGHTS_H__
-#define _LIGHTS_H_
-#define __LIGHTS_H__
+#ifndef _GU_H_
+#define _GU_H_
+#define __GU_H__
 typedef struct Light { u8 data[32]; } Light;
 typedef struct PositionalLight { u8 data[64]; } PositionalLight;
+typedef struct LookAt { u8 data[64]; } LookAt;
+typedef struct Hilite { u8 data[64]; } Hilite;
 #endif
+
+#ifndef _LIBAUDIO_H_
+#define _LIBAUDIO_H_
+#define __LIBAUDIO_H__
+typedef struct ALGlobals { u8 data[1024]; } ALGlobals;
+typedef struct ADPCM_STATE { s16 data[16]; } ADPCM_STATE;
 #endif
 
 #ifndef _OSTASK_H_
-#ifndef __OSTASK_H__
 #define _OSTASK_H_
 #define __OSTASK_H__
 typedef struct OSTask { u8 data[128]; } OSTask;
 #endif
-#endif
 
 #ifndef _SPRITE_H_
-#ifndef __SPRITE_H__
 #define _SPRITE_H_
 #define __SPRITE_H__
 typedef struct uSprite { u8 data[64]; } uSprite;
 #endif
-#endif
-
-typedef struct ADPCM_STATE { s16 data[16]; } ADPCM_STATE;
-typedef struct LookAt { u8 data[64]; } LookAt;
-typedef struct Hilite { u8 data[64]; } Hilite;
 
 // --- OS / Kernel Types ---
 typedef s32 OSPri;
@@ -102,7 +99,6 @@ typedef struct OSContPad {
 } OSContPad;
 
 #ifndef _OS_H_
-#ifndef __OS_H__
 #define _OS_H_
 #define __OS_H__
 typedef struct OSMesgQueue {
@@ -127,15 +123,6 @@ typedef struct OSThread {
     u8 data[4096];
 } OSThread;
 #endif
-#endif
-
-#ifndef _AL_H_
-#ifndef __AL_H__
-#define _AL_H_
-#define __AL_H__
-typedef struct ALGlobals { u8 data[1024]; } ALGlobals;
-#endif
-#endif
 
 // Boolean definitions
 #ifndef N64_BOOL_DEFINED
@@ -151,7 +138,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated with dual guards and struct tags!")
+    print("✅ n64_types.h updated with SDK-specific silencing guards!")
 
 if __name__ == '__main__':
     fix_n64_types()
