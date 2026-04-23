@@ -4,7 +4,6 @@ project("bkawrapper")
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
 # 1. Define sources
-# Added tools/rare_decompression.cpp to resolve linker errors for decompression functions
 set(VERIFICATION_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -23,17 +22,16 @@ target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
     ${CMAKE_CURRENT_SOURCE_DIR}/emulator
-    ${CMAKE_CURRENT_SOURCE_DIR}/tools       # Path to rare_decompression.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
     ${REPO_ROOT}/include
-    ${REPO_ROOT}/include/2.0L               # Removed /PR to prevent system header conflicts
-    # Keep rarezip if other project tools require it
+    ${REPO_ROOT}/include/2.0L
     ${REPO_ROOT}/tools/bk_rom_compressor/modules/rarezip
 )
 
 # 3. Compilation Options
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w" # Suppress warnings to focus on errors
+    "-w"
 )
 
 # 4. Linking
@@ -43,4 +41,5 @@ target_link_libraries(bkawrapper
     ${log-lib} 
     GLESv3 
     EGL
+    z         # <--- LINK ZLIB HERE to fix 'inflate' errors
 )
