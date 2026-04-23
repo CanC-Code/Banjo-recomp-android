@@ -1,14 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
-# 1. Define the option
-option(EXCLUDE_GAME_SRC "Exclude game source" ON)
+# 1. Force the Full Build flag
+option(EXCLUDE_GAME_SRC "Exclude game source" OFF) # Set to OFF for the real build
 
-# 2. Establish the Repo Root
-# Current: Android/app/src/main/cpp -> ../../../../../ -> Root
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
-get_filename_component(REAL_ROOT "${REPO_ROOT}" ABSOLUTE)
 
+# 2. Bridge Files (The "Engine Room")
 set(LIB_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -20,47 +18,30 @@ set(LIB_SOURCES
     "tools/rare_decompression.cpp" 
 )
 
-# 3. The Logic
-if(EXCLUDE_GAME_SRC)
-    message(STATUS "BKA-BUILD: Bridge only mode enabled.")
-else()
-    message(STATUS "BKA-BUILD: Attempting full game build...")
-    message(STATUS "BKA-BUILD: Looking for source in: ${REAL_ROOT}/src")
-
-    file(GLOB_RECURSE GAME_C "${REAL_ROOT}/src/*.c")
-    file(GLOB_RECURSE GAME_CPP "${REAL_ROOT}/src/*.cpp")
+# 3. Game Source (The "Body of the Car")
+if(NOT EXCLUDE_GAME_SRC)
+    message(STATUS "BKA-BUILD: Found source directory at ${REPO_ROOT}/src")
     
-    set(GAME_FILES ${GAME_C} ${GAME_CPP})
-    list(LENGTH GAME_FILES FILE_COUNT)
-
-    # --- FAIL-SAFE CHECK ---
-    if(FILE_COUNT EQUAL 0)
-        message(FATAL_ERROR "
-        CRITICAL ERROR: No game source files found! 
-        Looked in: ${REAL_ROOT}/src
-        Make sure the /src folder exists in your repository root.
-        ")
-    endif()
-
-    message(STATUS "BKA-BUILD: Found ${FILE_COUNT} files. Compiling...")
-    list(APPEND LIB_SOURCES ${GAME_FILES})
+    # This gathers every .c file we saw in your 'ls -R' output
+    file(GLOB_RECURSE GAME_C "${REPO_ROOT}/src/*.c")
+    list(APPEND LIB_SOURCES ${GAME_C})
+    
+    list(LENGTH LIB_SOURCES TOTAL_FILES)
+    message(STATUS "BKA-BUILD: Total files to compile: ${TOTAL_FILES}")
 endif()
 
 add_library(bkawrapper SHARED ${LIB_SOURCES})
 
-# 4. Includes
+# 4. Include Paths (The "Nerves")
 target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
-    ${CMAKE_CURRENT_SOURCE_DIR}/emulator
-    ${CMAKE_CURRENT_SOURCE_DIR}/tools
-    ${REAL_ROOT}/include
-    ${REAL_ROOT}/include/2.0L
-    ${REAL_ROOT}/src
-    ${REAL_ROOT}/tools/bk_rom_compressor/modules/rarezip
+    ${REPO_ROOT}/include
+    ${REPO_ROOT}/include/2.0L
+    ${REPO_ROOT}/src
 )
 
-# 5. Options & Linking
-target_compile_options(bkawrapper PRIVATE "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h" "-w" "-O3")
+# 5. Compile & Link
+target_compile_options(bkawrapper PRIVATE "-w" "-O3" "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h")
 find_library(log-lib log)
 target_link_libraries(bkawrapper android ${log-lib} GLESv3 EGL z)
