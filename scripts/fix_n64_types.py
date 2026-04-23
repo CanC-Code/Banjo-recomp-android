@@ -2,7 +2,7 @@ import os
 
 def fix_n64_types():
     filepath = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    print(f"🔊 Hardening the Audio Silencer in {filepath}...")
+    print(f"🚀 Deploying Nuclear Silencer to {filepath}...")
     
     content = """#ifndef N64_TYPES_H
 #define N64_TYPES_H
@@ -58,20 +58,22 @@ typedef union Vtx {
     long long int  force_structure_alignment;
 } Vtx;
 
-// --- SDK SILENCING: THE MEGA-LIST ---
-// Audio Guards
+// --- SDK SILENCING: THE NUCLEAR LIST ---
+// We define these guards so the real headers are skipped entirely.
 #define _LIBAUDIO_H_
 #define __LIBAUDIO_H__
 #define _N_LIBAUDIO_H_
 #define __N_LIBAUDIO_H__
+#define _PR_LIBAUDIO_H_
+#define __PR_LIBAUDIO_H__
 #define _PR_N_LIBAUDIO_H_
 #define __PR_N_LIBAUDIO_H__
-#define _LIB_AUDIO_H_
-#define __LIB_AUDIO_H__
+#define _N_SYNTH_H_
+#define __N_SYNTH_H__
+#define _SYNTHINTERNALS_H_
+#define __SYNTHINTERNALS_H__
 #define _AL_H_
 #define __AL_H__
-
-// Graphics & OS Guards
 #define _GU_H_
 #define __GU_H__
 #define _GBI_H_
@@ -82,36 +84,30 @@ typedef union Vtx {
 #define __OS_H__
 #define _ULTRA64_H_
 #define __ULTRA64_H__
-#define _OSTASK_H_
-#define __OSTASK_H__
-#define _SPRITE_H_
-#define __SPRITE_H__
 
 // --- Our Custom Dummy Definitions ---
-// Audio Globals & Heaps
-typedef struct { u8 data[1024]; } ALGlobals;
-typedef struct { u8 data[64]; }   ALHeap;
-typedef struct { u8 data[64]; }   ALBank;
-typedef struct { u8 data[64]; }   ALBankFile;
-typedef struct { u8 data[64]; }   ALSeq;
-typedef struct { u8 data[64]; }   ALSeqPlayer;
-typedef struct { u8 data[128]; }  ALSeqpConfig;
-typedef struct { s16 data[16]; }  ADPCM_STATE;
+// Typedefs are more stable when using tag names (e.g., ALHeap_s)
+typedef struct ALGlobals_s { u8 data[1024]; } ALGlobals;
+typedef struct ALHeap_s    { u8 data[64]; }   ALHeap;
+typedef struct ALBank_s    { u8 data[64]; }   ALBank;
+typedef struct ALBankFile_s { u8 data[64]; }  ALBankFile;
+typedef struct ALSeq_s     { u8 data[64]; }   ALSeq;
+typedef struct ALSeqPlayer_s { u8 data[64]; } ALSeqPlayer;
+typedef struct ALSeqpConfig_s { u8 data[128]; } ALSeqpConfig;
+typedef struct { s16 data[16]; } ADPCM_STATE;
 
-// Missing Synth Internal States
-typedef struct { u8 data[128]; }  RESAMPLE_STATE;
-typedef struct { u8 data[128]; }  ENVMIX_STATE;
-typedef struct { u8 data[128]; }  POLEF_STATE;
-typedef struct { u8 data[128]; }  FILTER_STATE;
+// Audio Synth States
+typedef struct { u8 data[128]; } RESAMPLE_STATE;
+typedef struct { u8 data[128]; } ENVMIX_STATE;
+typedef struct { u8 data[128]; } POLEF_STATE;
+typedef struct { u8 data[128]; } FILTER_STATE;
 
 // Graphics / Other
 typedef struct { u8 data[128]; } Image;
 typedef struct { u8 data[32]; }  Light;
 typedef struct { u8 data[64]; }  PositionalLight;
 typedef struct { u8 data[64]; }  LookAt;
-typedef struct { u8 data[64]; }  Hilite;
 typedef struct { u8 data[128]; } OSTask;
-typedef struct { u8 data[64]; }  uSprite;
 
 // --- OS / Kernel Types ---
 typedef s32 OSPri;
@@ -160,7 +156,7 @@ typedef int n64_bool;
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
         
-    print("✅ n64_types.h updated for the Audio Boss!")
+    print("✅ n64_types.h updated with the Nuclear Silencer!")
 
 if __name__ == '__main__':
     fix_n64_types()
