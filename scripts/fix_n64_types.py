@@ -179,6 +179,7 @@ typedef struct ALParam_s {
 
 typedef struct ALPVoice_s ALPVoice;
 typedef ALPVoice PVoice;
+typedef ALPVoice N_PVoice;
 
 typedef struct {
     struct ALParam_s *next;
@@ -237,7 +238,7 @@ typedef struct {
 } ALRawLoop;
 
 typedef struct {
-    void *loop;
+    ALRawLoop *loop;
 } ALRawWaveInfo;
 
 typedef struct ALWaveTable_s {
@@ -440,6 +441,7 @@ typedef struct ALCSPlayer_s {
     u8           reserved[1024 - sizeof(ALCSeq*) - sizeof(f32)];
 } ALCSPlayer;
 
+typedef ALCSPlayer ALSeqPlayer;
 typedef ALCSPlayer N_ALCSPlayer;
 typedef ALCSPlayer N_ALSeqPlayer;
 
@@ -450,9 +452,31 @@ typedef struct N_ALVoice_s {
     s16                 unityPitch;
 } N_ALVoice;
 
+typedef N_ALVoice ALVoice;
+
 typedef struct ALPVoice_s {
     s32 offset;
 } ALPVoice;
+
+// --- ALVoiceState ---
+typedef struct ALVoiceState_s {
+    struct ALVoiceState_s *next;
+    ALVoice               *voice;
+    ALSound               *sound;
+    ALMicroTime           envEndTime;
+    f32                   pitch;
+    f32                   vibrato;
+    f32                   tremolo;
+    u8                    state;
+    u16                   key;
+    u8                    velocity;
+    ALPan                 pan;
+    u8                    volume;
+    u8                    priority;
+    u8                    bank;
+    u8                    inst;
+    u8                    unk[16];
+} ALVoiceState;
 
 typedef struct {
     s32          delta;
@@ -496,14 +520,16 @@ typedef struct {
     ADPCM_STATE *lstate;
     ALWaveTable *table;
     s32         bookSize;
-    ALRawLoop   loop;
-    void        *dma;
+    ALADPCMloop loop;
+    ALDMAproc   dma;
     void        *dmaState;
     s32         sample;
     s32         lastsam;
     s32         first;
     s32         memin;
 } ALLoadFilter;
+
+typedef ALLoadFilter N_ALLoadFilter;
 
 // Filter Sub-States
 typedef struct {
@@ -633,6 +659,7 @@ typedef struct {
 } ALAuxBus;
 
 typedef ALAuxBus ALMainBus;
+typedef ALAuxBus N_ALAuxBus;
 
 typedef struct {
     ALFilter    filter;
@@ -651,9 +678,11 @@ typedef struct {
 // --- AUDIO CONSTANTS ---
 #define AL_DECODER_IN             outp
 #define AL_RESAMPLER_IN           outp
+#define ADPCMVSIZE                8
 #define ADPCMFSIZE                9
 #define ADPCMFBYTES               9
 #define LFSAMPLES                 4
+#define FIXED_SAMPLE              160
 
 #define AL_BANK_VERSION           1
 #define AL_UNK18_EVT              18
@@ -756,7 +785,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added ALLoadFilter structs and ADPCM decode constants.")
+    print("✅ n64_types.h updated: Corrected DMA pointer, injected VoiceStates, and aligned N_ struct definitions.")
 
 if __name__ == '__main__':
     fix_n64_types()
