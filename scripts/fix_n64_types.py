@@ -19,7 +19,7 @@ def fix_n64_types():
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py to prevent redeclaration conflicts\n")
 
-    print(f"\nStep 2: Injecting Heavy-Duty N64 types into {types_path}...")
+    print(f"\nStep 2: Injecting Complete Audio Synthesis types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -55,15 +55,17 @@ typedef struct {
     int32_t m[4][4];
 } Mtx;
 
-// --- OS THREAD STATE FLAGS ---
+// --- OS TYPES & INTERRUPTS ---
 #define OS_STATE_STOPPED    1
 #define OS_STATE_RUNNABLE   2
 #define OS_STATE_RUNNING    4
 #define OS_STATE_WAITING    8
 
-// --- OS & KERNEL TYPES ---
 typedef s32 OSPri;
 typedef void* OSMesg;
+typedef u32 OSIntMask;
+
+#define OS_IM_NONE          0
 
 typedef struct OSMesgQueue_s {
     u32 valid;
@@ -82,54 +84,7 @@ typedef struct OSThread_s {
     int fp;
 } OSThread;
 
-typedef struct OSIoMesg_s {
-    OSMesg      hdr;
-    u32         devAddr;
-    void        *dramAddr;
-    u32         size;
-    OSMesgQueue *retQueue;
-} OSIoMesg;
-
-typedef struct OSPiHandle_s {
-    u8  type;
-    u32 baseAddr;
-    u32 latency;
-    u32 pulse;
-    u32 pageSize;
-    u32 relDuration;
-    u32 domain;
-} OSPiHandle;
-
-// --- CONTROLLER INPUT TYPES ---
-typedef struct {
-    u16 button;
-    s8  stick_x;
-    s8  stick_y;
-    u8  errno;
-} OSContPad;
-
-typedef struct {
-    u8  type;
-    u8  status;
-    u8  errno;
-} OSContStatus;
-
-// --- GRAPHICS (GBI) ---
-typedef uint64_t Gfx;
-
-typedef struct {
-    short ob[3];
-    u16 flag;
-    short tc[2];
-    u8 cn[4];
-} Vtx_t;
-
-typedef union {
-    Vtx_t v;
-    long long force_alignment;
-} Vtx;
-
-// --- AUDIO TYPES ---
+// --- AUDIO BASE TYPES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 typedef uint64_t Acmd;
@@ -141,90 +96,118 @@ typedef struct {
     s32 count;
 } ALHeap;
 
-// AL filter event codes
-#define AL_FILTER_ADD_UPDATE       8
-#define AL_FILTER_START_VOICE      7
-#define AL_FILTER_START_VOICE_ALT  9
-#define AL_FILTER_ADD_SOURCE       6
-#define ERR_ALSYN_NO_UPDATE        3000
-
-// AL aux bus buffer IDs
-#define AL_AUX_L_OUT               4
-#define AL_AUX_R_OUT               5
-
-// AL wave type codes
-#define AL_ADPCM_WAVE              0
-#define AL_RAW16_WAVE              1
-
-// AL event type codes
-#define AL_SEQ_REF_EVT             0
-#define AL_SEQP_PLAY_EVT           1
-#define AL_SEQ_END_EVT             2
-#define AL_TEMPO_EVT               3
-#define AL_SEQP_BANK_EVT           4
-#define AL_SEQP_SEQ_EVT            5
-#define AL_SEQ_MIDI_EVT            6
-#define AL_SEQP_MIDI_EVT           6
-#define AL_FILTER_START_VOICE_EVT  7
-#define AL_SEQP_META_EVT           12
-#define AL_SEQP_VOL_EVT            13
-#define AL_SEQP_STOPPING_EVT       14
-#define AL_CSP_LOOPSTART           10
-#define AL_CSP_LOOPEND             11
-#define AL_UNK18_EVT               0x18
-#define AL_TRACK_END               0xFF
-
-// AL MIDI status bytes
-#define AL_MIDI_NoteOff            0x80
-#define AL_MIDI_NoteOn             0x90
-#define AL_MIDI_PolyKeyPressure    0xA0
-#define AL_MIDI_ControlChange      0xB0
-#define AL_MIDI_ChannelModeSelect  0xB0
-#define AL_MIDI_ProgramChange      0xC0
-#define AL_MIDI_ChannelPressure    0xD0
-#define AL_MIDI_PitchBendChange    0xE0
-#define AL_MIDI_Meta               0xFF
-
-// AL MIDI meta event types
-#define AL_MIDI_META_TEMPO         0x51
-#define AL_MIDI_META_EOT           0x2F
-
-// Compact MIDI specific codes
-#define AL_CMIDI_BLOCK_CODE        0xFE
-#define AL_CMIDI_LOOPSTART_CODE    0x2E
-#define AL_CMIDI_LOOPEND_CODE      0x2F
-
-// AL bank version and error codes
-#define AL_BANK_VERSION            0x4231
-#define ERR_ALBNKFNEW              0x0500
+// --- FILTER SYSTEM ---
+typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
+typedef s32 (*ALSetParam)(void *, s32, void *);
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
-    int32_t (*handler)(void *, int16_t *, int32_t, int32_t, void *);
+    ALCmdHandler      handler;
+    ALSetParam        setParam;
+    s32               inp;
+    s32               outp;
+    s32               type;
 } ALFilter;
 
-#define AL_MAX_SOURCES  8
+// Filter Type IDs
+#define AL_SYN_FILTER       1
+#define AL_RESAMPLE_FILTER  2
+#define AL_ENV_FILTER       3
+#define AL_FX_FILTER        4
+#define AL_AUX_FILTER       5
+
+// Parameter IDs
+#define AL_FILTER_SET_WAVETABLE     1
+#define AL_FILTER_SET_PITCH         2
+#define AL_FILTER_SET_UNITY_PITCH   3
+#define AL_FILTER_START             4
+#define AL_FILTER_STOP              5
+
+// Filter output IDs
+#define AL_RESAMPLER_OUT            1
+
+// --- MIXER & ENVELOPE TYPES ---
+typedef struct ALParam_s {
+    struct ALParam_s    *next;
+    s32                 delta;
+    s32                 type;
+} ALParam;
 
 typedef struct {
-    ALFilter        filter;
-    ALFilter        **sources;
-    s32             sourceCount;
-} ALAuxBus;
+    ALFilter            filter;
+    ALParam             *ctrlList;
+    ALParam             *freeList;
+    // Mixer state
+    s16                 *outBuf;
+    s32                 lptr;
+} ALEnvMixer;
 
+// --- LINKED LISTS ---
+typedef struct ALLink_s {
+    struct ALLink_s *next;
+    struct ALLink_s *prev;
+} ALLink;
+
+// --- EVENT SYSTEM ---
+typedef struct {
+    ALLink      node;
+    s32         delta;
+    union {
+        u8      raw[16];
+    } evt;
+} ALEventListItem;
+
+typedef struct {
+    ALLink      freeList;
+    ALLink      allocList;
+} ALEvtq;
+
+typedef ALEvtq ALEventQueue;
+
+// --- EFFECTS (FX) SYSTEM ---
+typedef struct {
+    s32         input;
+    s32         output;
+    s32         fbcoef;
+    s32         ffcoef;
+    s32         gain;
+} ALDelay;
+
+typedef struct {
+    s32         maxDelay;
+    s32         section_count;
+    ALDelay     *delay;
+} ALFx;
+
+typedef struct {
+    s32         maxVoices;
+    s32         maxEvents;
+    s32         maxChannels;
+    s32         sampleRate;
+    void        *params;
+} ALSynConfig;
+
+typedef void* (*ALSetFXParam)(void *, s32, void *);
+
+typedef struct {
+    ALFilter    filter;
+} ALLowPass;
+
+// FX Presets
+#define AL_FX_NONE          0
+#define AL_FX_SMALLROOM     1
+#define AL_FX_BIGROOM       2
+#define AL_FX_CHORUS        3
+#define AL_FX_FLANGE        4
+#define AL_FX_ECHO          5
+#define AL_FX_CUSTOM        6
+
+// --- PRE-EXISTING VOICES & SYNTH ---
 typedef struct PVoice_s {
     ALFilter    filter;
     struct PVoice_s *next;
     s32         offset;
 } PVoice;
-
-typedef struct N_ALVoice_s {
-    PVoice      *pvoice;
-    ALPan       pan;
-    u8          volume;
-    u8          fxMix;
-    f32         pitch;
-    f32         unityPitch;
-} N_ALVoice;
 
 typedef struct ALSyn_s {
     PVoice      *pVoiceList;
@@ -238,251 +221,13 @@ typedef struct ALGlobals_s {
     u8    reserved[1024];
 } ALGlobals;
 
-// --- AUDIO WAVE / SAMPLE TYPES ---
-typedef struct {
-    s32         order;
-    s32         npredictors;
-    s16         book[1];
-} ALADPCMBook;
-
-typedef struct {
-    u32         start;
-    u32         end;
-    u32         count;
-    s16         state[16];
-} ALADPCMloop;
-
-typedef struct {
-    u32         start;
-    u32         end;
-    u32         count;
-} ALRawLoop;
-
-typedef struct {
-    ALADPCMloop *loop;
-    ALADPCMBook *book;
-} ALADPCMWaveInfo;
-
-typedef struct {
-    ALRawLoop   *loop;
-} ALRAWWaveInfo;
-
-typedef struct {
-    u8          *base;
-    u32         baseLength;
-    s32         type;
-    u8          flags;
-    union {
-        ALADPCMWaveInfo adpcmWave;
-        ALRAWWaveInfo   rawWave;
-    } waveInfo;
-} ALWaveTable;
-
-// --- AUDIO BANK TYPES ---
-typedef struct {
-    s32         attackTime;
-    s32         decayTime;
-    s32         releaseTime;
-    u8          attackVolume;
-    u8          decayVolume;
-} ALEnvelope;
-
-typedef struct {
-    u8          velocityMin;
-    u8          velocityMax;
-    u8          keyMin;
-    u8          keyMax;
-    u8          keyBase;
-    u8          detune;
-} ALKeyMap;
-
-typedef struct {
-    ALEnvelope  *envelope;
-    ALKeyMap    *keyMap;
-    ALWaveTable *wavetable;
-    ALPan       pan;
-    u8          volume;
-    u8          flags;
-    u8          pad[2];
-} ALSound;
-
-typedef struct {
-    u8          volume;
-    u8          pan;
-    u8          priority;
-    u8          flags;
-    u8          tremType;
-    u8          tremRate;
-    u8          tremDepth;
-    u8          tremDelay;
-    u8          vibType;
-    u8          vibRate;
-    u8          vibDepth;
-    u8          vibDelay;
-    s16         bendRange;
-    s16         soundCount;
-    ALSound     **soundArray;
-} ALInstrument;
-
-typedef struct {
-    s16         instCount;
-    u8          flags;
-    u8          pad;
-    s32         sampleRate;
-    ALInstrument *percussion;
-    ALInstrument **instArray;
-} ALBank;
-
-typedef struct {
-    s32         revision;
-    s32         bankCount;
-    ALBank      **bankArray;
-} ALBankFile;
-
-// --- SEQUENCE FILE ---
-typedef struct {
-    u8  *offset;
-} ALSeqData;
-
-typedef struct {
-    s32         seqCount;
-    ALSeqData   seqArray[1];
-} ALSeqFile;
-
-// --- COMPACT MIDI SEQUENCE TYPES ---
-typedef struct {
-    u16         division;   
-    u16         trackCount;
-    u32         trackOffset[1];
-} ALCMidiHdr;
-
-typedef struct {
-    ALCMidiHdr  *base;
-    u32         trackEnd[16];
-    u32         trackPos[16];
-    u8          lastStatus[16];
-    s32         qnpt;       
-    u32         trackCount;
-    u32         validTracks;    
-    u32         lastDeltaTicks; 
-    u32         lastTicks;      
-    u32         deltaFlag;      
-    u8          *curBUPtr[16];  
-    u32         curBULen[16];   
-    u8          *curLoc[16];    
-    s32         evtDeltaTicks[16]; 
-} ALCSeq;
-
-typedef struct {
-    u32         curTick;
-    u8          *curLoc[16];
-    u32         lastStatus[16];
-    u32         validTracks;
-    u32         lastTicks;
-    u32         lastDeltaTicks;
-    u8          *curBUPtr[16];
-    u32         curBULen[16];
-    s32         evtDeltaTicks[16];
-} ALCSeqMarker;
-
-// --- AUDIO EVENT QUEUE TYPES ---
-typedef struct {
-    OSMesgQueue *msgQ;
-    u32          head;
-    u32          tail;
-    u32          count;
-} ALEvtq;
-
-typedef struct {
-    s32  ticks;
-    u8   status;
-    u8   byte1;
-    u8   byte2;
-    u32  duration; 
-} ALMidiMsg;
-
-typedef struct {
-    u8   status;
-    u8   type;
-    u8   byte1;
-    u8   byte2;
-    u8   byte3; 
-} ALTempoMsg;
-
-typedef struct {
-    ALBank  *bank;
-} ALSPBankMsg;
-
-typedef struct {
-    void    *seq; 
-} ALSPSeqMsg;
-
-typedef struct {
-    u8          vol;
-} ALSPVolMsg;
-
-typedef struct {
-    f32 unk0;
-    f32 unk4;
-} ALUnk18Msg;
-
+// --- EVENT DEFINITIONS ---
 typedef struct {
     s32  type;
     union {
-        ALMidiMsg   midi;
-        ALTempoMsg  tempo;
-        ALSPBankMsg spbank;
-        ALSPSeqMsg  spseq;
-        ALSPVolMsg  spvol;
-        ALUnk18Msg  unk18;
         u8          raw[16];
     } msg;
 } ALEvent;
-
-// --- CS PLAYER (compact sequence player) ---
-#define AL_MAX_CHANNELS 16
-
-typedef struct {
-    u8  unkA;
-    u8  pad[3];
-} ALChanState;
-
-typedef struct {
-    ALEvtq      evtq;
-    ALCSeq      *target;
-    s32         uspt;       
-    ALChanState chanState[AL_MAX_CHANNELS];
-    u8          reserved[128];
-} ALCSPlayer;
-
-typedef ALCSPlayer N_ALCSPlayer;
-
-typedef struct {
-    ALEvtq      evtq;
-    u8          reserved[512];
-} N_ALSeqPlayer;
-
-// --- AUDIO PARAM UPDATE STRUCTS ---
-typedef struct {
-    s32             delta;
-    void            *next;
-    s32             type;
-    ALWaveTable     *wave;
-    f32             unity;
-} ALStartParam;
-
-typedef struct {
-    s32             delta;
-    void            *next;
-    s32             type;
-    f32             unity;
-    ALPan           pan;
-    u8              volume;
-    u8              fxMix;
-    f32             pitch;
-    s32             samples;
-    ALWaveTable     *wave;
-} ALStartParamAlt;
 
 // --- EXTERNALS ---
 #ifdef __cplusplus
@@ -492,11 +237,13 @@ extern ALGlobals *alGlobals;
 extern ALSyn *n_syn;
 extern OSThread *__osRunningThread;
 
-void* __n_allocParam();
-void n_alEnvmixerParam(void *filter, s32 paramID, void *ptr);
-s32 _n_timeToSamples(ALMicroTime t);
-void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
-#define ALFailIf(cond, code) if(cond) return;
+void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
+void alLink(ALLink *ln, ALLink *to);
+void alUnlink(ALLink *ln);
+void alCopy(void *src, void *dst, s32 size);
+OSIntMask osSetIntMask(OSIntMask mask);
+void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
+
 #ifdef __cplusplus
 }
 #endif
@@ -507,7 +254,7 @@ void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Full-Spectrum Header Created: {types_path}")
+    print(f"✅ Audio Synthesis Engine Types Injected: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
