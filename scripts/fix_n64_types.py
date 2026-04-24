@@ -55,6 +55,12 @@ typedef struct {
     int32_t m[4][4];
 } Mtx;
 
+// --- OS THREAD STATE FLAGS ---
+#define OS_STATE_STOPPED    1
+#define OS_STATE_RUNNABLE   2
+#define OS_STATE_RUNNING    4
+#define OS_STATE_WAITING    8
+
 // --- OS & KERNEL TYPES ---
 typedef s32 OSPri;
 typedef void* OSMesg;
@@ -206,7 +212,6 @@ typedef struct {
 } ALWaveTable;
 
 // --- AUDIO PARAM UPDATE STRUCTS ---
-// Used by n_synstartvoice.c
 typedef struct {
     s32             delta;
     void            *next;
@@ -215,7 +220,6 @@ typedef struct {
     f32             unity;
 } ALStartParam;
 
-// Used by n_synstartvoiceparam.c
 typedef struct {
     s32             delta;
     void            *next;
