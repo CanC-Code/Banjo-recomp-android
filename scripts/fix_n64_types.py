@@ -157,20 +157,39 @@ typedef struct {
 #define AL_RAW16_WAVE              1
 
 // AL event type codes
+#define AL_SEQ_REF_EVT             0
+#define AL_SEQP_PLAY_EVT           1
+#define AL_SEQ_END_EVT             2
+#define AL_TEMPO_EVT               3
+#define AL_SEQP_BANK_EVT           4
+#define AL_SEQP_SEQ_EVT            5
+#define AL_SEQ_MIDI_EVT            6
+#define AL_SEQP_MIDI_EVT           6
+#define AL_FILTER_START_VOICE_EVT  7
+#define AL_CSP_LOOPSTART           10
+#define AL_CSP_LOOPEND             11
 #define AL_UNK18_EVT               0x18
-#define AL_SEQP_MIDI_EVT           0x06
-#define AL_SEQP_PLAY_EVT           0x01
-#define AL_SEQP_BANK_EVT           0x04
-#define AL_TEMPO_EVT               0x03
 #define AL_TRACK_END               0xFF
 
 // AL MIDI status bytes
+#define AL_MIDI_NoteOff            0x80
+#define AL_MIDI_NoteOn             0x90
+#define AL_MIDI_PolyKeyPressure    0xA0
 #define AL_MIDI_ControlChange      0xB0
 #define AL_MIDI_ChannelModeSelect  0xB0
+#define AL_MIDI_ProgramChange      0xC0
+#define AL_MIDI_ChannelPressure    0xD0
+#define AL_MIDI_PitchBendChange    0xE0
 #define AL_MIDI_Meta               0xFF
 
 // AL MIDI meta event types
 #define AL_MIDI_META_TEMPO         0x51
+#define AL_MIDI_META_EOT           0x2F
+
+// Compact MIDI specific codes
+#define AL_CMIDI_BLOCK_CODE        0xFE
+#define AL_CMIDI_LOOPSTART_CODE    0x2E
+#define AL_CMIDI_LOOPEND_CODE      0x2F
 
 // AL bank version and error codes
 #define AL_BANK_VERSION            0x4231
@@ -334,7 +353,6 @@ typedef struct {
     u32         trackOffset[1];
 } ALCMidiHdr;
 
-// ALCSeq: Expanded to include state tracking members required by cseq.c
 typedef struct {
     ALCMidiHdr  *base;
     u32         trackEnd[16];
@@ -342,15 +360,21 @@ typedef struct {
     u8          lastStatus[16];
     s32         qnpt;       
     u32         trackCount;
-    u32         validTracks;    // Track bitmask
-    u32         lastDeltaTicks; // Delta since last process
-    u32         lastTicks;      // Total ticks
-    u32         deltaFlag;      // Timing state flag
-    u8          *curBUPtr[16];  // Current track buffer pointers
-    u32         curBULen[16];   // Current track buffer lengths
-    u8          *curLoc[16];    // Current data locations
-    s32         evtDeltaTicks[16]; // Ticks remaining until next event
+    u32         validTracks;    
+    u32         lastDeltaTicks; 
+    u32         lastTicks;      
+    u32         deltaFlag;      
+    u8          *curBUPtr[16];  
+    u32         curBULen[16];   
+    u8          *curLoc[16];    
+    s32         evtDeltaTicks[16]; 
 } ALCSeq;
+
+typedef struct {
+    u32         curTick;
+    u8          *curLoc[16];
+    u32         lastStatus[16];
+} ALCSeqMarker;
 
 // --- AUDIO EVENT QUEUE TYPES ---
 typedef struct {
@@ -365,7 +389,7 @@ typedef struct {
     u8   status;
     u8   byte1;
     u8   byte2;
-    u8   pad;
+    u32  duration; // Required by cseq.c for NoteOn
 } ALMidiMsg;
 
 typedef struct {
@@ -373,11 +397,16 @@ typedef struct {
     u8   type;
     u8   byte1;
     u8   byte2;
+    u8   byte3; // Required for track-specific data
 } ALTempoMsg;
 
 typedef struct {
     ALBank  *bank;
 } ALSPBankMsg;
+
+typedef struct {
+    void    *seq; // Required for sequence changes
+} ALSPSeqMsg;
 
 typedef struct {
     f32 unk0;
@@ -390,6 +419,7 @@ typedef struct {
         ALMidiMsg   midi;
         ALTempoMsg  tempo;
         ALSPBankMsg spbank;
+        ALSPSeqMsg  spseq;
         ALUnk18Msg  unk18;
         u8          raw[16];
     } msg;
