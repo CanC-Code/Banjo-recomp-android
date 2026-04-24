@@ -138,7 +138,7 @@ typedef struct {
     ALMicroTime releaseTime;
     u8          attackVolume;
     u8          decayVolume;
-} ALEnv; // Short for Envelope in some headers
+} ALEnv;
 
 typedef struct {
     ALMicroTime attackTime;
@@ -254,7 +254,7 @@ typedef struct {
 
 typedef ALCSPlayer N_ALCSPlayer;
 
-// --- ADDITIONAL AUDIO TYPES FOR core1/audio/n_synstartvoice*.c ---
+// --- ADDITIONAL AUDIO TYPES FOR core1/audio/ ---
 typedef struct ALPVoice_s ALPVoice;
 
 typedef struct N_ALVoice_s {
@@ -288,29 +288,6 @@ typedef struct {
     ALWaveTable *wave;
 } ALStartParamAlt;
 
-// --- EVENTS ---
-typedef struct {
-    u32 ticks;
-    u8  status;
-    u8  byte1;
-    u8  byte2;
-    u32 duration;
-} ALMIDIEvent;
-
-typedef struct {
-    f32 unk0;
-    f32 unk4;
-} ALUnk18Event;
-
-typedef struct {
-    s32 type;
-    union {
-        ALMIDIEvent  midi;
-        ALUnk18Event unk18;
-        u8           raw[32];
-    } msg;
-} ALEvent;
-
 // --- MIXER & FILTERS ---
 typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
@@ -333,7 +310,7 @@ typedef struct {
 
 typedef struct {
     ALFilter    filter;
-    s32         paramSamples;   // used by n_synstartvoice*.c
+    s32         paramSamples;
     u8          reserved[1020];
 } ALSyn;
 
@@ -353,10 +330,15 @@ typedef struct {
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
 
-// Audio filter / param constants required by n_synstartvoice*.c
+// Audio filter / param constants (required by auxbus.c, n_synstartvoice*.c, etc.)
 #define AL_FILTER_START_VOICE       0x10
 #define AL_FILTER_START_VOICE_ALT   0x11
 #define AL_FILTER_ADD_UPDATE        0x20
+#define AL_FILTER_ADD_SOURCE        0x21   // <-- THIS WAS MISSING
+#define AL_FILTER_SET_SOURCE        0x22
+#define AL_FILTER_SET_VOL           0x23
+#define AL_FILTER_SET_PITCH         0x24
+#define AL_FILTER_SET_FX            0x25
 #define ERR_ALSYN_NO_UPDATE         100
 
 #ifdef __cplusplus
@@ -370,23 +352,6 @@ extern OSThread  *__osRunningThread;
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
-// Functions required by n_synstartvoice*.c
+// Functions required by core1/audio/
 void *__n_allocParam(void);
-void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
-
-#define ALFailIf(cond, err) if (cond) return;
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-"""
-
-    os.makedirs(os.path.dirname(types_path), exist_ok=True)
-    with open(types_path, 'w') as f:
-        f.write(content)
-    print(f"✅ n64_types.h fully updated with N_ALVoice, ALStartParam, ALStartParamAlt, paramSamples, and all missing audio constants/functions.")
-
-if __name__ == '__main__':
-    fix_n64_types()
+void n_alEnvm
