@@ -106,6 +106,9 @@ typedef struct {
     u32 domain;
 } OSPiHandle;
 
+typedef s32 (*ALDMAproc)(s32, s32, void *);
+typedef ALDMAproc (*ALDMANew)(void **);
+
 // --- CONTROLLER ---
 typedef struct {
     u16 button;
@@ -477,6 +480,12 @@ typedef struct ALFilter_s {
     s32               type;
 } ALFilter;
 
+typedef struct {
+    ALFilter filter;
+    s32      state;
+    void     *dma;
+} ALLoadFilter;
+
 // Filter Sub-States
 typedef struct {
     s16 fccoef[16];
@@ -486,6 +495,10 @@ typedef struct {
 typedef struct {
     s16 unk[16];
 } RESAMPLE_STATE;
+
+typedef struct {
+    s32 unk[16];
+} ENVMIX_STATE;
 
 typedef struct {
     ALFilter filter;
@@ -566,6 +579,15 @@ typedef struct ALEnvMixer_s {
     s32      wetamt;
     s32      cvolL;
     s32      cvolR;
+    
+    // Added Envelope parameters
+    s32      motion;
+    s32      ltgt;
+    s32      rtgt;
+    s32      lratm;
+    s32      lratl;
+    s32      ctrlTail;
+    ALFilter **sources;
 } ALEnvMixer;
 
 typedef struct {
@@ -622,6 +644,11 @@ typedef struct {
 #define AL_CACHE_ALIGN            15
 #define AL_EVTQ_END               0x7FFFFFFF
 
+#define AL_STOPPED                0
+#define AL_PLAYING                1
+#define AL_ADPCM                  10
+#define AL_ENVMIX                 11
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -633,6 +660,11 @@ extern OSThread  *__osRunningThread;
 extern s32 alFxParamHdl(void *, s32, void *);
 extern s32 alFxPull(void *, s16 *, s32, s32, void *);
 extern s32 alFxParam(void *, s32, void *);
+
+extern s32 alEnvmixerPull(void *, s16 *, s32, s32, void *);
+extern s32 alEnvmixerParam(void *, s32, void *);
+extern s32 alAdpcmPull(void *, s16 *, s32, s32, void *);
+extern s32 alLoadParam(void *, s32, void *);
 
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
@@ -655,7 +687,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added Audio Engine internal struct fields and missing constants.")
+    print("✅ n64_types.h updated: Added Envelope Mixer and ADPCM missing fields.")
 
 if __name__ == '__main__':
     fix_n64_types()
