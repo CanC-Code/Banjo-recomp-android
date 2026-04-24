@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Restores the 'offset' member to ALPVoice_s and removes the conflicting 
-    'extern s16 eqpower[]' declaration while keeping EQPOWER_LENGTH.
+    Restores precise audio linkage required by bkawrapper, including extended
+    ALPVoice envelope targets, corrected filter constants, and valid ALEvent mapping.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -178,7 +178,7 @@ typedef struct ALParam_s {
     union { f32 f; s32 i; } stillmoredata;
 } ALParam;
 
-// Filter Sub-States (declared early for ALPVoice)
+// Filter Sub-States
 typedef struct {
     s16 fccoef[16];
     s16 fcoff[16];
@@ -224,7 +224,11 @@ typedef struct ALPVoice_s {
     s32                  em_pan;
     s32                  em_dryamt;
     s32                  em_wetamt;
-    s32                  offset; // Restored for specific bkawrapper logic
+    s32                  em_lratm;
+    s32                  em_lratl;
+    s32                  em_rratm;
+    s32                  em_rratl;
+    s32                  offset;
 } ALPVoice;
 
 typedef ALPVoice PVoice;
@@ -395,7 +399,7 @@ typedef struct ALCSeqMarker_s {
     u32         evtDeltaTicks[16];
 } ALCSeqMarker;
 
-// --- EVENTS ---
+// --- EVENTS & PHASES ---
 #define AL_SEQP_API_EVT           0x00
 #define AL_SEQP_PLAY_EVT          0x01
 #define AL_SEQP_MIDI_EVT          0x02
@@ -405,6 +409,10 @@ typedef struct ALCSeqMarker_s {
 #define AL_SEQP_VOL_EVT           0x06  
 #define AL_SEQP_META_EVT          0x07  
 #define AL_SEQP_STOPPING_EVT      0x08  
+#define AL_SEQP_ENV_EVT           0x09
+#define AL_SEQP_PROG_EVT          0x0a
+#define AL_TREM_OSC_EVT           0x0b
+#define AL_VIB_OSC_EVT            0x0c
 
 #define AL_SEQ_REF_EVT            0x09
 #define AL_NOTE_END_EVT           0x0A
@@ -430,6 +438,11 @@ typedef struct ALCSeqMarker_s {
 #define AL_CMIDI_LOOPSTART_CODE   0x70
 #define AL_CMIDI_LOOPEND_CODE     0x71
 #define AL_CMIDI_BLOCK_CODE       0x72
+
+#define AL_PHASE_ATTACK           0
+#define AL_PHASE_DECAY            1
+#define AL_PHASE_SUSTAIN          2
+#define AL_PHASE_RELEASE          3
 
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
@@ -478,6 +491,15 @@ typedef struct {
         struct {
             struct N_ALVoice_s *voice;
         } note;
+        struct {
+            struct N_ALVoice_s *voice;
+            s32 delta;
+            s16 vol;
+        } vol;
+        struct {
+            struct ALVoiceState_s *vs;
+            void *oscState;
+        } osc;
         u8 raw[32];
     } msg;
 } ALEvent;
@@ -496,7 +518,7 @@ typedef struct {
     u8      maxChannels;
     u8      debugFlags;
     void    *initOsc;
-    void    *updateOsc;
+    s32     (*updateOsc)(void *, f32 *);
     void    *stopOsc;
     ALHeap  *heap;
 } ALSeqpConfig;
@@ -545,6 +567,7 @@ typedef struct ALVoiceHandler_s {
 typedef struct N_ALVoice_s {
     struct N_ALVoice_s *next;
     ALPVoice           *pvoice;
+    void               *clientPrivate;
     s16                 unityPitch;
 } N_ALVoice;
 
@@ -559,6 +582,9 @@ typedef struct ALVoiceState_s {
     f32                   pitch;
     f32                   vibrato;
     f32                   tremolo;
+    u8                    envPhase;
+    u8                    flags;
+    u16                   envGain;
     u8                    state;
     u16                   key;
     u8                    velocity;
@@ -574,7 +600,7 @@ typedef struct ALVoiceState_s {
 typedef struct ALCSPlayer_s {
     ALVoiceHandler   node;
     ALEvtq           evtq;
-    ALEventListItem  nextEvent;
+    ALEvent          nextEvent;
     ALChanState      *chanState;
     ALCSeq           *target;
     f32              uspt;
@@ -588,7 +614,7 @@ typedef struct ALCSPlayer_s {
     s32              frameTime;
     s32              curTime;
     void             *initOsc;
-    void             *updateOsc;
+    s32              (*updateOsc)(void *, f32 *);
     void             *stopOsc;
     u8               maxChannels;
     ALVoiceState     *vFreeList;
@@ -621,7 +647,6 @@ typedef struct {
     s32          samples;
     ALWaveTable *wave;
 } ALStartParamAlt;
-
 
 typedef struct {
     ALFilter    filter;
@@ -746,7 +771,6 @@ typedef struct ALEnvMixer_s {
     ALFilter **sources;
 } ALEnvMixer;
 
-
 typedef struct {
     ALSyn *drvr;
     u8    reserved[1024];
@@ -773,18 +797,22 @@ typedef struct {
 #define AL_MAIN_R_OUT             1
 
 #define AL_RESAMPLER_OUT           0
-#define AL_FILTER_SET_WAVETABLE    1
-#define AL_FILTER_SET_PITCH        2
-#define AL_FILTER_SET_UNITY_PITCH  3
-#define AL_FILTER_START            4
-#define AL_FILTER_SET_FXAMT        5
-#define AL_FILTER_SET_PAN          6
-#define AL_FILTER_SET_VOLUME       7
-
-#define AL_FILTER_RESET            8
-#define AL_FILTER_SET_SOURCE       9
-#define AL_FILTER_STOP_VOICE       10
-#define AL_FILTER_FREE_VOICE       11
+#define AL_FILTER_ADD_UPDATE      1
+#define AL_FILTER_SUB_UPDATE      2
+#define AL_FILTER_START           3
+#define AL_FILTER_STOP            4
+#define AL_FILTER_SET_VOL         5
+#define AL_FILTER_SET_VOLUME      5
+#define AL_FILTER_SET_PITCH       6
+#define AL_FILTER_SET_PAN         7
+#define AL_FILTER_SET_FXAMT       8
+#define AL_FILTER_SET_WAVETABLE   9
+#define AL_FILTER_FREE_VOICE      10
+#define AL_FILTER_SET_UNITY_PITCH 11
+#define AL_FILTER_RESET           12
+#define AL_FILTER_START_VOICE     13
+#define AL_FILTER_START_VOICE_ALT 14
+#define AL_FILTER_SET_SOURCE      15
 
 #define AL_FX                 0
 #define AL_FX_SMALLROOM       1
@@ -794,12 +822,7 @@ typedef struct {
 #define AL_FX_FLANGE          5
 #define AL_FX_CUSTOM          6
 
-#define AL_FILTER_ADD_SOURCE      0x01
-#define AL_FILTER_START_VOICE     0x10
-#define AL_FILTER_START_VOICE_ALT 0x11
-#define AL_FILTER_ADD_UPDATE      0x20
 #define ERR_ALSYN_NO_UPDATE       100
-
 #define AL_TRACK_END              0xFF
 
 #define AL_CACHE_ALIGN            15
@@ -865,7 +888,7 @@ void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Removed conflicting 'eqpower' extern declaration.")
+    print("✅ n64_types.h updated: Corrected ALEvent queue typing, filter constants, and ALPVoice struct padding.")
 
 if __name__ == '__main__':
     fix_n64_types()
