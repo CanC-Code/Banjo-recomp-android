@@ -145,12 +145,26 @@ typedef struct {
 #define AL_FILTER_ADD_UPDATE       8
 #define AL_FILTER_START_VOICE      7
 #define AL_FILTER_START_VOICE_ALT  9
+#define AL_FILTER_ADD_SOURCE       6
 #define ERR_ALSYN_NO_UPDATE        3000
+
+// AL aux bus buffer IDs (RSP DMEM segment indices)
+#define AL_AUX_L_OUT               4
+#define AL_AUX_R_OUT               5
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
     int32_t (*handler)(void *, int16_t *, int32_t, int32_t, void *);
 } ALFilter;
+
+// Must be defined before ALAuxBus
+#define AL_MAX_SOURCES  8
+
+typedef struct {
+    ALFilter        filter;
+    ALFilter        **sources;
+    s32             sourceCount;
+} ALAuxBus;
 
 typedef struct PVoice_s {
     ALFilter    filter;
