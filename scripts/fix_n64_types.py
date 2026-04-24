@@ -3,7 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers
-    and resolve missing AL_SEQP events, audio engine types, struct members, and constants.
+    and resolve missing ALPVoice physical state fields, ALCSPlayer sequencing states,
+    and missing event definitions.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -177,7 +178,54 @@ typedef struct ALParam_s {
     union { f32 f; s32 i; } stillmoredata;
 } ALParam;
 
-typedef struct ALPVoice_s ALPVoice;
+// Filter Sub-States (declared early for ALPVoice)
+typedef struct {
+    s16 fccoef[16];
+    s16 fcoff[16];
+} POLEF_STATE;
+
+typedef struct {
+    s16 unk[16];
+} RESAMPLE_STATE;
+
+typedef struct {
+    s32 unk[16];
+} ENVMIX_STATE;
+
+// The Physical Voice definition mapping engine state to audio filters
+typedef struct ALPVoice_s {
+    ALLink               node;
+    struct N_ALVoice_s   *vvoice;
+    ALLink               pfreeNode;
+    ADPCM_STATE          *dc_state;
+    ADPCM_STATE          *dc_lstate;
+    ALDMAproc            dc_dma;
+    void                 *dc_dmaState;
+    s32                  dc_lastsam;
+    s32                  dc_first;
+    s32                  dc_memin;
+    RESAMPLE_STATE       *rs_state;
+    f32                  rs_delta;
+    s32                  rs_first;
+    f32                  rs_ratio;
+    s32                  rs_upitch;
+    ENVMIX_STATE         *em_state;
+    s32                  em_first;
+    s32                  em_motion;
+    s32                  em_volume;
+    s32                  em_ltgt;
+    s32                  em_rtgt;
+    s32                  em_cvolL;
+    s32                  em_cvolR;
+    ALParam              *em_ctrlList;
+    ALParam              *em_ctrlTail;
+    s32                  em_delta;
+    s32                  em_segEnd;
+    s32                  em_pan;
+    s32                  em_dryamt;
+    s32                  em_wetamt;
+} ALPVoice;
+
 typedef ALPVoice PVoice;
 typedef ALPVoice N_PVoice;
 
@@ -347,6 +395,7 @@ typedef struct ALCSeqMarker_s {
 } ALCSeqMarker;
 
 // --- EVENTS ---
+#define AL_SEQP_API_EVT           0x00
 #define AL_SEQP_PLAY_EVT          0x01
 #define AL_SEQP_MIDI_EVT          0x02
 #define AL_SEQP_STOP_EVT          0x03
@@ -355,6 +404,9 @@ typedef struct ALCSeqMarker_s {
 #define AL_SEQP_VOL_EVT           0x06  
 #define AL_SEQP_META_EVT          0x07  
 #define AL_SEQP_STOPPING_EVT      0x08  
+
+#define AL_SEQ_REF_EVT            0x09
+#define AL_NOTE_END_EVT           0x0A
 
 #define AL_SEQ_MIDI_EVT           0x02
 #define AL_SEQ_END_EVT            0x04
@@ -422,6 +474,9 @@ typedef struct {
             u8 byte2;
             u8 byte3;
         } tempo;
+        struct {
+            struct N_ALVoice_s *voice;
+        } note;
         u8 raw[32];
     } msg;
 } ALEvent;
@@ -479,30 +534,11 @@ typedef struct {
 
 typedef ALSyn ALSynth;
 
-// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
-typedef struct ALCSPlayer_s {
-    ALEvtq       evtq;
-    ALChanState  chanState[16];
-    ALCSeq       *target;
-    f32          uspt;
-    ALBank       *bank;
-    ALSyn        *drvr;
-    s32          chanMask;
-    s32          nextDelta;
-    s32          state;
-    u16          vol;
-    u8           debugFlags;
-    s32          frameTime;
-    s32          curTime;
-    void         *initOsc;
-    void         *updateOsc;
-    void         *stopOsc;
-    u8           reserved[512];
-} ALCSPlayer;
-
-typedef ALCSPlayer ALSeqPlayer;
-typedef ALCSPlayer N_ALCSPlayer;
-typedef ALCSPlayer N_ALSeqPlayer;
+typedef struct ALVoiceHandler_s {
+    struct ALVoiceHandler_s *next;
+    void (*handler)(void *);
+    void *clientData;
+} ALVoiceHandler;
 
 // --- N_ALVoice / voice param structs ---
 typedef struct N_ALVoice_s {
@@ -512,10 +548,6 @@ typedef struct N_ALVoice_s {
 } N_ALVoice;
 
 typedef N_ALVoice ALVoice;
-
-typedef struct ALPVoice_s {
-    s32 offset;
-} ALPVoice;
 
 // --- ALVoiceState ---
 typedef struct ALVoiceState_s {
@@ -536,6 +568,37 @@ typedef struct ALVoiceState_s {
     u8                    inst;
     u8                    unk[16];
 } ALVoiceState;
+
+// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
+typedef struct ALCSPlayer_s {
+    ALVoiceHandler   node;
+    ALEvtq           evtq;
+    ALEventListItem  nextEvent;
+    ALChanState      *chanState;
+    ALCSeq           *target;
+    f32              uspt;
+    ALBank           *bank;
+    ALSyn            *drvr;
+    s32              chanMask;
+    s32              nextDelta;
+    s32              state;
+    u16              vol;
+    u8               debugFlags;
+    s32              frameTime;
+    s32              curTime;
+    void             *initOsc;
+    void             *updateOsc;
+    void             *stopOsc;
+    u8               maxChannels;
+    ALVoiceState     *vFreeList;
+    ALVoiceState     *vAllocHead;
+    ALVoiceState     *vAllocTail;
+    u8               reserved[512];
+} ALCSPlayer;
+
+typedef ALCSPlayer ALSeqPlayer;
+typedef ALCSPlayer N_ALCSPlayer;
+typedef ALCSPlayer N_ALSeqPlayer;
 
 typedef struct {
     s32          delta;
@@ -575,20 +638,6 @@ typedef struct {
 } ALLoadFilter;
 
 typedef ALLoadFilter N_ALLoadFilter;
-
-// Filter Sub-States
-typedef struct {
-    s16 fccoef[16];
-    s16 fcoff[16];
-} POLEF_STATE;
-
-typedef struct {
-    s16 unk[16];
-} RESAMPLE_STATE;
-
-typedef struct {
-    s32 unk[16];
-} ENVMIX_STATE;
 
 typedef struct {
     ALFilter filter;
@@ -712,6 +761,7 @@ typedef struct {
 #define LFSAMPLES                 4
 #define FIXED_SAMPLE              160
 #define AL_USEC_PER_FRAME         16667
+#define EQPOWER_LENGTH            128
 
 #define AL_BANK_VERSION           1
 #define AL_UNK18_EVT              18
@@ -770,6 +820,7 @@ extern "C" {
 extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 extern OSThread  *__osRunningThread;
+extern s16       eqpower[];
 
 extern Acmd *alFxPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alFxParamHdl(void *, s32, void *);
@@ -797,7 +848,7 @@ void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
 void *__n_allocParam(void);
-void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
+void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
 
 #define ALFailIf(cond, err) if (cond) return;
 
@@ -814,7 +865,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Resolved ALSyn auxBus, ALSeqpConfig, ALCSPlayer states, and AL_USEC_PER_FRAME.")
+    print("✅ n64_types.h updated: Resolved ALPVoice and ALCSPlayer members, added event constants.")
 
 if __name__ == '__main__':
     fix_n64_types()
