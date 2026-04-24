@@ -135,7 +135,9 @@ typedef struct {
     s32 count;
 } ALHeap;
 
+// AL filter event codes
 #define AL_FILTER_ADD_UPDATE       8
+#define AL_FILTER_START_VOICE      7
 #define AL_FILTER_START_VOICE_ALT  9
 #define ERR_ALSYN_NO_UPDATE        3000
 
@@ -170,6 +172,62 @@ typedef struct ALGlobals_s {
     ALSyn *drvr;
     u8    reserved[1024];
 } ALGlobals;
+
+// --- AUDIO WAVE / SAMPLE TYPES ---
+typedef struct {
+    s32         order;
+    s32         npredictors;
+    s16         book[1];
+} ALADPCMBook;
+
+typedef struct {
+    u32         start;
+    u32         end;
+    u32         count;
+    s16         state[16];
+} ALADPCMloop;
+
+typedef struct {
+    u32         start;
+    u32         end;
+    u32         count;
+} ALRawLoop;
+
+typedef struct {
+    s32         type;
+    union {
+        ALADPCMloop adpcmloop;
+        ALRawLoop   rawloop;
+    } lp;
+    union {
+        ALADPCMBook *adpcmbook;
+        void        *nothing;
+    } bk;
+} ALWaveTable;
+
+// --- AUDIO PARAM UPDATE STRUCTS ---
+// Used by n_synstartvoice.c
+typedef struct {
+    s32             delta;
+    void            *next;
+    s32             type;
+    ALWaveTable     *wave;
+    f32             unity;
+} ALStartParam;
+
+// Used by n_synstartvoiceparam.c
+typedef struct {
+    s32             delta;
+    void            *next;
+    s32             type;
+    f32             unity;
+    ALPan           pan;
+    u8              volume;
+    u8              fxMix;
+    f32             pitch;
+    s32             samples;
+    ALWaveTable     *wave;
+} ALStartParamAlt;
 
 // --- EXTERNALS ---
 #ifdef __cplusplus
