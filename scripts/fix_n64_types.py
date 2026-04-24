@@ -13,21 +13,19 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Silencing SDK headers to prevent conflicts...")
+    print("Step 1: Silencing SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py\n")
 
-    print(f"Step 2: Injecting 'Foundation-First' types into {types_path}...")
+    print(f"Step 2: Injecting Foundation Types and Math Constants into {types_path}...")
     
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
 /**
- * FOUNDATION TYPES (Must be at the very top!)
- * These must be defined before any headers are included to prevent
- * errors in recursive inclusion chains.
+ * FOUNDATION TYPES
  */
 typedef unsigned char      u8;
 typedef signed char        s8;
@@ -42,6 +40,12 @@ typedef double             f64;
 
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h>
+
+// --- MATH CONSTANTS ---
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #ifndef TRUE
 #define TRUE 1
@@ -254,7 +258,7 @@ void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Foundation-First Header Generated: {types_path}")
+    print(f"✅ Final Header Generated with M_PI: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
