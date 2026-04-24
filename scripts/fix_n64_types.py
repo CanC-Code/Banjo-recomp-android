@@ -1,9 +1,13 @@
 import os
 
 def fix_n64_types():
+    """
+    Generates a consolidated n64_types.h file to replace conflicting headers
+    and resolve missing AL_SEQP events and union members.
+    """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
-    # Wipe original conflicting headers
+    # Wipe original conflicting headers to prevent redefinition errors
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -140,11 +144,10 @@ typedef struct {
 
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
-typedef u8 ALPan;  // Changed to u8 to match libaudio.h
+typedef u8 ALPan; 
 
 typedef u64 Acmd;
 
-// ADPCM_STATE definition (added to match libaudio.h)
 typedef struct {
     s32 unk0;
     s32 unk4;
@@ -331,15 +334,16 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_SEQP_PLAY_EVT          0x01
 #define AL_SEQP_MIDI_EVT          0x02
 #define AL_SEQP_STOP_EVT          0x03
-#define AL_SEQP_BANK_EVT          0x04  // Added for cspsetbank.c
-#define AL_SEQP_SEQ_EVT           0x05  // Added for cspsetseq.c
-#define AL_SEQP_VOL_EVT           0x06  // Added for cspsetvol.c
-#define AL_SEQP_META_EVT          0x07  // Added for cspsettempo.c
-#define AL_SEQP_STOPPING_EVT      0x08  // Added for cspstop.c
+#define AL_SEQP_BANK_EVT          0x04  
+#define AL_SEQP_SEQ_EVT           0x05  
+#define AL_SEQP_VOL_EVT           0x06  
+#define AL_SEQP_META_EVT          0x07  
+#define AL_SEQP_STOPPING_EVT      0x08  
+
 #define AL_SEQ_MIDI_EVT           0x02
 #define AL_SEQ_END_EVT            0x04
-#define AL_CSP_LOOPSTART           0x05
-#define AL_CSP_LOOPEND             0x06
+#define AL_CSP_LOOPSTART          0x05
+#define AL_CSP_LOOPEND            0x06
 #define AL_TEMPO_EVT              0x51
 
 #define AL_MIDI_NoteOn            0x90
@@ -358,7 +362,6 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_CMIDI_LOOPEND_CODE     0x71
 #define AL_CMIDI_BLOCK_CODE       0x72
 
-// Wave types (as macros to avoid conflicts)
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
 
@@ -375,7 +378,7 @@ typedef struct {
     f32 unk4;
 } ALUnk18Event;
 
-// Added structs for ALEvent union
+// Sequence Player Event Structs
 typedef struct {
     ALBank *bank;
 } ALSpBankEvent;
@@ -385,17 +388,17 @@ typedef struct {
 } ALSpSeqEvent;
 
 typedef struct {
-    f32 vol;
+    s16 vol; // Updated to s16 (standard libaudio type for volume)
 } ALSpVolEvent;
 
 typedef struct {
     s32 type;
     union {
-        ALMIDIEvent  midi;
-        ALUnk18Event unk18;
-        ALSpBankEvent spbank;  // Added for cspsetbank.c
-        ALSpSeqEvent  spseq;   // Added for cspsetseq.c
-        ALSpVolEvent  spvol;   // Added for cspsetvol.c
+        ALMIDIEvent   midi;
+        ALUnk18Event  unk18;
+        ALSpBankEvent spbank;  
+        ALSpSeqEvent  spseq;   
+        ALSpVolEvent  spvol;   
         struct {
             u8 status;
             u8 type;
@@ -510,7 +513,9 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 #endif
 """
 
+    # Ensure the directory exists before writing
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
+    
     with open(types_path, 'w') as f:
         f.write(content)
 
