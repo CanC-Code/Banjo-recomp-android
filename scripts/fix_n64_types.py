@@ -166,6 +166,9 @@ typedef struct {
 #define AL_SEQ_MIDI_EVT            6
 #define AL_SEQP_MIDI_EVT           6
 #define AL_FILTER_START_VOICE_EVT  7
+#define AL_SEQP_META_EVT           12
+#define AL_SEQP_VOL_EVT            13
+#define AL_SEQP_STOPPING_EVT       14
 #define AL_CSP_LOOPSTART           10
 #define AL_CSP_LOOPEND             11
 #define AL_UNK18_EVT               0x18
@@ -370,7 +373,6 @@ typedef struct {
     s32         evtDeltaTicks[16]; 
 } ALCSeq;
 
-// ALCSeqMarker: Expanded to match state tracking required by cseq.c deep copies
 typedef struct {
     u32         curTick;
     u8          *curLoc[16];
@@ -416,6 +418,10 @@ typedef struct {
 } ALSPSeqMsg;
 
 typedef struct {
+    u8          vol;
+} ALSPVolMsg;
+
+typedef struct {
     f32 unk0;
     f32 unk4;
 } ALUnk18Msg;
@@ -427,6 +433,7 @@ typedef struct {
         ALTempoMsg  tempo;
         ALSPBankMsg spbank;
         ALSPSeqMsg  spseq;
+        ALSPVolMsg  spvol;
         ALUnk18Msg  unk18;
         u8          raw[16];
     } msg;
