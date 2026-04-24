@@ -3,7 +3,7 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
-    # Keep the SDK headers silenced
+    # Silence the original SDK headers to prevent conflicts
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -14,18 +14,15 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
+    print("Step 1: Maintaining silenced SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py\n")
+                f.write("// Silenced by fix_n64_types.py to prevent redeclaration conflicts\n")
 
-    print(f"Injecting C++ compatible N64 Bridge types into {types_path}...")
+    print(f"\nStep 2: Injecting Heavy-Duty N64 types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
-
-#ifndef _USE_MATH_DEFINES
-#define _USE_MATH_DEFINES
-#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -50,13 +47,16 @@ typedef double    f64;
 #define FALSE 0
 #endif
 
-// --- MATH CONSTANTS ---
+// --- MATH & MATRIX TYPES ---
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-// --- OS & PI (Parallel Interface) TYPES ---
-// We use 'struct Name' tags for C++ compatibility
+typedef struct { 
+    int32_t m[4][4]; 
+} Mtx;
+
+// --- OS & KERNEL TYPES ---
 typedef s32 OSPri;
 typedef void* OSMesg;
 
@@ -65,6 +65,17 @@ typedef struct OSMesgQueue_s {
     u32 msgCount; 
     OSMesg *msg; 
 } OSMesgQueue;
+
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    OSPri priority;
+    struct OSThread_s **queue;
+    struct OSThread_s *tnext;
+    u16 state;
+    u16 flags;
+    s32 id;
+    int fp;
+} OSThread;
 
 typedef struct OSIoMesg_s {
     OSMesg      hdr;
@@ -84,16 +95,32 @@ typedef struct OSPiHandle_s {
     u32 domain;
 } OSPiHandle;
 
-typedef struct OSContPad_s {
-    u16     button;
-    s8      stick_x;
-    s8      stick_y;
-    u8      errno;
-} OSContPad;
+// --- GRAPHICS (GBI) ---
+typedef uint64_t Gfx;
+
+typedef struct {
+    short ob[3];
+    u16 flag;
+    short tc[2];
+    u8 cn[4];
+} Vtx_t;
+
+typedef union {
+    Vtx_t v;
+    long long force_alignment;
+} Vtx;
 
 // --- AUDIO TYPES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
+typedef uint64_t Acmd;
+
+typedef struct {
+    u8 *base;
+    u8 *cur;
+    s32 len;
+    s32 count;
+} ALHeap;
 
 #define AL_FILTER_ADD_UPDATE       8
 #define AL_FILTER_START_VOICE_ALT  9
@@ -131,17 +158,13 @@ typedef struct ALGlobals_s {
     u8    reserved[1024];
 } ALGlobals;
 
-// --- GFX ---
-typedef uint64_t Gfx;
-typedef struct { short ob[3]; u16 flag; short tc[2]; u8 cn[4]; } Vtx_t;
-typedef union { Vtx_t v; long long force_alignment; } Vtx;
-
 // --- EXTERNALS ---
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern ALGlobals *alGlobals;
 extern ALSyn *n_syn;
+extern OSThread *__osRunningThread;
 
 void* __n_allocParam();
 void n_alEnvmixerParam(void *filter, s32 paramID, void *ptr);
@@ -157,7 +180,7 @@ s32 _n_timeToSamples(ALMicroTime t);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Robust Update: {types_path}")
+    print(f"✅ Full-Spectrum Header Created: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
