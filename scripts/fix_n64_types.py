@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Restores the 'offset' member to ALPVoice_s while maintaining the 
-    hardware-level members required by the audio microcode drivers.
+    Restores the 'offset' member to ALPVoice_s and removes the conflicting 
+    'extern s16 eqpower[]' declaration while keeping EQPOWER_LENGTH.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -821,7 +821,6 @@ extern "C" {
 extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 extern OSThread  *__osRunningThread;
-extern s16       eqpower[];
 
 extern Acmd *alFxPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alFxParamHdl(void *, s32, void *);
@@ -866,7 +865,7 @@ void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Restored missing 'offset' struct member to ALPVoice.")
+    print("✅ n64_types.h updated: Removed conflicting 'eqpower' extern declaration.")
 
 if __name__ == '__main__':
     fix_n64_types()
