@@ -254,6 +254,40 @@ typedef struct {
 
 typedef ALCSPlayer N_ALCSPlayer;
 
+// --- ADDITIONAL AUDIO TYPES FOR core1/audio/n_synstartvoice*.c ---
+typedef struct ALPVoice_s ALPVoice;
+
+typedef struct N_ALVoice_s {
+    struct N_ALVoice_s *next;
+    ALPVoice           *pvoice;
+    s16                 unityPitch;
+} N_ALVoice;
+
+typedef struct ALPVoice_s {
+    s32 offset;
+} ALPVoice;
+
+typedef struct {
+    s32          delta;
+    s32          type;
+    ALWaveTable *wave;
+    void        *next;
+    s16          unity;
+} ALStartParam;
+
+typedef struct {
+    s32          delta;
+    void        *next;
+    s32          type;
+    s16          unity;
+    ALPan        pan;
+    u8           volume;
+    u8           fxMix;
+    s16          pitch;
+    s32          samples;
+    ALWaveTable *wave;
+} ALStartParamAlt;
+
 // --- EVENTS ---
 typedef struct {
     u32 ticks;
@@ -299,7 +333,8 @@ typedef struct {
 
 typedef struct {
     ALFilter    filter;
-    u8          reserved[1024];
+    s32         paramSamples;   // used by n_synstartvoice*.c
+    u8          reserved[1020];
 } ALSyn;
 
 typedef struct {
@@ -318,6 +353,12 @@ typedef struct {
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
 
+// Audio filter / param constants required by n_synstartvoice*.c
+#define AL_FILTER_START_VOICE       0x10
+#define AL_FILTER_START_VOICE_ALT   0x11
+#define AL_FILTER_ADD_UPDATE        0x20
+#define ERR_ALSYN_NO_UPDATE         100
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -328,6 +369,11 @@ extern OSThread  *__osRunningThread;
 
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
+
+// Functions required by n_synstartvoice*.c
+void *__n_allocParam(void);
+void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
+
 #define ALFailIf(cond, err) if (cond) return;
 
 #ifdef __cplusplus
@@ -340,7 +386,7 @@ void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Math constants (M_PI) and Actor helpers added.")
+    print(f"✅ n64_types.h fully updated with N_ALVoice, ALStartParam, ALStartParamAlt, paramSamples, and all missing audio constants/functions.")
 
 if __name__ == '__main__':
     fix_n64_types()
