@@ -13,11 +13,14 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
+    print("Step 1: Silencing SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py\n")
 
+    print(f"Step 2: Injecting OS Thread States and Audio structures into {types_path}...")
+    
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -51,7 +54,16 @@ typedef double             f64;
 #define FALSE 0
 #endif
 
-// --- OS & KERNEL ---
+// --- OS THREAD STATES ---
+#define OS_STATE_STOPPED    1
+#define OS_STATE_RUNNABLE   2
+#define OS_STATE_RUNNING    4
+#define OS_STATE_WAITING    8
+
+#define OS_FLAG_CPU_BREAK   1
+#define OS_FLAG_FAULT       2
+
+// --- OS & KERNEL STRUCTURES ---
 typedef s32 OSPri;
 typedef void* OSMesg;
 typedef u32 OSIntMask;
@@ -189,11 +201,10 @@ typedef struct {
     ALWaveTable *wave;
 } ALStartParamAlt;
 
-// Audio Constants
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
-#define AL_FILTER_ADD_UPDATE     3
-#define ERR_ALSYN_NO_UPDATE      100
+#define AL_FILTER_ADD_UPDATE      3
+#define ERR_ALSYN_NO_UPDATE       100
 
 typedef struct {
     ALFilter            filter;
@@ -301,7 +312,7 @@ void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ N_AUDIO Support Added: {types_path}")
+    print(f"✅ Kernel Thread States added: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
