@@ -158,6 +158,15 @@ typedef struct {
 
 // AL event type codes
 #define AL_UNK18_EVT               0x18
+#define AL_SEQP_MIDI_EVT           0x06
+
+// AL MIDI status bytes
+#define AL_MIDI_ControlChange      0xB0
+#define AL_MIDI_ChannelModeSelect  0xB0
+
+// AL bank version and error codes
+#define AL_BANK_VERSION            0x4231
+#define ERR_ALBNKFNEW              0x0500
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
@@ -219,13 +228,11 @@ typedef struct {
     u32         count;
 } ALRawLoop;
 
-// adpcmWave sub-struct (used by waveInfo.adpcmWave)
 typedef struct {
     ALADPCMloop *loop;
     ALADPCMBook *book;
 } ALADPCMWaveInfo;
 
-// rawWave sub-struct (used by waveInfo.rawWave)
 typedef struct {
     ALRawLoop   *loop;
 } ALRAWWaveInfo;
@@ -250,8 +257,19 @@ typedef struct {
     u8          decayVolume;
 } ALEnvelope;
 
+// ALKeyMap: key/velocity range mapping for a sound
+typedef struct {
+    u8          velocityMin;
+    u8          velocityMax;
+    u8          keyMin;
+    u8          keyMax;
+    u8          keyBase;
+    u8          detune;
+} ALKeyMap;
+
 typedef struct {
     ALEnvelope  *envelope;
+    ALKeyMap    *keyMap;
     ALWaveTable *wavetable;
     ALPan       pan;
     u8          volume;
@@ -293,9 +311,14 @@ typedef struct {
 } ALBankFile;
 
 // --- SEQUENCE FILE ---
+// seqArray entries have an offset field (pointer patched at load time)
+typedef struct {
+    u8  *offset;
+} ALSeqData;
+
 typedef struct {
     s32         seqCount;
-    u8          *seqArray[1];
+    ALSeqData   seqArray[1];
 } ALSeqFile;
 
 // --- AUDIO EVENT QUEUE TYPES ---
@@ -306,7 +329,16 @@ typedef struct {
     u32          count;
 } ALEvtq;
 
-// ALEvent message union - fields observed from code_219D0.c usage
+// ALEvent MIDI message sub-struct
+typedef struct {
+    s32  ticks;
+    u8   status;
+    u8   byte1;
+    u8   byte2;
+    u8   pad;
+} ALMidiMsg;
+
+// ALEvent unk18 sub-struct
 typedef struct {
     f32 unk0;
     f32 unk4;
@@ -315,16 +347,34 @@ typedef struct {
 typedef struct {
     s32  type;
     union {
-        ALUnk18Msg unk18;
-        u8         raw[16];
+        ALMidiMsg   midi;
+        ALUnk18Msg  unk18;
+        u8          raw[16];
     } msg;
 } ALEvent;
 
 // --- CS PLAYER (compact sequence player) ---
+#define AL_MAX_CHANNELS 16
+
+typedef struct {
+    u8  unkA;
+    u8  pad[3];
+} ALChanState;
+
 typedef struct {
     ALEvtq      evtq;
-    u8          reserved[256];
+    ALChanState chanState[AL_MAX_CHANNELS];
+    u8          reserved[128];
 } ALCSPlayer;
+
+// N_ prefixed aliases used by decompiled source
+typedef ALCSPlayer N_ALCSPlayer;
+
+// N_ALSeqPlayer: sequence player (MIDI sequencer variant)
+typedef struct {
+    ALEvtq      evtq;
+    u8          reserved[512];
+} N_ALSeqPlayer;
 
 // --- AUDIO PARAM UPDATE STRUCTS ---
 typedef struct {
