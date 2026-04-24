@@ -176,6 +176,13 @@ typedef struct {
     ALADPCMBook *book;
 } ALADPCMWaveInfo;
 
+// NEW: Required by bnkf.c
+typedef struct {
+    u32 start;
+    u32 end;
+    u32 count;
+} ALRawLoop;
+
 typedef struct {
     void *loop;
 } ALRawWaveInfo;
@@ -232,6 +239,13 @@ typedef struct {
     ALBank      *bankArray[1];
 } ALBankFile;
 
+// NEW: Required by bnkf.c (alSeqFileNew)
+typedef struct {
+    u16 revision;
+    u16 seqCount;
+    u8  data[1];
+} ALSeqFile;
+
 typedef struct {
     struct ALLink_s *next;
     struct ALLink_s *prev;
@@ -255,7 +269,7 @@ typedef struct {
 
 typedef ALCSPlayer N_ALCSPlayer;
 
-// --- EVENTS (ALEvent must be defined BEFORE prototypes that use it) ---
+// --- EVENTS (must be defined before prototypes that use ALEvent) ---
 typedef struct {
     u32 ticks;
     u8  status;
@@ -372,7 +386,7 @@ extern OSThread  *__osRunningThread;
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
-// Functions required by n_synstartvoice*.c
+// Functions required by n_synstartvoice*.c and bnkf.c
 void *__n_allocParam(void);
 void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 
@@ -389,7 +403,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h fully fixed: ALEvent moved before prototypes + all previous audio fixes restored.")
+    print("✅ n64_types.h updated: ALSeqFile + ALRawLoop added for bnkf.c (all previous fixes preserved).")
 
 if __name__ == '__main__':
     fix_n64_types()
