@@ -518,3 +518,235 @@ typedef struct {
 typedef struct {
     ALFilter filter;
     RESAMPLE_STATE *state;
+    f32 delta;
+    s32 first;
+    s32 motion;
+    f32 ratio;
+    s32 upitch;
+    void *ctrlList;
+    void *ctrlTail;
+} ALResampler;
+
+typedef struct {
+    ALFilter    filter;
+    POLEF_STATE *fstate;
+    s32         fc;
+    s32         fgain;
+    s32         first;
+    struct {
+        s16 fccoef[16];
+    } fcvec;
+} ALLowPass;
+
+// Audio engine mix nodes & delays
+typedef struct {
+    s32 input;
+    s32 output;
+    s16 ffcoef;
+    s16 fbcoef;
+    s16 gain;
+    f32 rsinc;
+    f32 rsval;
+    s32 rsfrac;
+    s32 rsdelta;
+    f32 rsgain;
+    ALResampler *rs;
+    ALLowPass *lp;
+} ALDelay;
+
+typedef struct {
+    ALFilter filter;
+    s16 *base;
+    s16 *input;
+    u32 length;
+    ALDelay *delay;
+    u8 section_count;
+    ALSetFXParam paramHdl;
+} ALFx;
+
+typedef struct {
+    ALFilter filter;
+    s32      state;
+    void     *dmaState;
+    void     *dma;
+    s32      dramout;
+    s32      first;
+} ALSave;
+
+typedef struct {
+    s32 maxVVoices;
+    s32 maxPVoices;
+    s32 maxUpdates;
+    s32 maxFXbusses;
+    s16 *params; 
+    s32 fxType;
+    s32 outputRate;
+} ALSynConfig;
+
+typedef struct ALEnvMixer_s {
+    ALFilter filter;
+    s32      state;
+    s16      *first;
+    ALMicroTime firstEndTime;
+    s16      *next;
+    ALMicroTime nextEndTime;
+    s32      pitch;
+    s32      step;
+    s32      upitch;
+    ALMicroTime envEndTime;
+    f32      envLevel;
+    f32      envStep;
+    ALParam  *ctrlList;
+    ALParam  *paramFreeList;
+    
+    // Mix Parameters
+    s32      delta;
+    s32      segEnd;
+    s32      volume;
+    s32      pan;
+    s32      dryamt;
+    s32      wetamt;
+    s32      cvolL;
+    s32      cvolR;
+    
+    // Added Envelope parameters
+    s32      motion;
+    s32      ltgt;
+    s32      rtgt;
+    s32      lratm;
+    s32      lratl;
+    s32      rratm;
+    s32      rratl;
+    ALParam  *ctrlTail;
+    ALFilter **sources;
+} ALEnvMixer;
+
+typedef struct {
+    ALFilter    filter;
+    s32         sourceCount;
+    s32         maxSources;
+    ALFilter    **sources;
+} ALAuxBus;
+
+typedef ALAuxBus ALMainBus;
+
+typedef struct {
+    ALFilter    filter;
+    s32         paramSamples;
+    u8          reserved[1020];
+} ALSyn;
+
+typedef ALSyn ALSynth;
+
+typedef struct {
+    ALSyn *drvr;
+    u8    reserved[1024];
+} ALGlobals;
+
+
+// --- AUDIO CONSTANTS ---
+#define AL_BANK_VERSION           1
+#define AL_UNK18_EVT              18
+#define ERR_ALBNKFNEW             10
+#define AL_AUX_L_OUT              0
+#define AL_AUX_R_OUT              1
+#define AL_MAIN_L_OUT             0
+#define AL_MAIN_R_OUT             1
+
+#define AL_RESAMPLER_OUT           0
+#define AL_FILTER_SET_WAVETABLE    1
+#define AL_FILTER_SET_PITCH        2
+#define AL_FILTER_SET_UNITY_PITCH  3
+#define AL_FILTER_START            4
+#define AL_FILTER_SET_FXAMT        5
+#define AL_FILTER_SET_PAN          6
+#define AL_FILTER_SET_VOLUME       7
+
+#define AL_FILTER_RESET            8
+#define AL_FILTER_SET_SOURCE       9
+#define AL_FILTER_STOP_VOICE       10
+#define AL_FILTER_FREE_VOICE       11
+
+#define AL_FX                 0
+#define AL_FX_SMALLROOM       1
+#define AL_FX_BIGROOM         2
+#define AL_FX_ECHO            3
+#define AL_FX_CHORUS          4
+#define AL_FX_FLANGE          5
+#define AL_FX_CUSTOM          6
+
+#define AL_FILTER_ADD_SOURCE      0x01
+#define AL_FILTER_START_VOICE     0x10
+#define AL_FILTER_START_VOICE_ALT 0x11
+#define AL_FILTER_ADD_UPDATE      0x20
+#define ERR_ALSYN_NO_UPDATE       100
+
+#define AL_TRACK_END              0xFF
+
+#define AL_CACHE_ALIGN            15
+#define AL_EVTQ_END               0x7FFFFFFF
+
+#define AL_STOPPED                0
+#define AL_PLAYING                1
+#define AL_ADPCM                  10
+#define AL_ENVMIX                 11
+#define AL_RESAMPLE               12
+#define AL_AUXBUS                 13
+#define AL_MAINBUS                14
+#define AL_SAVE                   15
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern ALGlobals *alGlobals;
+extern ALSyn     *n_syn;
+extern OSThread  *__osRunningThread;
+
+extern Acmd *alFxPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alFxParamHdl(void *, s32, void *);
+extern s32 alFxParam(void *, s32, void *);
+
+extern Acmd *alEnvmixerPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alEnvmixerParam(void *, s32, void *);
+
+extern Acmd *alAdpcmPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alLoadParam(void *, s32, void *);
+
+extern Acmd *alResamplePull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alResampleParam(void *, s32, void *);
+
+extern Acmd *alAuxBusPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alAuxBusParam(void *, s32, void *);
+
+extern Acmd *alMainBusPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alMainBusParam(void *, s32, void *);
+
+extern Acmd *alSavePull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alSaveParam(void *, s32, void *);
+
+void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
+void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
+
+void *__n_allocParam(void);
+void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
+
+#define ALFailIf(cond, err) if (cond) return;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+"""
+
+    # Ensure the directory exists before writing
+    os.makedirs(os.path.dirname(types_path), exist_ok=True)
+    
+    with open(types_path, 'w') as f:
+        f.write(content)
+
+    print("✅ n64_types.h updated: Added ALSave structures and ensured ALLoadFilter has both states.")
+
+if __name__ == '__main__':
+    fix_n64_types()
