@@ -3,23 +3,15 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
-    # Wipe original conflicting headers
-    headers_to_wipe = [
-        'include/2.0L/PR/libaudio.h',
-        'include/2.0L/PR/n_libaudio.h',
-        'include/2.0L/PR/os.h',
-        'include/2.0L/PR/gu.h',
-        'include/2.0L/PR/gbi.h',
-        'include/n_synth.h',
-        'include/synthInternals.h'
-    ]
+    # Read existing content (if any)
+    if os.path.exists(types_path):
+        with open(types_path, 'r') as f:
+            existing_content = f.read()
+    else:
+        existing_content = ""
 
-    for header in headers_to_wipe:
-        if os.path.exists(header):
-            with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py\n")
-
-    content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
+    # Define the full updated content
+    updated_content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
 /**
@@ -296,8 +288,16 @@ typedef ALCSeq ALSeq;
 
 // --- ALCSeqMarker ---
 typedef struct ALCSeqMarker_s {
-    u32 ticks;
-    u8  track;
+    u32         ticks;
+    u8          track;
+    u32         validTracks;
+    u32         lastTicks;
+    u32         lastDeltaTicks;
+    u8          *curLoc[16];
+    u8          *curBUPtr[16];
+    u32         curBULen[16];
+    u8          lastStatus[16];
+    u32         evtDeltaTicks[16];
 } ALCSeqMarker;
 
 // --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
@@ -320,6 +320,7 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_SEQ_END_EVT            0x04
 #define AL_CSP_LOOPSTART           0x05
 #define AL_CSP_LOOPEND             0x06
+#define AL_TEMPO_EVT              0x51
 
 #define AL_MIDI_NoteOn            0x90
 #define AL_MIDI_NoteOff           0x80
@@ -328,9 +329,11 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_MIDI_ProgramChange     0xC0
 #define AL_MIDI_ChannelPressure   0xD0
 #define AL_MIDI_PitchBend         0xE0
+#define AL_MIDI_ChannelModeSelect 0xB0  // FIX: Added for code_21B50.c
 
-#define AL_MIDI_META             0xFF
-#define AL_MIDI_META_EOT         0x2F
+#define AL_MIDI_Meta              0xFF  // FIX: Added for cseq.c
+#define AL_MIDI_META_TEMPO        0x51  // FIX: Added for cseq.c
+
 #define AL_CMIDI_LOOPSTART_CODE   0x70
 #define AL_CMIDI_LOOPEND_CODE     0x71
 #define AL_CMIDI_BLOCK_CODE       0x72
@@ -358,7 +361,7 @@ typedef struct {
             u8 type;
             u8 byte1;
             u8 byte2;
-            u8 byte3;  // Added for cseq.c
+            u8 byte3;
         } tempo;
         u8 raw[32];
     } msg;
@@ -469,11 +472,12 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 #endif
 """
 
+    # Write the updated content
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
-        f.write(content)
+        f.write(updated_content)
 
-    print("✅ n64_types.h updated: Added ALCSeqMarker, byte3, and all missing MIDI/sequence constants.")
+    print(f"✅ Successfully updated {types_path} with all fixes.")
 
 if __name__ == '__main__':
     fix_n64_types()
