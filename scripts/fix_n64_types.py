@@ -159,10 +159,18 @@ typedef struct {
 // AL event type codes
 #define AL_UNK18_EVT               0x18
 #define AL_SEQP_MIDI_EVT           0x06
+#define AL_SEQP_PLAY_EVT           0x01
+#define AL_SEQP_BANK_EVT           0x04
+#define AL_TEMPO_EVT               0x03
+#define AL_TRACK_END               0xFF
 
 // AL MIDI status bytes
 #define AL_MIDI_ControlChange      0xB0
 #define AL_MIDI_ChannelModeSelect  0xB0
+#define AL_MIDI_Meta               0xFF
+
+// AL MIDI meta event types
+#define AL_MIDI_META_TEMPO         0x51
 
 // AL bank version and error codes
 #define AL_BANK_VERSION            0x4231
@@ -257,7 +265,6 @@ typedef struct {
     u8          decayVolume;
 } ALEnvelope;
 
-// ALKeyMap: key/velocity range mapping for a sound
 typedef struct {
     u8          velocityMin;
     u8          velocityMax;
@@ -311,7 +318,6 @@ typedef struct {
 } ALBankFile;
 
 // --- SEQUENCE FILE ---
-// seqArray entries have an offset field (pointer patched at load time)
 typedef struct {
     u8  *offset;
 } ALSeqData;
@@ -321,6 +327,24 @@ typedef struct {
     ALSeqData   seqArray[1];
 } ALSeqFile;
 
+// --- COMPACT MIDI SEQUENCE TYPES ---
+// ALCMidiHdr: header for a compact MIDI sequence blob
+typedef struct {
+    u16         division;   // ticks per quarter note (qnpt)
+    u16         trackCount;
+    u32         trackOffset[1];
+} ALCMidiHdr;
+
+// ALCSeq: compact sequence parser state
+typedef struct {
+    ALCMidiHdr  *base;
+    u32         trackEnd[16];
+    u32         trackPos[16];
+    u8          lastStatus[16];
+    s32         qnpt;       // quarter notes per tick (from header division)
+    u32         trackCount;
+} ALCSeq;
+
 // --- AUDIO EVENT QUEUE TYPES ---
 typedef struct {
     OSMesgQueue *msgQ;
@@ -329,7 +353,7 @@ typedef struct {
     u32          count;
 } ALEvtq;
 
-// ALEvent MIDI message sub-struct
+// ALEvent message sub-structs
 typedef struct {
     s32  ticks;
     u8   status;
@@ -338,7 +362,17 @@ typedef struct {
     u8   pad;
 } ALMidiMsg;
 
-// ALEvent unk18 sub-struct
+typedef struct {
+    u8   status;
+    u8   type;
+    u8   byte1;
+    u8   byte2;
+} ALTempoMsg;
+
+typedef struct {
+    ALBank  *bank;
+} ALSPBankMsg;
+
 typedef struct {
     f32 unk0;
     f32 unk4;
@@ -348,6 +382,8 @@ typedef struct {
     s32  type;
     union {
         ALMidiMsg   midi;
+        ALTempoMsg  tempo;
+        ALSPBankMsg spbank;
         ALUnk18Msg  unk18;
         u8          raw[16];
     } msg;
@@ -363,6 +399,8 @@ typedef struct {
 
 typedef struct {
     ALEvtq      evtq;
+    ALCSeq      *target;
+    s32         uspt;       // microseconds per tick
     ALChanState chanState[AL_MAX_CHANNELS];
     u8          reserved[128];
 } ALCSPlayer;
