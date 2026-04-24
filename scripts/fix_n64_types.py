@@ -167,13 +167,25 @@ typedef struct {
     s32 count;
 } ALHeap;
 
-// ALParam
+// ALParam and aliases
 typedef struct ALParam_s {
     struct ALParam_s *next;
     s32 delta;
     s32 type;
     union { f32 f; s32 i; } data;
+    union { f32 f; s32 i; } moredata;
+    union { f32 f; s32 i; } stillmoredata;
 } ALParam;
+
+typedef struct ALPVoice_s ALPVoice;
+typedef ALPVoice PVoice;
+
+typedef struct {
+    struct ALParam_s *next;
+    s32 delta;
+    s32 type;
+    PVoice *pvoice;
+} ALFreeParam;
 
 typedef struct {
     ALMicroTime attackTime;
@@ -432,8 +444,6 @@ typedef ALCSPlayer N_ALCSPlayer;
 typedef ALCSPlayer N_ALSeqPlayer;
 
 // --- N_ALVoice / voice param structs ---
-typedef struct ALPVoice_s ALPVoice;
-
 typedef struct N_ALVoice_s {
     struct N_ALVoice_s *next;
     ALPVoice           *pvoice;
@@ -467,7 +477,7 @@ typedef struct {
 
 
 // --- MIXER & FILTERS ---
-typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
+typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, Acmd *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 typedef s32 (*ALSetFXParam)(void *, s32, void *);
 
@@ -481,9 +491,13 @@ typedef struct ALFilter_s {
 } ALFilter;
 
 typedef struct {
-    ALFilter filter;
-    s32      state;
-    void     *dma;
+    ALFilter    filter;
+    ADPCM_STATE *lstate;
+    void        *dma;
+    void        *dmaState;
+    s32         lastsam;
+    s32         first;
+    s32         memin;
 } ALLoadFilter;
 
 // Filter Sub-States
@@ -505,6 +519,11 @@ typedef struct {
     RESAMPLE_STATE *state;
     f32 delta;
     s32 first;
+    s32 motion;
+    f32 ratio;
+    s32 upitch;
+    void *ctrlList;
+    void *ctrlTail;
 } ALResampler;
 
 typedef struct {
@@ -586,7 +605,9 @@ typedef struct ALEnvMixer_s {
     s32      rtgt;
     s32      lratm;
     s32      lratl;
-    s32      ctrlTail;
+    s32      rratm;
+    s32      rratl;
+    ALParam  *ctrlTail;
     ALFilter **sources;
 } ALEnvMixer;
 
@@ -597,11 +618,15 @@ typedef struct {
     ALFilter    **sources;
 } ALAuxBus;
 
+typedef ALAuxBus ALMainBus;
+
 typedef struct {
     ALFilter    filter;
     s32         paramSamples;
     u8          reserved[1020];
 } ALSyn;
+
+typedef ALSyn ALSynth;
 
 typedef struct {
     ALSyn *drvr;
@@ -615,6 +640,8 @@ typedef struct {
 #define ERR_ALBNKFNEW             10
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
+#define AL_MAIN_L_OUT             0
+#define AL_MAIN_R_OUT             1
 
 #define AL_RESAMPLER_OUT           0
 #define AL_FILTER_SET_WAVETABLE    1
@@ -624,6 +651,11 @@ typedef struct {
 #define AL_FILTER_SET_FXAMT        5
 #define AL_FILTER_SET_PAN          6
 #define AL_FILTER_SET_VOLUME       7
+
+#define AL_FILTER_RESET            8
+#define AL_FILTER_SET_SOURCE       9
+#define AL_FILTER_STOP_VOICE       10
+#define AL_FILTER_FREE_VOICE       11
 
 #define AL_FX                 0
 #define AL_FX_SMALLROOM       1
@@ -648,6 +680,9 @@ typedef struct {
 #define AL_PLAYING                1
 #define AL_ADPCM                  10
 #define AL_ENVMIX                 11
+#define AL_RESAMPLE               12
+#define AL_AUXBUS                 13
+#define AL_MAINBUS                14
 
 #ifdef __cplusplus
 extern "C" {
@@ -657,14 +692,24 @@ extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 extern OSThread  *__osRunningThread;
 
+extern Acmd *alFxPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alFxParamHdl(void *, s32, void *);
-extern s32 alFxPull(void *, s16 *, s32, s32, void *);
 extern s32 alFxParam(void *, s32, void *);
 
-extern s32 alEnvmixerPull(void *, s16 *, s32, s32, void *);
+extern Acmd *alEnvmixerPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alEnvmixerParam(void *, s32, void *);
-extern s32 alAdpcmPull(void *, s16 *, s32, s32, void *);
+
+extern Acmd *alAdpcmPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alLoadParam(void *, s32, void *);
+
+extern Acmd *alResamplePull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alResampleParam(void *, s32, void *);
+
+extern Acmd *alAuxBusPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alAuxBusParam(void *, s32, void *);
+
+extern Acmd *alMainBusPull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alMainBusParam(void *, s32, void *);
 
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
@@ -687,7 +732,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added Envelope Mixer and ADPCM missing fields.")
+    print("✅ n64_types.h updated: Corrected Pull return types to Acmd* and added missing Env variables.")
 
 if __name__ == '__main__':
     fix_n64_types()
