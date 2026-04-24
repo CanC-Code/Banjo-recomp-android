@@ -494,8 +494,12 @@ typedef struct {
     ALFilter    filter;
     ADPCM_STATE *state;
     ADPCM_STATE *lstate;
+    ALWaveTable *table;
+    s32         bookSize;
+    ALRawLoop   loop;
     void        *dma;
     void        *dmaState;
+    s32         sample;
     s32         lastsam;
     s32         first;
     s32         memin;
@@ -645,6 +649,12 @@ typedef struct {
 
 
 // --- AUDIO CONSTANTS ---
+#define AL_DECODER_IN             outp
+#define AL_RESAMPLER_IN           outp
+#define ADPCMFSIZE                9
+#define ADPCMFBYTES               9
+#define LFSAMPLES                 4
+
 #define AL_BANK_VERSION           1
 #define AL_UNK18_EVT              18
 #define ERR_ALBNKFNEW             10
@@ -746,7 +756,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added ALSave structures and ensured ALLoadFilter has both states.")
+    print("✅ n64_types.h updated: Added ALLoadFilter structs and ADPCM decode constants.")
 
 if __name__ == '__main__':
     fix_n64_types()
