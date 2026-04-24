@@ -132,20 +132,21 @@ typedef struct ALEvtq_s {
     ALLink      allocList;
 } ALEvtq;
 
-// --- CHANNEL STATE (used by ALCSPlayer) ---
+// --- CHANNEL STATE ---
 typedef struct {
     u32 unk0;
     u16 unkA;
 } ALChanState;
 
-// --- ALCSPlayer / N_ALCSPlayer (full definition for code_219D0.c, code_21AF0.c, code_21A80.c, code_21B50.c) ---
+// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer (full definition) ---
 typedef struct ALCSPlayer_s {
     ALEvtq       evtq;
     ALChanState  chanState[16];
     u8           reserved[1024];
 } ALCSPlayer;
 
-typedef ALCSPlayer N_ALCSPlayer;   // alias for files that use N_ALCSPlayer
+typedef ALCSPlayer N_ALCSPlayer;   // alias used by most files
+typedef ALCSPlayer N_ALSeqPlayer;  // alias used by code_21B50.c
 
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
@@ -307,133 +308,4 @@ typedef struct {
     s32 type;
     union {
         ALMIDIEvent  midi;
-        ALUnk18Event unk18;
-        struct {
-            u8 status;
-            u8 type;
-            u8 byte1;
-            u8 byte2;
-        } tempo;
-        u8 raw[32];
-    } msg;
-} ALEvent;
-
-// --- N_ALVoice / voice param structs ---
-typedef struct ALPVoice_s ALPVoice;
-
-typedef struct N_ALVoice_s {
-    struct N_ALVoice_s *next;
-    ALPVoice           *pvoice;
-    s16                 unityPitch;
-} N_ALVoice;
-
-typedef struct ALPVoice_s {
-    s32 offset;
-} ALPVoice;
-
-typedef struct {
-    s32          delta;
-    s32          type;
-    ALWaveTable *wave;
-    void        *next;
-    s16          unity;
-} ALStartParam;
-
-typedef struct {
-    s32          delta;
-    void        *next;
-    s32          type;
-    s16          unity;
-    ALPan        pan;
-    u8           volume;
-    u8           fxMix;
-    s16          pitch;
-    s32          samples;
-    ALWaveTable *wave;
-} ALStartParamAlt;
-
-// --- MIXER & FILTERS ---
-typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
-typedef s32 (*ALSetParam)(void *, s32, void *);
-
-typedef struct ALFilter_s {
-    struct ALFilter_s *source;
-    ALCmdHandler      handler;
-    ALSetParam        setParam;
-    s32               inp;
-    s32               outp;
-    s32               type;
-} ALFilter;
-
-typedef struct {
-    ALFilter    filter;
-    s32         sourceCount;
-    s32         maxSources;
-    ALFilter    **sources;
-} ALAuxBus;
-
-typedef struct {
-    ALFilter    filter;
-    s32         paramSamples;
-    u8          reserved[1020];
-} ALSyn;
-
-typedef struct {
-    ALSyn *drvr;
-    u8    reserved[1024];
-} ALGlobals;
-
-// --- AUDIO CONSTANTS ---
-#define AL_ADPCM_WAVE             0
-#define AL_RAW16_WAVE             1
-#define AL_BANK_VERSION           1
-#define AL_SEQP_MIDI_EVT          2
-#define AL_MIDI_ControlChange     0xB0
-#define AL_MIDI_ChannelModeSelect 0xB0
-#define AL_UNK18_EVT              18
-#define ERR_ALBNKFNEW             10
-#define AL_AUX_L_OUT              0
-#define AL_AUX_R_OUT              1
-
-#define AL_FILTER_ADD_SOURCE      0x01
-#define AL_FILTER_START_VOICE     0x10
-#define AL_FILTER_START_VOICE_ALT 0x11
-#define AL_FILTER_ADD_UPDATE      0x20
-#define ERR_ALSYN_NO_UPDATE       100
-
-#define AL_TRACK_END              0xFF
-#define AL_MIDI_Meta              0xFF
-#define AL_MIDI_META_TEMPO        0x51
-#define AL_TEMPO_EVT              0x51
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-extern ALGlobals *alGlobals;
-extern ALSyn     *n_syn;
-extern OSThread  *__osRunningThread;
-
-void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
-void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
-
-void *__n_allocParam(void);
-void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
-
-#define ALFailIf(cond, err) if (cond) return;
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-"""
-
-    os.makedirs(os.path.dirname(types_path), exist_ok=True)
-    with open(types_path, 'w') as f:
-        f.write(content)
-
-    print("✅ n64_types.h updated: Full ALCSPlayer / N_ALCSPlayer with evtq + chanState[16] (fixes code_219D0.c, code_21AF0.c, code_21A80.c, code_21B50.c). All prior fixes preserved.")
-
-if __name__ == '__main__':
-    fix_n64_types()
+        ALUnk
