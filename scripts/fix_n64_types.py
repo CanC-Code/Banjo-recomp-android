@@ -3,15 +3,25 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
-    # Read existing content (if any)
-    if os.path.exists(types_path):
-        with open(types_path, 'r') as f:
-            existing_content = f.read()
-    else:
-        existing_content = ""
+    # List of conflicting headers to silence
+    headers_to_wipe = [
+        'include/2.0L/PR/libaudio.h',
+        'include/2.0L/PR/n_libaudio.h',
+        'include/2.0L/PR/os.h',
+        'include/2.0L/PR/gu.h',
+        'include/2.0L/PR/gbi.h',
+        'include/n_synth.h',
+        'include/synthInternals.h'
+    ]
 
-    # Define the full updated content
-    updated_content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
+    # Wipe the conflicting headers
+    for header in headers_to_wipe:
+        if os.path.exists(header):
+            with open(header, 'w') as f:
+                f.write("// Silenced by fix_n64_types.py to avoid conflicts with n64_types.h\n")
+
+    # Full content for n64_types.h
+    content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
 /**
@@ -132,8 +142,15 @@ typedef struct {
 
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
-typedef s32 ALPan;
+typedef u8 ALPan;  // Changed to u8 to match libaudio.h
+
 typedef u64 Acmd;
+
+// ADPCM_STATE definition (added to match libaudio.h)
+typedef struct {
+    s32 unk0;
+    s32 unk4;
+} ADPCM_STATE;
 
 typedef struct {
     u8 *base;
@@ -329,14 +346,17 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_MIDI_ProgramChange     0xC0
 #define AL_MIDI_ChannelPressure   0xD0
 #define AL_MIDI_PitchBend         0xE0
-#define AL_MIDI_ChannelModeSelect 0xB0  // FIX: Added for code_21B50.c
+#define AL_MIDI_ChannelModeSelect 0xB0
 
-#define AL_MIDI_Meta              0xFF  // FIX: Added for cseq.c
-#define AL_MIDI_META_TEMPO        0x51  // FIX: Added for cseq.c
-
+#define AL_MIDI_Meta              0xFF
+#define AL_MIDI_META_TEMPO        0x51
 #define AL_CMIDI_LOOPSTART_CODE   0x70
 #define AL_CMIDI_LOOPEND_CODE     0x71
 #define AL_CMIDI_BLOCK_CODE       0x72
+
+// Wave types (as enum to avoid conflicts)
+#define AL_ADPCM_WAVE             0
+#define AL_RAW16_WAVE             1
 
 typedef struct {
     u32 ticks;
@@ -433,8 +453,6 @@ typedef struct {
 } ALGlobals;
 
 // --- AUDIO CONSTANTS ---
-#define AL_ADPCM_WAVE             0
-#define AL_RAW16_WAVE             1
 #define AL_BANK_VERSION           1
 #define AL_UNK18_EVT              18
 #define ERR_ALBNKFNEW             10
@@ -472,12 +490,11 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 #endif
 """
 
-    # Write the updated content
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
-        f.write(updated_content)
+        f.write(content)
 
-    print(f"✅ Successfully updated {types_path} with all fixes.")
+    print("✅ Successfully updated n64_types.h and silenced conflicting headers.")
 
 if __name__ == '__main__':
     fix_n64_types()
