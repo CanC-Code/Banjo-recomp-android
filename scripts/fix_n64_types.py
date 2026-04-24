@@ -13,21 +13,22 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Maintaining silenced SDK headers...")
+    print("Step 1: Silencing SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py to prevent redeclaration conflicts\n")
+                f.write("// Silenced by fix_n64_types.py\n")
 
-    print(f"\nStep 2: Injecting Graphics and Hardware DMA types into {types_path}...")
+    print(f"Step 2: Injecting Unified N64/Audio/Graphics types into {types_path}...")
+    
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
 #include <stdint.h>
 #include <stddef.h>
-#include <math.h>
+#include <string.h>
 
-// --- BASIC TYPES ---
+// --- BASIC N64 TYPES ---
 typedef uint8_t   u8;
 typedef int8_t    s8;
 typedef uint16_t  u16;
@@ -46,23 +47,13 @@ typedef double    f64;
 #define FALSE 0
 #endif
 
-// --- MATH & MATRIX TYPES ---
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-typedef struct {
-    int32_t m[4][4];
-} Mtx;
-
-// --- OS KERNEL & DMA TYPES ---
+// --- OS & KERNEL ---
 typedef s32 OSPri;
 typedef void* OSMesg;
 typedef u32 OSIntMask;
-
 #define OS_IM_NONE 0
 
-typedef struct OSMesgQueue_s {
+typedef struct {
     u32 valid;
     u32 msgCount;
     OSMesg *msg;
@@ -79,7 +70,7 @@ typedef struct OSThread_s {
     int fp;
 } OSThread;
 
-typedef struct OSIoMesg_s {
+typedef struct {
     OSMesg      hdr;
     u32         devAddr;
     void        *dramAddr;
@@ -87,7 +78,7 @@ typedef struct OSIoMesg_s {
     OSMesgQueue *retQueue;
 } OSIoMesg;
 
-typedef struct OSPiHandle_s {
+typedef struct {
     u8  type;
     u32 baseAddr;
     u32 latency;
@@ -97,7 +88,6 @@ typedef struct OSPiHandle_s {
     u32 domain;
 } OSPiHandle;
 
-// --- CONTROLLER INPUT TYPES ---
 typedef struct {
     u16 button;
     s8  stick_x;
@@ -106,25 +96,25 @@ typedef struct {
 } OSContPad;
 
 // --- GRAPHICS (GBI) ---
-// Gfx is the fundamental command unit for the N64 RSP
 typedef uint64_t Gfx;
 
-// Vtx_t represents the raw vertex data as seen by the hardware
 typedef struct {
-    short ob[3];    /* x, y, z */
+    int32_t m[4][4];
+} Mtx;
+
+typedef struct {
+    short ob[3];
     u16   flag;
-    short tc[2];    /* texture coordinates */
-    u8    cn[4];    /* color or normal */
+    short tc[2];
+    u8    cn[4];
 } Vtx_t;
 
-// Vtx is a union used to ensure alignment and provide alternate views
 typedef union {
     Vtx_t v;
     long long force_alignment;
 } Vtx;
 
-// --- AUDIO SYNTHESIS TYPES ---
-// (Keeping existing audio types from previous step)
+// --- AUDIO SYNTHESIS SYSTEM ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 typedef uint64_t Acmd;
@@ -210,35 +200,61 @@ typedef struct {
     ALFilter    filter;
 } ALLowPass;
 
-// --- EVENT MESSAGES ---
+// --- VOICES & SYNTH ---
+typedef struct PVoice_s {
+    ALFilter    filter;
+    struct PVoice_s *next;
+    s32         offset;
+} PVoice;
+
+typedef struct {
+    PVoice      *pVoiceList;
+    s32         paramSamples;
+    u32         curSamples;
+    u32         maxSamples;
+} ALSyn;
+
+// --- THE MISSING GLOBALS ---
+typedef struct {
+    ALSyn *drvr;
+    u8    reserved[1024];
+} ALGlobals;
+
 typedef struct {
     s32  type;
     union {
-        u8          raw[16];
+        u8 raw[16];
     } msg;
 } ALEvent;
 
-// --- EXTERNALS & STUBS ---
+// --- C++ COMPATIBILITY & EXTERNS ---
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+extern ALGlobals *alGlobals;
+extern ALSyn     *n_syn;
+extern OSThread  *__osRunningThread;
+
+// Function Stubs for Linker
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 void alLink(ALLink *ln, ALLink *to);
 void alUnlink(ALLink *ln);
 void alCopy(void *src, void *dst, s32 size);
 OSIntMask osSetIntMask(OSIntMask mask);
 void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif // _BKA_ANDROID_N64_TYPES_H_
+#endif
 """
 
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Hardware & Graphics Types Injected: {types_path}")
+    print(f"✅ Unified Header Generated: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
