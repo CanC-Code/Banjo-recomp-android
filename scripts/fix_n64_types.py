@@ -3,7 +3,7 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers
-    and resolve missing AL_SEQP events, audio engine types, and constants.
+    and resolve missing AL_SEQP events, audio engine types, struct members, and constants.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -134,6 +134,7 @@ typedef struct ALLink_s {
 typedef struct ALEvtq_s {
     ALLink      freeList;
     ALLink      allocList;
+    s32         eventCount;
 } ALEvtq;
 
 // Define ALEventQueue mapping
@@ -476,6 +477,34 @@ typedef struct ALFilter_s {
     s32               type;
 } ALFilter;
 
+// Filter Sub-States
+typedef struct {
+    s16 fccoef[16];
+    s16 fcoff[16];
+} POLEF_STATE;
+
+typedef struct {
+    s16 unk[16];
+} RESAMPLE_STATE;
+
+typedef struct {
+    ALFilter filter;
+    RESAMPLE_STATE *state;
+    f32 delta;
+    s32 first;
+} ALResampler;
+
+typedef struct {
+    ALFilter    filter;
+    POLEF_STATE *fstate;
+    s32         fc;
+    s32         fgain;
+    s32         first;
+    struct {
+        s16 fccoef[16];
+    } fcvec;
+} ALLowPass;
+
 // Audio engine mix nodes & delays
 typedef struct {
     s32 input;
@@ -487,6 +516,9 @@ typedef struct {
     f32 rsval;
     s32 rsfrac;
     s32 rsdelta;
+    f32 rsgain;
+    ALResampler *rs;
+    ALLowPass *lp;
 } ALDelay;
 
 typedef struct {
@@ -505,12 +537,9 @@ typedef struct {
     s32 maxUpdates;
     s32 maxFXbusses;
     s16 *params; 
+    s32 fxType;
+    s32 outputRate;
 } ALSynConfig;
-
-typedef struct {
-    ALFilter filter;
-    s32      unk;
-} ALLowPass;
 
 typedef struct ALEnvMixer_s {
     ALFilter filter;
@@ -527,6 +556,16 @@ typedef struct ALEnvMixer_s {
     f32      envStep;
     ALParam  *ctrlList;
     ALParam  *paramFreeList;
+    
+    // Mix Parameters
+    s32      delta;
+    s32      segEnd;
+    s32      volume;
+    s32      pan;
+    s32      dryamt;
+    s32      wetamt;
+    s32      cvolL;
+    s32      cvolR;
 } ALEnvMixer;
 
 typedef struct {
@@ -560,6 +599,9 @@ typedef struct {
 #define AL_FILTER_SET_PITCH        2
 #define AL_FILTER_SET_UNITY_PITCH  3
 #define AL_FILTER_START            4
+#define AL_FILTER_SET_FXAMT        5
+#define AL_FILTER_SET_PAN          6
+#define AL_FILTER_SET_VOLUME       7
 
 #define AL_FX                 0
 #define AL_FX_SMALLROOM       1
@@ -576,6 +618,9 @@ typedef struct {
 #define ERR_ALSYN_NO_UPDATE       100
 
 #define AL_TRACK_END              0xFF
+
+#define AL_CACHE_ALIGN            15
+#define AL_EVTQ_END               0x7FFFFFFF
 
 #ifdef __cplusplus
 extern "C" {
@@ -610,7 +655,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added Audio Engine structs, Event Queue definitions, and constants.")
+    print("✅ n64_types.h updated: Added Audio Engine internal struct fields and missing constants.")
 
 if __name__ == '__main__':
     fix_n64_types()
