@@ -138,16 +138,6 @@ typedef struct {
     u16 unkA;
 } ALChanState;
 
-// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer (full definition) ---
-typedef struct ALCSPlayer_s {
-    ALEvtq       evtq;
-    ALChanState  chanState[16];
-    u8           reserved[1024];
-} ALCSPlayer;
-
-typedef ALCSPlayer N_ALCSPlayer;   // alias used by most files
-typedef ALCSPlayer N_ALSeqPlayer;  // alias used by code_21B50.c
-
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
@@ -195,7 +185,7 @@ typedef struct {
 typedef struct {
     s32 order;
     s32 npredictors;
-    s16 book[1]; 
+    s16 book[1];
 } ALADPCMBook;
 
 typedef struct {
@@ -279,6 +269,8 @@ typedef struct {
 // --- MIDI / CSEQ ---
 typedef struct {
     u8 *base;
+    u16 division;  // Added for cseq.c
+    u32 trackOffset[16];  // Added for cseq.c
 } ALCMidiHdr;
 
 typedef struct ALCSeq_s {
@@ -288,9 +280,35 @@ typedef struct ALCSeq_s {
     u32         delta;
     u8          runningStatus;
     u8          status;
+    u32         validTracks;      // Added for cseq.c
+    u32         lastDeltaTicks;   // Added for cseq.c
+    u32         lastTicks;        // Added for cseq.c
+    u8          deltaFlag;        // Added for cseq.c
+    u8          lastStatus[16];  // Added for cseq.c
+    u8          *curBUPtr[16];    // Added for cseq.c
+    u32         curBULen[16];     // Added for cseq.c
+    u8          *curLoc[16];      // Added for cseq.c
+    u32         evtDeltaTicks[16];// Added for cseq.c
+    f32         qnpt;             // Added for cseq.c
 } ALCSeq;
 
+// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
+typedef struct ALCSPlayer_s {
+    ALEvtq       evtq;
+    ALChanState  chanState[16];
+    ALCSeq       *target;         // Added for cspgettempo.c
+    f32          uspt;            // Added for cspgettempo.c
+    u8           reserved[1024 - sizeof(ALSeq*) - sizeof(f32)];
+} ALCSPlayer;
+
+typedef ALCSPlayer N_ALCSPlayer;   // alias used by most files
+typedef ALCSPlayer N_ALSeqPlayer;  // alias used by code_21B50.c
+
 // --- EVENTS ---
+#define AL_SEQP_PLAY_EVT          0x01  // Added for cspplay.c
+#define AL_SEQP_MIDI_EVT          0x02
+#define AL_SEQP_STOP_EVT          0x03
+
 typedef struct {
     u32 ticks;
     u8  status;
@@ -388,7 +406,6 @@ typedef struct {
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
 #define AL_BANK_VERSION           1
-#define AL_SEQP_MIDI_EVT          2
 #define AL_MIDI_ControlChange     0xB0
 #define AL_MIDI_ChannelModeSelect 0xB0
 #define AL_UNK18_EVT              18
@@ -434,7 +451,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added N_ALSeqPlayer alias to ALCSPlayer (fixes code_21B50.c). All previous fixes preserved.")
+    print("✅ n64_types.h updated: Added missing members to ALCSeq_s, ALCSPlayer_s, and ALCMidiHdr. Defined AL_SEQP_PLAY_EVT and other constants.")
 
 if __name__ == '__main__':
     fix_n64_types()
