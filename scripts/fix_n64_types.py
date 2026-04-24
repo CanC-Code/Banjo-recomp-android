@@ -492,6 +492,7 @@ typedef struct ALFilter_s {
 
 typedef struct {
     ALFilter    filter;
+    ADPCM_STATE *state;
     ADPCM_STATE *lstate;
     void        *dma;
     void        *dmaState;
@@ -562,6 +563,13 @@ typedef struct {
     u8 section_count;
     ALSetFXParam paramHdl;
 } ALFx;
+
+typedef struct {
+    ALFilter filter;
+    s32      state;
+    void     *dmaState;
+    void     *dma;
+} ALSave;
 
 typedef struct {
     s32 maxVVoices;
@@ -683,6 +691,7 @@ typedef struct {
 #define AL_RESAMPLE               12
 #define AL_AUXBUS                 13
 #define AL_MAINBUS                14
+#define AL_SAVE                   15
 
 #ifdef __cplusplus
 extern "C" {
@@ -711,6 +720,9 @@ extern s32 alAuxBusParam(void *, s32, void *);
 extern Acmd *alMainBusPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alMainBusParam(void *, s32, void *);
 
+extern Acmd *alSavePull(void *, s16 *, s32, s32, Acmd *);
+extern s32 alSaveParam(void *, s32, void *);
+
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
@@ -732,7 +744,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Corrected Pull return types to Acmd* and added missing Env variables.")
+    print("✅ n64_types.h updated: Added ALSave structures and ensured ALLoadFilter has both states.")
 
 if __name__ == '__main__':
     fix_n64_types()
