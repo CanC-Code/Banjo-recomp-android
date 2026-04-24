@@ -3,6 +3,7 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
+    # Wipe original conflicting headers
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -39,10 +40,13 @@ typedef double             f64;
 #include <stddef.h>
 #include <math.h>
 
-// --- MATH CONSTANTS ---
+// --- MATH CONSTANTS & MACROS ---
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+#define DEGREES_TO_RADIANS(d) ((d) * M_PI / 180.0)
+#define RADIANS_TO_DEGREES(r) ((r) * 180.0 / M_PI)
 
 #ifndef TRUE
 #define TRUE 1
@@ -55,9 +59,8 @@ typedef double             f64;
 typedef s32 OSPri;
 typedef void* OSMesg;
 typedef u32 OSIntMask;
-#define OS_IM_NONE 0
 
-// Thread States
+#define OS_IM_NONE 0
 #define OS_STATE_STOPPED    1
 #define OS_STATE_RUNNABLE   2
 #define OS_STATE_RUNNING    4
@@ -80,6 +83,7 @@ typedef struct OSThread_s {
     int fp;
 } OSThread;
 
+// --- PI & DMA ---
 typedef struct {
     OSMesg      hdr;
     u32         devAddr;
@@ -98,6 +102,7 @@ typedef struct {
     u32 domain;
 } OSPiHandle;
 
+// --- CONTROLLER ---
 typedef struct {
     u16 button;
     s8  stick_x;
@@ -105,26 +110,35 @@ typedef struct {
     u8  errno;
 } OSContPad;
 
-// --- GRAPHICS (GBI) ---
+// --- GRAPHICS ---
 typedef u64 Gfx;
-
-typedef struct {
-    s32 m[4][4];
-} Mtx;
-
+typedef struct { s32 m[4][4]; } Mtx;
 typedef struct {
     short ob[3];
     u16   flag;
     short tc[2];
     u8    cn[4];
 } Vtx_t;
+typedef union { Vtx_t v; long long force_alignment; } Vtx;
 
-typedef union {
-    Vtx_t v;
-    long long force_alignment;
-} Vtx;
+// --- LINKED LIST & EVENT QUEUE ---
+typedef struct ALLink_s {
+    struct ALLink_s *next;
+    struct ALLink_s *prev;
+} ALLink;
 
-// --- AUDIO TYPES & N_AUDIO ---
+typedef struct ALEvtq_s {
+    ALLink      freeList;
+    ALLink      allocList;
+} ALEvtq;
+
+// --- CHANNEL STATE ---
+typedef struct {
+    u32 unk0;
+    u16 unkA;
+} ALChanState;
+
+// --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 typedef u64 Acmd;
@@ -136,6 +150,265 @@ typedef struct {
     s32 count;
 } ALHeap;
 
+typedef struct {
+    ALMicroTime attackTime;
+    ALMicroTime decayTime;
+    ALMicroTime releaseTime;
+    u8          attackVolume;
+    u8          decayVolume;
+} ALEnv;
+
+typedef struct {
+    ALMicroTime attackTime;
+    ALMicroTime decayTime;
+    ALMicroTime releaseTime;
+    u8          attackVolume;
+    u8          decayVolume;
+} ALEnvelope;
+
+typedef struct {
+    u8 velocityMin;
+    u8 velocityMax;
+    u8 keyMin;
+    u8 keyMax;
+    u8 keyBase;
+    u8 detune;
+} ALKeyMap;
+
+typedef struct {
+    u32 start;
+    u32 end;
+    u32 count;
+    s16 state[16];
+} ALADPCMloop;
+
+typedef struct {
+    s32 order;
+    s32 npredictors;
+    s16 book[1];
+} ALADPCMBook;
+
+typedef struct {
+    ALADPCMloop *loop;
+    ALADPCMBook *book;
+} ALADPCMWaveInfo;
+
+typedef struct {
+    u32 start;
+    u32 end;
+    u32 count;
+} ALRawLoop;
+
+typedef struct {
+    void *loop;
+} ALRawWaveInfo;
+
+typedef struct ALWaveTable_s {
+    u8 *base;
+    u32 len;
+    u8  type;
+    u8  flags;
+    union {
+        ALADPCMWaveInfo adpcmWave;
+        ALRawWaveInfo   rawWave;
+    } waveInfo;
+} ALWaveTable;
+
+typedef struct {
+    ALEnvelope  *envelope;
+    ALKeyMap    *keyMap;
+    ALWaveTable *wavetable;
+    u8  samplePan;
+    u8  sampleVolume;
+    u8  flags;
+} ALSound;
+
+typedef struct ALInstrument_s {
+    u8          volume;
+    u8          pan;
+    u8          priority;
+    u8          flags;
+    u16         tremType;
+    u16         tremRate;
+    u16         tremDepth;
+    u16         tremDelay;
+    u16         vibType;
+    u16         vibRate;
+    u16         vibDepth;
+    u16         vibDelay;
+    s16         bendRange;
+    u16         soundCount;
+    ALSound     *soundArray[1];
+} ALInstrument;
+
+typedef struct {
+    u8          *base;
+    u16         instCount;
+    u8          flags;
+    ALInstrument *percussion;
+    ALInstrument *instArray[1];
+} ALBank;
+
+typedef struct {
+    u16         revision;
+    u16         bankCount;
+    ALBank      *bankArray[1];
+} ALBankFile;
+
+// --- SEQUENCE FILE ---
+typedef struct {
+    u32 offset;
+} ALSeqData;
+
+typedef struct {
+    u16      revision;
+    u16      seqCount;
+    ALSeqData seqArray[1];
+} ALSeqFile;
+
+// --- MIDI / CSEQ ---
+typedef struct {
+    u8 *base;
+    u16 division;
+    u32 trackOffset[16];
+} ALCMidiHdr;
+
+typedef struct ALCSeq_s {
+    ALCMidiHdr *base;
+    u8         *cur;
+    u32         track;
+    u32         delta;
+    u8          runningStatus;
+    u8          status;
+    u32         validTracks;
+    u32         lastDeltaTicks;
+    u32         lastTicks;
+    u8          deltaFlag;
+    u8          lastStatus[16];
+    u8          *curBUPtr[16];
+    u32         curBULen[16];
+    u8          *curLoc[16];
+    u32         evtDeltaTicks[16];
+    f32         qnpt;
+} ALCSeq;
+
+typedef ALCSeq ALSeq;
+
+// --- ALCSeqMarker ---
+typedef struct ALCSeqMarker_s {
+    u32         ticks;
+    u8          track;
+    u32         validTracks;
+    u32         lastTicks;
+    u32         lastDeltaTicks;
+    u8          *curLoc[16];
+    u8          *curBUPtr[16];
+    u32         curBULen[16];
+    u8          lastStatus[16];
+    u32         evtDeltaTicks[16];
+} ALCSeqMarker;
+
+// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
+typedef struct ALCSPlayer_s {
+    ALEvtq       evtq;
+    ALChanState  chanState[16];
+    ALCSeq       *target;
+    f32          uspt;
+    u8           reserved[1024 - sizeof(ALCSeq*) - sizeof(f32)];
+} ALCSPlayer;
+
+typedef ALCSPlayer N_ALCSPlayer;
+typedef ALCSPlayer N_ALSeqPlayer;
+
+// --- EVENTS ---
+#define AL_SEQP_PLAY_EVT          0x01
+#define AL_SEQP_MIDI_EVT          0x02
+#define AL_SEQP_STOP_EVT          0x03
+#define AL_SEQ_MIDI_EVT           0x02
+#define AL_SEQ_END_EVT            0x04
+#define AL_CSP_LOOPSTART           0x05
+#define AL_CSP_LOOPEND             0x06
+#define AL_TEMPO_EVT              0x51
+
+#define AL_MIDI_NoteOn            0x90
+#define AL_MIDI_NoteOff           0x80
+#define AL_MIDI_KeyPressure       0xA0
+#define AL_MIDI_ControlChange     0xB0
+#define AL_MIDI_ProgramChange     0xC0
+#define AL_MIDI_ChannelPressure   0xD0
+#define AL_MIDI_PitchBend         0xE0
+#define AL_MIDI_ChannelModeSelect 0xB0
+
+#define AL_MIDI_Meta              0xFF
+#define AL_MIDI_META_TEMPO        0x51
+#define AL_CMIDI_LOOPSTART_CODE   0x70
+#define AL_CMIDI_LOOPEND_CODE     0x71
+#define AL_CMIDI_BLOCK_CODE       0x72
+
+typedef struct {
+    u32 ticks;
+    u8  status;
+    u8  byte1;
+    u8  byte2;
+    u32 duration;
+} ALMIDIEvent;
+
+typedef struct {
+    f32 unk0;
+    f32 unk4;
+} ALUnk18Event;
+
+typedef struct {
+    s32 type;
+    union {
+        ALMIDIEvent  midi;
+        ALUnk18Event unk18;
+        struct {
+            u8 status;
+            u8 type;
+            u8 byte1;
+            u8 byte2;
+            u8 byte3;
+        } tempo;
+        u8 raw[32];
+    } msg;
+} ALEvent;
+
+// --- N_ALVoice / voice param structs ---
+typedef struct ALPVoice_s ALPVoice;
+
+typedef struct N_ALVoice_s {
+    struct N_ALVoice_s *next;
+    ALPVoice           *pvoice;
+    s16                 unityPitch;
+} N_ALVoice;
+
+typedef struct ALPVoice_s {
+    s32 offset;
+} ALPVoice;
+
+typedef struct {
+    s32          delta;
+    s32          type;
+    ALWaveTable *wave;
+    void        *next;
+    s16          unity;
+} ALStartParam;
+
+typedef struct {
+    s32          delta;
+    void        *next;
+    s32          type;
+    s16          unity;
+    ALPan        pan;
+    u8           volume;
+    u8           fxMix;
+    s16          pitch;
+    s32          samples;
+    ALWaveTable *wave;
+} ALStartParamAlt;
+
+// --- MIXER & FILTERS ---
 typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 
@@ -148,120 +421,17 @@ typedef struct ALFilter_s {
     s32               type;
 } ALFilter;
 
-typedef struct ALParam_s {
-    struct ALParam_s    *next;
-    s32                 delta;
-    s32                 type;
-} ALParam;
-
 typedef struct {
-    u8 *base;
-    u32 len;
-    u8  type;
-    u8  flags;
-    void *loop;
-} ALWaveTable;
-
-typedef struct PVoice_s {
     ALFilter    filter;
-    struct PVoice_s *next;
-    s32         offset;
-} PVoice;
+    s32         sourceCount;
+    s32         maxSources;
+    ALFilter    **sources;
+} ALAuxBus;
 
 typedef struct {
     ALFilter    filter;
-    PVoice      *pvoice;
-    u16         unityPitch;
-} N_ALVoice;
-
-typedef struct ALStartParam_s {
-    struct ALStartParam_s *next;
-    s32 delta;
-    s32 type;
-    ALWaveTable *wave;
-    u16 unity;
-} ALStartParam;
-
-typedef struct {
-    struct ALParam_s *next;
-    s32 delta;
-    s32 type;
-    u16 unity;
-    ALPan pan;
-    u16 volume;
-    u16 fxMix;
-    u16 pitch;
-    s32 samples;
-    ALWaveTable *wave;
-} ALStartParamAlt;
-
-// Audio Constants
-#define AL_FILTER_START_VOICE     1
-#define AL_FILTER_START_VOICE_ALT 2
-#define AL_FILTER_ADD_UPDATE     3
-#define ERR_ALSYN_NO_UPDATE      100
-
-typedef struct {
-    ALFilter            filter;
-    ALParam             *ctrlList;
-    ALParam             *freeList;
-    s16                 *outBuf;
-    s32                 lptr;
-} ALEnvMixer;
-
-typedef struct ALLink_s {
-    struct ALLink_s *next;
-    struct ALLink_s *prev;
-} ALLink;
-
-typedef struct {
-    ALLink      node;
-    s32         delta;
-    union {
-        u8      raw[16];
-    } evt;
-} ALEventListItem;
-
-typedef struct {
-    ALLink      freeList;
-    ALLink      allocList;
-} ALEvtq;
-
-typedef ALEvtq ALEventQueue;
-
-typedef struct {
-    s32         input;
-    s32         output;
-    s32         fbcoef;
-    s32         ffcoef;
-    s32         gain;
-} ALDelay;
-
-typedef struct {
-    s32         maxDelay;
-    s32         section_count;
-    ALDelay     *delay;
-} ALFx;
-
-typedef struct {
-    s32         maxVoices;
-    s32         maxEvents;
-    s32         maxChannels;
-    s32         sampleRate;
-    void        *params;
-} ALSynConfig;
-
-typedef void* (*ALSetFXParam)(void *, s32, void *);
-
-typedef struct {
-    ALFilter    filter;
-} ALLowPass;
-
-typedef struct {
-    PVoice      *pVoiceList;
     s32         paramSamples;
-    u32         curSamples;
-    u32         maxSamples;
+    u8          reserved[1020];
 } ALSyn;
 
 typedef struct {
@@ -269,14 +439,23 @@ typedef struct {
     u8    reserved[1024];
 } ALGlobals;
 
-typedef struct {
-    s32  type;
-    union {
-        u8 raw[16];
-    } msg;
-} ALEvent;
+// --- AUDIO CONSTANTS ---
+#define AL_ADPCM_WAVE             0
+#define AL_RAW16_WAVE             1
+#define AL_BANK_VERSION           1
+#define AL_UNK18_EVT              18
+#define ERR_ALBNKFNEW             10
+#define AL_AUX_L_OUT              0
+#define AL_AUX_R_OUT              1
 
-// --- C++ COMPATIBILITY & EXTERNS ---
+#define AL_FILTER_ADD_SOURCE      0x01
+#define AL_FILTER_START_VOICE     0x10
+#define AL_FILTER_START_VOICE_ALT 0x11
+#define AL_FILTER_ADD_UPDATE      0x20
+#define ERR_ALSYN_NO_UPDATE       100
+
+#define AL_TRACK_END              0xFF
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -285,15 +464,11 @@ extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 extern OSThread  *__osRunningThread;
 
+void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
-void alLink(ALLink *ln, ALLink *to);
-void alUnlink(ALLink *ln);
-void alCopy(void *src, void *dst, s32 size);
-OSIntMask osSetIntMask(OSIntMask mask);
-void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
-void* __n_allocParam();
-s32 _n_timeToSamples(ALMicroTime t);
-void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
+
+void *__n_allocParam(void);
+void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 
 #define ALFailIf(cond, err) if (cond) return;
 
@@ -301,13 +476,14 @@ void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
 }
 #endif
 
-#endif // _BKA_ANDROID_N64_TYPES_H_
+#endif
 """
 
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ OS Thread States Added: {types_path}")
+
+    print("✅ n64_types.h updated: Added missing MIDI constants and expanded ALCSeqMarker struct.")
 
 if __name__ == '__main__':
     fix_n64_types()
