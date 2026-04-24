@@ -3,6 +3,7 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
+    # Wipe original headers that conflict with our minimal definitions
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -254,7 +255,7 @@ typedef struct {
 
 typedef ALCSPlayer N_ALCSPlayer;
 
-// --- ADDITIONAL AUDIO TYPES FOR core1/audio/ ---
+// --- N_ALVoice (used by n_synstartvoice*.c) ---
 typedef struct ALPVoice_s ALPVoice;
 
 typedef struct N_ALVoice_s {
@@ -267,6 +268,7 @@ typedef struct ALPVoice_s {
     s32 offset;
 } ALPVoice;
 
+// --- Param structures for voice start ---
 typedef struct {
     s32          delta;
     s32          type;
@@ -310,7 +312,7 @@ typedef struct {
 
 typedef struct {
     ALFilter    filter;
-    s32         paramSamples;
+    s32         paramSamples;   // required by n_synstartvoice*.c
     u8          reserved[1020];
 } ALSyn;
 
@@ -319,7 +321,7 @@ typedef struct {
     u8    reserved[1024];
 } ALGlobals;
 
-// --- CONSTANTS ---
+// --- AUDIO CONSTANTS ---
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
 #define AL_BANK_VERSION           1
@@ -330,16 +332,12 @@ typedef struct {
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
 
-// Audio filter / param constants (required by auxbus.c, n_synstartvoice*.c, etc.)
-#define AL_FILTER_START_VOICE       0x10
-#define AL_FILTER_START_VOICE_ALT   0x11
-#define AL_FILTER_ADD_UPDATE        0x20
-#define AL_FILTER_ADD_SOURCE        0x21   // <-- THIS WAS MISSING
-#define AL_FILTER_SET_SOURCE        0x22
-#define AL_FILTER_SET_VOL           0x23
-#define AL_FILTER_SET_PITCH         0x24
-#define AL_FILTER_SET_FX            0x25
-#define ERR_ALSYN_NO_UPDATE         100
+// Filter / param constants used across core1/audio/
+#define AL_FILTER_ADD_SOURCE      0x01   // <-- This was missing
+#define AL_FILTER_START_VOICE     0x10
+#define AL_FILTER_START_VOICE_ALT 0x11
+#define AL_FILTER_ADD_UPDATE      0x20
+#define ERR_ALSYN_NO_UPDATE       100
 
 #ifdef __cplusplus
 extern "C" {
@@ -352,6 +350,23 @@ extern OSThread  *__osRunningThread;
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
-// Functions required by core1/audio/
 void *__n_allocParam(void);
-void n_alEnvm
+void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
+
+#define ALFailIf(cond, err) if (cond) return;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+"""
+
+    os.makedirs(os.path.dirname(types_path), exist_ok=True)
+    with open(types_path, 'w') as f:
+        f.write(content)
+
+    print("✅ n64_types.h updated with AL_FILTER_ADD_SOURCE and previous audio fixes.")
+
+if __name__ == '__main__':
+    fix_n64_types()
