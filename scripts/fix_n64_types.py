@@ -75,6 +75,44 @@ typedef struct OSThread_s {
     int fp;
 } OSThread;
 
+// --- PI (PARALLEL INTERFACE) & DMA ---
+typedef struct {
+    OSMesg      hdr;
+    u32         devAddr;
+    void        *dramAddr;
+    u32         size;
+    OSMesgQueue *retQueue;
+} OSIoMesg;
+
+typedef struct {
+    u8  type;
+    u32 baseAddr;
+    u32 latency;
+    u32 pulse;
+    u32 pageSize;
+    u32 relDuration;
+    u32 domain;
+} OSPiHandle;
+
+// --- CONTROLLER ---
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errno;
+} OSContPad;
+
+// --- GRAPHICS (GBI) ---
+typedef u64 Gfx;
+typedef struct { s32 m[4][4]; } Mtx;
+typedef struct {
+    short ob[3];
+    u16   flag;
+    short tc[2];
+    u8    cn[4];
+} Vtx_t;
+typedef union { Vtx_t v; long long force_alignment; } Vtx;
+
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
@@ -123,10 +161,10 @@ typedef struct {
 } ALADPCMWaveInfo;
 
 typedef struct {
-    void *loop; // Generic loop
+    void *loop;
 } ALRawWaveInfo;
 
-typedef struct {
+typedef struct ALWaveTable_s {
     u8 *base;
     u32 len;
     u8  type;
@@ -199,7 +237,7 @@ typedef struct {
     u8           reserved[1024];
 } ALCSPlayer;
 
-typedef ALCSPlayer N_ALCSPlayer; // Alias for code compatibility
+typedef ALCSPlayer N_ALCSPlayer;
 
 // --- EVENTS ---
 typedef struct {
@@ -287,7 +325,7 @@ void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Enhanced Audio & MIDI structures added.")
+    print(f"✅ Cumulative N64 types restored and updated.")
 
 if __name__ == '__main__':
     fix_n64_types()
