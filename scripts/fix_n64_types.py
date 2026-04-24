@@ -13,32 +13,35 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Silencing SDK headers...")
+    print("Step 1: Silencing SDK headers to prevent conflicts...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py\n")
 
-    print(f"Step 2: Injecting Unified N64/Audio/Graphics types into {types_path}...")
+    print(f"Step 2: Injecting 'Foundation-First' types into {types_path}...")
     
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
+/**
+ * FOUNDATION TYPES (Must be at the very top!)
+ * These must be defined before any headers are included to prevent
+ * errors in recursive inclusion chains.
+ */
+typedef unsigned char      u8;
+typedef signed char        s8;
+typedef unsigned short     u16;
+typedef signed short       s16;
+typedef unsigned int       u32;
+typedef signed int         s32;
+typedef unsigned long long u64;
+typedef signed long long   s64;
+typedef float              f32;
+typedef double             f64;
+
 #include <stdint.h>
 #include <stddef.h>
-#include <string.h>
-
-// --- BASIC N64 TYPES ---
-typedef uint8_t   u8;
-typedef int8_t    s8;
-typedef uint16_t  u16;
-typedef int16_t   s16;
-typedef uint32_t  u32;
-typedef int32_t   s32;
-typedef uint64_t  u64;
-typedef int64_t   s64;
-typedef float     f32;
-typedef double    f64;
 
 #ifndef TRUE
 #define TRUE 1
@@ -96,10 +99,10 @@ typedef struct {
 } OSContPad;
 
 // --- GRAPHICS (GBI) ---
-typedef uint64_t Gfx;
+typedef u64 Gfx;
 
 typedef struct {
-    int32_t m[4][4];
+    s32 m[4][4];
 } Mtx;
 
 typedef struct {
@@ -117,7 +120,7 @@ typedef union {
 // --- AUDIO SYNTHESIS SYSTEM ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
-typedef uint64_t Acmd;
+typedef u64 Acmd;
 
 typedef struct {
     u8 *base;
@@ -200,7 +203,6 @@ typedef struct {
     ALFilter    filter;
 } ALLowPass;
 
-// --- VOICES & SYNTH ---
 typedef struct PVoice_s {
     ALFilter    filter;
     struct PVoice_s *next;
@@ -214,7 +216,6 @@ typedef struct {
     u32         maxSamples;
 } ALSyn;
 
-// --- THE MISSING GLOBALS ---
 typedef struct {
     ALSyn *drvr;
     u8    reserved[1024];
@@ -236,7 +237,6 @@ extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 extern OSThread  *__osRunningThread;
 
-// Function Stubs for Linker
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 void alLink(ALLink *ln, ALLink *to);
 void alUnlink(ALLink *ln);
@@ -248,13 +248,13 @@ void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
 }
 #endif
 
-#endif
+#endif // _BKA_ANDROID_N64_TYPES_H_
 """
 
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Unified Header Generated: {types_path}")
+    print(f"✅ Foundation-First Header Generated: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
