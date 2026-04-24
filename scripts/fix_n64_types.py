@@ -3,7 +3,7 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers
-    and resolve missing AL_SEQP events and union members.
+    and resolve missing AL_SEQP events, audio engine types, and constants.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -136,6 +136,9 @@ typedef struct ALEvtq_s {
     ALLink      allocList;
 } ALEvtq;
 
+// Define ALEventQueue mapping
+typedef ALEvtq ALEventQueue;
+
 // --- CHANNEL STATE ---
 typedef struct {
     u32 unk0;
@@ -159,6 +162,14 @@ typedef struct {
     s32 len;
     s32 count;
 } ALHeap;
+
+// ALParam
+typedef struct ALParam_s {
+    struct ALParam_s *next;
+    s32 delta;
+    s32 type;
+    union { f32 f; s32 i; } data;
+} ALParam;
 
 typedef struct {
     ALMicroTime attackTime;
@@ -318,18 +329,6 @@ typedef struct ALCSeqMarker_s {
     u32         evtDeltaTicks[16];
 } ALCSeqMarker;
 
-// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
-typedef struct ALCSPlayer_s {
-    ALEvtq       evtq;
-    ALChanState  chanState[16];
-    ALCSeq       *target;
-    f32          uspt;
-    u8           reserved[1024 - sizeof(ALCSeq*) - sizeof(f32)];
-} ALCSPlayer;
-
-typedef ALCSPlayer N_ALCSPlayer;
-typedef ALCSPlayer N_ALSeqPlayer;
-
 // --- EVENTS ---
 #define AL_SEQP_PLAY_EVT          0x01
 #define AL_SEQP_MIDI_EVT          0x02
@@ -388,7 +387,7 @@ typedef struct {
 } ALSpSeqEvent;
 
 typedef struct {
-    s16 vol; // Updated to s16 (standard libaudio type for volume)
+    s16 vol;
 } ALSpVolEvent;
 
 typedef struct {
@@ -409,6 +408,24 @@ typedef struct {
         u8 raw[32];
     } msg;
 } ALEvent;
+
+typedef struct ALEventListItem_s {
+    ALLink      node;
+    ALMicroTime delta;
+    ALEvent     evt;
+} ALEventListItem;
+
+// --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
+typedef struct ALCSPlayer_s {
+    ALEvtq       evtq;
+    ALChanState  chanState[16];
+    ALCSeq       *target;
+    f32          uspt;
+    u8           reserved[1024 - sizeof(ALCSeq*) - sizeof(f32)];
+} ALCSPlayer;
+
+typedef ALCSPlayer N_ALCSPlayer;
+typedef ALCSPlayer N_ALSeqPlayer;
 
 // --- N_ALVoice / voice param structs ---
 typedef struct ALPVoice_s ALPVoice;
@@ -444,9 +461,11 @@ typedef struct {
     ALWaveTable *wave;
 } ALStartParamAlt;
 
+
 // --- MIXER & FILTERS ---
 typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
+typedef s32 (*ALSetFXParam)(void *, s32, void *);
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
@@ -456,6 +475,59 @@ typedef struct ALFilter_s {
     s32               outp;
     s32               type;
 } ALFilter;
+
+// Audio engine mix nodes & delays
+typedef struct {
+    s32 input;
+    s32 output;
+    s16 ffcoef;
+    s16 fbcoef;
+    s16 gain;
+    f32 rsinc;
+    f32 rsval;
+    s32 rsfrac;
+    s32 rsdelta;
+} ALDelay;
+
+typedef struct {
+    ALFilter filter;
+    s16 *base;
+    s16 *input;
+    u32 length;
+    ALDelay *delay;
+    u8 section_count;
+    ALSetFXParam paramHdl;
+} ALFx;
+
+typedef struct {
+    s32 maxVVoices;
+    s32 maxPVoices;
+    s32 maxUpdates;
+    s32 maxFXbusses;
+    s16 *params; 
+} ALSynConfig;
+
+typedef struct {
+    ALFilter filter;
+    s32      unk;
+} ALLowPass;
+
+typedef struct ALEnvMixer_s {
+    ALFilter filter;
+    s32      state;
+    s16      *first;
+    ALMicroTime firstEndTime;
+    s16      *next;
+    ALMicroTime nextEndTime;
+    s32      pitch;
+    s32      step;
+    s32      upitch;
+    ALMicroTime envEndTime;
+    f32      envLevel;
+    f32      envStep;
+    ALParam  *ctrlList;
+    ALParam  *paramFreeList;
+} ALEnvMixer;
 
 typedef struct {
     ALFilter    filter;
@@ -475,12 +547,27 @@ typedef struct {
     u8    reserved[1024];
 } ALGlobals;
 
+
 // --- AUDIO CONSTANTS ---
 #define AL_BANK_VERSION           1
 #define AL_UNK18_EVT              18
 #define ERR_ALBNKFNEW             10
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
+
+#define AL_RESAMPLER_OUT           0
+#define AL_FILTER_SET_WAVETABLE    1
+#define AL_FILTER_SET_PITCH        2
+#define AL_FILTER_SET_UNITY_PITCH  3
+#define AL_FILTER_START            4
+
+#define AL_FX                 0
+#define AL_FX_SMALLROOM       1
+#define AL_FX_BIGROOM         2
+#define AL_FX_ECHO            3
+#define AL_FX_CHORUS          4
+#define AL_FX_FLANGE          5
+#define AL_FX_CUSTOM          6
 
 #define AL_FILTER_ADD_SOURCE      0x01
 #define AL_FILTER_START_VOICE     0x10
@@ -497,6 +584,10 @@ extern "C" {
 extern ALGlobals *alGlobals;
 extern ALSyn     *n_syn;
 extern OSThread  *__osRunningThread;
+
+extern s32 alFxParamHdl(void *, s32, void *);
+extern s32 alFxPull(void *, s16 *, s32, s32, void *);
+extern s32 alFxParam(void *, s32, void *);
 
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
@@ -519,7 +610,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added all missing event types and struct members.")
+    print("✅ n64_types.h updated: Added Audio Engine structs, Event Queue definitions, and constants.")
 
 if __name__ == '__main__':
     fix_n64_types()
