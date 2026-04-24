@@ -3,7 +3,7 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
-    # List of conflicting headers to silence
+    # Wipe original conflicting headers
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -14,13 +14,11 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    # Wipe the conflicting headers
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
-                f.write("// Silenced by fix_n64_types.py to avoid conflicts with n64_types.h\n")
+                f.write("// Silenced by fix_n64_types.py\n")
 
-    # Full content for n64_types.h
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -333,6 +331,7 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_SEQP_PLAY_EVT          0x01
 #define AL_SEQP_MIDI_EVT          0x02
 #define AL_SEQP_STOP_EVT          0x03
+#define AL_SEQP_BANK_EVT          0x04  // Added for cspsetbank.c
 #define AL_SEQ_MIDI_EVT           0x02
 #define AL_SEQ_END_EVT            0x04
 #define AL_CSP_LOOPSTART           0x05
@@ -350,11 +349,12 @@ typedef ALCSPlayer N_ALSeqPlayer;
 
 #define AL_MIDI_Meta              0xFF
 #define AL_MIDI_META_TEMPO        0x51
+#define AL_MIDI_META_EOT          0x2F  // Added for cseq.c
 #define AL_CMIDI_LOOPSTART_CODE   0x70
 #define AL_CMIDI_LOOPEND_CODE     0x71
 #define AL_CMIDI_BLOCK_CODE       0x72
 
-// Wave types (as enum to avoid conflicts)
+// Wave types (as macros to avoid conflicts)
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
 
@@ -371,11 +371,17 @@ typedef struct {
     f32 unk4;
 } ALUnk18Event;
 
+// Added spbank struct for cspsetbank.c
+typedef struct {
+    ALBank *bank;
+} ALSpBankEvent;
+
 typedef struct {
     s32 type;
     union {
         ALMIDIEvent  midi;
         ALUnk18Event unk18;
+        ALSpBankEvent spbank;  // Added for cspsetbank.c
         struct {
             u8 status;
             u8 type;
@@ -494,7 +500,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ Successfully updated n64_types.h and silenced conflicting headers.")
+    print("✅ n64_types.h updated: Added AL_MIDI_META_EOT, AL_SEQP_BANK_EVT, and spbank struct.")
 
 if __name__ == '__main__':
     fix_n64_types()
