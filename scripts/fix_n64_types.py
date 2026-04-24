@@ -121,6 +121,18 @@ typedef struct {
 } Vtx_t;
 typedef union { Vtx_t v; long long force_alignment; } Vtx;
 
+// --- LINKED LIST (required by ALEvtq) ---
+typedef struct ALLink_s {
+    struct ALLink_s *next;
+    struct ALLink_s *prev;
+} ALLink;
+
+// --- EVENT QUEUE (ALEvtq) ---
+typedef struct ALEvtq_s {
+    ALLink      freeList;
+    ALLink      allocList;
+} ALEvtq;
+
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
@@ -180,7 +192,7 @@ typedef struct {
     u32 start;
     u32 end;
     u32 count;
-} ALRawLoop;                     // needed by bnkf.c
+} ALRawLoop;
 
 typedef struct {
     void *loop;
@@ -241,17 +253,17 @@ typedef struct {
 // --- SEQUENCE FILE (bnkf.c) ---
 typedef struct {
     u32 offset;
-} ALSeqData;                     // needed by bnkf.c
+} ALSeqData;
 
 typedef struct {
     u16      revision;
     u16      seqCount;
-    ALSeqData seqArray[1];       // flexible array - required by bnkf.c line 24
+    ALSeqData seqArray[1];
 } ALSeqFile;
 
 // --- MIDI / CSEQ STRUCTS (cseq.c) ---
 typedef struct {
-    u8 *base;                    // ALCMidiHdr* in original SDK
+    u8 *base;
 } ALCMidiHdr;
 
 typedef struct ALCSeq_s {
@@ -265,7 +277,7 @@ typedef struct ALCSeq_s {
 
 // --- N_ALSeqPlayer (code_21B50.c) ---
 typedef struct N_ALSeqPlayer_s {
-    u8 reserved[1024];           // minimal stub - enough for the two functions
+    u8 reserved[1024];
 } N_ALSeqPlayer;
 
 // --- EVENTS ---
@@ -287,7 +299,7 @@ typedef struct {
     union {
         ALMIDIEvent  midi;
         ALUnk18Event unk18;
-        struct {                 // tempo event used by cseq.c
+        struct {
             u8 status;
             u8 type;
             u8 byte1;
@@ -368,24 +380,22 @@ typedef struct {
 #define AL_BANK_VERSION           1
 #define AL_SEQP_MIDI_EVT          2
 #define AL_MIDI_ControlChange     0xB0
-#define AL_MIDI_ChannelModeSelect 0xB0   // same as ControlChange but used explicitly
+#define AL_MIDI_ChannelModeSelect 0xB0
 #define AL_UNK18_EVT              18
 #define ERR_ALBNKFNEW             10
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
 
-// Filter / param constants
 #define AL_FILTER_ADD_SOURCE      0x01
 #define AL_FILTER_START_VOICE     0x10
 #define AL_FILTER_START_VOICE_ALT 0x11
 #define AL_FILTER_ADD_UPDATE      0x20
 #define ERR_ALSYN_NO_UPDATE       100
 
-// MIDI meta / track constants used by cseq.c
 #define AL_TRACK_END              0xFF
 #define AL_MIDI_Meta              0xFF
 #define AL_MIDI_META_TEMPO        0x51
-#define AL_TEMPO_EVT              0x51   // internal event type for tempo
+#define AL_TEMPO_EVT              0x51
 
 #ifdef __cplusplus
 extern "C" {
@@ -398,7 +408,6 @@ extern OSThread  *__osRunningThread;
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
-// Functions required by various core1/audio/ files
 void *__n_allocParam(void);
 void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 
@@ -415,7 +424,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: ALSeqFile + ALSeqData (bnkf.c), ALCSeq + ALCMidiHdr (cseq.c), N_ALSeqPlayer + MIDI constants (code_21B50.c), tempo event in ALEvent.")
+    print("✅ n64_types.h updated: Added ALLink + ALEvtq (fixes the prototype error at line 377). All previous audio fixes preserved.")
 
 if __name__ == '__main__':
     fix_n64_types()
