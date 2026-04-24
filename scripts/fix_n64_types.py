@@ -2,8 +2,7 @@ import os
 
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    
-    # Silence the original SDK headers to prevent conflicts
+
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -52,18 +51,18 @@ typedef double    f64;
 #define M_PI 3.14159265358979323846
 #endif
 
-typedef struct { 
-    int32_t m[4][4]; 
+typedef struct {
+    int32_t m[4][4];
 } Mtx;
 
 // --- OS & KERNEL TYPES ---
 typedef s32 OSPri;
 typedef void* OSMesg;
 
-typedef struct OSMesgQueue_s { 
-    u32 valid; 
-    u32 msgCount; 
-    OSMesg *msg; 
+typedef struct OSMesgQueue_s {
+    u32 valid;
+    u32 msgCount;
+    OSMesg *msg;
 } OSMesgQueue;
 
 typedef struct OSThread_s {
@@ -94,6 +93,20 @@ typedef struct OSPiHandle_s {
     u32 relDuration;
     u32 domain;
 } OSPiHandle;
+
+// --- CONTROLLER INPUT TYPES ---
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errno;
+} OSContPad;
+
+typedef struct {
+    u8  type;
+    u8  status;
+    u8  errno;
+} OSContStatus;
 
 // --- GRAPHICS (GBI) ---
 typedef uint64_t Gfx;
@@ -176,7 +189,7 @@ s32 _n_timeToSamples(ALMicroTime t);
 
 #endif // _BKA_ANDROID_N64_TYPES_H_
 """
-    
+
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
