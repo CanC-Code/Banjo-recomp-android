@@ -176,12 +176,11 @@ typedef struct {
     ALADPCMBook *book;
 } ALADPCMWaveInfo;
 
-// NEW: Required by bnkf.c
 typedef struct {
     u32 start;
     u32 end;
     u32 count;
-} ALRawLoop;
+} ALRawLoop;                     // needed by bnkf.c
 
 typedef struct {
     void *loop;
@@ -239,37 +238,37 @@ typedef struct {
     ALBank      *bankArray[1];
 } ALBankFile;
 
-// NEW: Required by bnkf.c (alSeqFileNew)
+// --- SEQUENCE FILE (bnkf.c) ---
 typedef struct {
-    u16 revision;
-    u16 seqCount;
-    u8  data[1];
+    u32 offset;
+} ALSeqData;                     // needed by bnkf.c
+
+typedef struct {
+    u16      revision;
+    u16      seqCount;
+    ALSeqData seqArray[1];       // flexible array - required by bnkf.c line 24
 } ALSeqFile;
 
+// --- MIDI / CSEQ STRUCTS (cseq.c) ---
 typedef struct {
-    struct ALLink_s *next;
-    struct ALLink_s *prev;
-} ALLink;
+    u8 *base;                    // ALCMidiHdr* in original SDK
+} ALCMidiHdr;
 
-typedef struct {
-    ALLink      freeList;
-    ALLink      allocList;
-} ALEvtq;
+typedef struct ALCSeq_s {
+    ALCMidiHdr *base;
+    u8         *cur;
+    u32         track;
+    u32         delta;
+    u8          runningStatus;
+    u8          status;
+} ALCSeq;
 
-typedef struct {
-    u32 unk0;
-    u16 unkA;
-} ALChanState;
+// --- N_ALSeqPlayer (code_21B50.c) ---
+typedef struct N_ALSeqPlayer_s {
+    u8 reserved[1024];           // minimal stub - enough for the two functions
+} N_ALSeqPlayer;
 
-typedef struct {
-    ALEvtq       evtq;
-    ALChanState  chanState[16];
-    u8           reserved[1024];
-} ALCSPlayer;
-
-typedef ALCSPlayer N_ALCSPlayer;
-
-// --- EVENTS (must be defined before prototypes that use ALEvent) ---
+// --- EVENTS ---
 typedef struct {
     u32 ticks;
     u8  status;
@@ -288,11 +287,17 @@ typedef struct {
     union {
         ALMIDIEvent  midi;
         ALUnk18Event unk18;
-        u8           raw[32];
+        struct {                 // tempo event used by cseq.c
+            u8 status;
+            u8 type;
+            u8 byte1;
+            u8 byte2;
+        } tempo;
+        u8 raw[32];
     } msg;
 } ALEvent;
 
-// --- N_ALVoice / voice param structs (for n_synstartvoice*.c) ---
+// --- N_ALVoice / voice param structs ---
 typedef struct ALPVoice_s ALPVoice;
 
 typedef struct N_ALVoice_s {
@@ -363,17 +368,24 @@ typedef struct {
 #define AL_BANK_VERSION           1
 #define AL_SEQP_MIDI_EVT          2
 #define AL_MIDI_ControlChange     0xB0
+#define AL_MIDI_ChannelModeSelect 0xB0   // same as ControlChange but used explicitly
 #define AL_UNK18_EVT              18
 #define ERR_ALBNKFNEW             10
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
 
-// Filter / param constants used by core1/audio/
+// Filter / param constants
 #define AL_FILTER_ADD_SOURCE      0x01
 #define AL_FILTER_START_VOICE     0x10
 #define AL_FILTER_START_VOICE_ALT 0x11
 #define AL_FILTER_ADD_UPDATE      0x20
 #define ERR_ALSYN_NO_UPDATE       100
+
+// MIDI meta / track constants used by cseq.c
+#define AL_TRACK_END              0xFF
+#define AL_MIDI_Meta              0xFF
+#define AL_MIDI_META_TEMPO        0x51
+#define AL_TEMPO_EVT              0x51   // internal event type for tempo
 
 #ifdef __cplusplus
 extern "C" {
@@ -386,7 +398,7 @@ extern OSThread  *__osRunningThread;
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
-// Functions required by n_synstartvoice*.c and bnkf.c
+// Functions required by various core1/audio/ files
 void *__n_allocParam(void);
 void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 
@@ -403,7 +415,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: ALSeqFile + ALRawLoop added for bnkf.c (all previous fixes preserved).")
+    print("✅ n64_types.h updated: ALSeqFile + ALSeqData (bnkf.c), ALCSeq + ALCMidiHdr (cseq.c), N_ALSeqPlayer + MIDI constants (code_21B50.c), tempo event in ALEvent.")
 
 if __name__ == '__main__':
     fix_n64_types()
