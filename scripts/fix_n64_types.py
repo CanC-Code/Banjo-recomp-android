@@ -370,10 +370,17 @@ typedef struct {
     s32         evtDeltaTicks[16]; 
 } ALCSeq;
 
+// ALCSeqMarker: Expanded to match state tracking required by cseq.c deep copies
 typedef struct {
     u32         curTick;
     u8          *curLoc[16];
     u32         lastStatus[16];
+    u32         validTracks;
+    u32         lastTicks;
+    u32         lastDeltaTicks;
+    u8          *curBUPtr[16];
+    u32         curBULen[16];
+    s32         evtDeltaTicks[16];
 } ALCSeqMarker;
 
 // --- AUDIO EVENT QUEUE TYPES ---
@@ -389,7 +396,7 @@ typedef struct {
     u8   status;
     u8   byte1;
     u8   byte2;
-    u32  duration; // Required by cseq.c for NoteOn
+    u32  duration; 
 } ALMidiMsg;
 
 typedef struct {
@@ -397,7 +404,7 @@ typedef struct {
     u8   type;
     u8   byte1;
     u8   byte2;
-    u8   byte3; // Required for track-specific data
+    u8   byte3; 
 } ALTempoMsg;
 
 typedef struct {
@@ -405,7 +412,7 @@ typedef struct {
 } ALSPBankMsg;
 
 typedef struct {
-    void    *seq; // Required for sequence changes
+    void    *seq; 
 } ALSPSeqMsg;
 
 typedef struct {
