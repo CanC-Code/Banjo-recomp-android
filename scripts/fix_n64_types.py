@@ -13,14 +13,11 @@ def fix_n64_types():
         'include/synthInternals.h'
     ]
 
-    print("Step 1: Silencing SDK headers...")
     for header in headers_to_wipe:
         if os.path.exists(header):
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py\n")
 
-    print(f"Step 2: Injecting Audio 'Next' (N_) types into {types_path}...")
-    
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -42,10 +39,11 @@ typedef double             f64;
 #include <stddef.h>
 #include <math.h>
 
-// --- MATH & CONSTANTS ---
+// --- MATH CONSTANTS ---
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
 #ifndef TRUE
 #define TRUE 1
 #endif
@@ -103,16 +101,24 @@ typedef struct {
 
 // --- GRAPHICS (GBI) ---
 typedef u64 Gfx;
-typedef struct { s32 m[4][4]; } Mtx;
+
+typedef struct {
+    s32 m[4][4];
+} Mtx;
+
 typedef struct {
     short ob[3];
     u16   flag;
     short tc[2];
     u8    cn[4];
 } Vtx_t;
-typedef union { Vtx_t v; long long force_alignment; } Vtx;
 
-// --- AUDIO BASE TYPES ---
+typedef union {
+    Vtx_t v;
+    long long force_alignment;
+} Vtx;
+
+// --- AUDIO TYPES & N_AUDIO ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 typedef u64 Acmd;
@@ -136,21 +142,6 @@ typedef struct ALFilter_s {
     s32               type;
 } ALFilter;
 
-typedef struct ALLink_s {
-    struct ALLink_s *next;
-    struct ALLink_s *prev;
-} ALLink;
-
-// --- AUDIO NEXT (N_) SPECIFIC TYPES ---
-#define AL_FILTER_START_VOICE       1
-#define AL_FILTER_START_VOICE_ALT   2
-#define AL_FILTER_ADD_UPDATE        3
-
-typedef struct {
-    u32         len;
-    u8          *base;
-} ALWaveTable;
-
 typedef struct ALParam_s {
     struct ALParam_s    *next;
     s32                 delta;
@@ -158,45 +149,126 @@ typedef struct ALParam_s {
 } ALParam;
 
 typedef struct {
-    ALParam             msg;
-    ALWaveTable         *wave;
-    u8                  unity;
-} ALStartParam;
-
-typedef struct {
-    ALParam             msg;
-    ALWaveTable         *wave;
-    u8                  unity;
-    ALPan               pan;
-    u8                  volume;
-    u8                  fxMix;
-    f32                 pitch;
-    s32                 samples;
-} ALStartParamAlt;
+    u8 *base;
+    u32 len;
+    u8  type;
+    u8  flags;
+    void *loop;
+} ALWaveTable;
 
 typedef struct PVoice_s {
-    ALFilter            filter;
-    struct PVoice_s     *next;
-    s32                 offset;
+    ALFilter    filter;
+    struct PVoice_s *next;
+    s32         offset;
 } PVoice;
 
 typedef struct {
-    ALFilter            filter;
-    PVoice              *pvoice;
-    u8                  unityPitch;
+    ALFilter    filter;
+    PVoice      *pvoice;
+    u16         unityPitch;
 } N_ALVoice;
 
+typedef struct ALStartParam_s {
+    struct ALStartParam_s *next;
+    s32 delta;
+    s32 type;
+    ALWaveTable *wave;
+    u16 unity;
+} ALStartParam;
+
 typedef struct {
-    PVoice              *pVoiceList;
-    s32                 paramSamples;
-    u32                 curSamples;
-    u32                 maxSamples;
+    struct ALParam_s *next;
+    s32 delta;
+    s32 type;
+    u16 unity;
+    ALPan pan;
+    u16 volume;
+    u16 fxMix;
+    u16 pitch;
+    s32 samples;
+    ALWaveTable *wave;
+} ALStartParamAlt;
+
+// Audio Constants
+#define AL_FILTER_START_VOICE     1
+#define AL_FILTER_START_VOICE_ALT 2
+#define AL_FILTER_ADD_UPDATE     3
+#define ERR_ALSYN_NO_UPDATE      100
+
+typedef struct {
+    ALFilter            filter;
+    ALParam             *ctrlList;
+    ALParam             *freeList;
+    s16                 *outBuf;
+    s32                 lptr;
+} ALEnvMixer;
+
+typedef struct ALLink_s {
+    struct ALLink_s *next;
+    struct ALLink_s *prev;
+} ALLink;
+
+typedef struct {
+    ALLink      node;
+    s32         delta;
+    union {
+        u8      raw[16];
+    } evt;
+} ALEventListItem;
+
+typedef struct {
+    ALLink      freeList;
+    ALLink      allocList;
+} ALEvtq;
+
+typedef ALEvtq ALEventQueue;
+
+typedef struct {
+    s32         input;
+    s32         output;
+    s32         fbcoef;
+    s32         ffcoef;
+    s32         gain;
+} ALDelay;
+
+typedef struct {
+    s32         maxDelay;
+    s32         section_count;
+    ALDelay     *delay;
+} ALFx;
+
+typedef struct {
+    s32         maxVoices;
+    s32         maxEvents;
+    s32         maxChannels;
+    s32         sampleRate;
+    void        *params;
+} ALSynConfig;
+
+typedef void* (*ALSetFXParam)(void *, s32, void *);
+
+typedef struct {
+    ALFilter    filter;
+} ALLowPass;
+
+typedef struct {
+    PVoice      *pVoiceList;
+    s32         paramSamples;
+    u32         curSamples;
+    u32         maxSamples;
 } ALSyn;
 
 typedef struct {
     ALSyn *drvr;
     u8    reserved[1024];
 } ALGlobals;
+
+typedef struct {
+    s32  type;
+    union {
+        u8 raw[16];
+    } msg;
+} ALEvent;
 
 // --- C++ COMPATIBILITY & EXTERNS ---
 #ifdef __cplusplus
@@ -217,8 +289,19 @@ void* __n_allocParam();
 s32 _n_timeToSamples(ALMicroTime t);
 void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
 
+#define ALFailIf(cond, err) if (cond) return;
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // _BKA_ANDROID_N64_TYPES_H_
+"""
+
+    os.makedirs(os.path.dirname(types_path), exist_ok=True)
+    with open(types_path, 'w') as f:
+        f.write(content)
+    print(f"✅ N_AUDIO Support Added: {types_path}")
+
+if __name__ == '__main__':
+    fix_n64_types()
