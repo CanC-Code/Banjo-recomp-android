@@ -83,7 +83,7 @@ typedef struct OSThread_s {
     int fp;
 } OSThread;
 
-// --- PI (PARALLEL INTERFACE) & DMA ---
+// --- PI & DMA ---
 typedef struct {
     OSMesg      hdr;
     u32         devAddr;
@@ -110,7 +110,7 @@ typedef struct {
     u8  errno;
 } OSContPad;
 
-// --- GRAPHICS (GBI) ---
+// --- GRAPHICS ---
 typedef u64 Gfx;
 typedef struct { s32 m[4][4]; } Mtx;
 typedef struct {
@@ -121,17 +121,31 @@ typedef struct {
 } Vtx_t;
 typedef union { Vtx_t v; long long force_alignment; } Vtx;
 
-// --- LINKED LIST (required by ALEvtq) ---
+// --- LINKED LIST & EVENT QUEUE ---
 typedef struct ALLink_s {
     struct ALLink_s *next;
     struct ALLink_s *prev;
 } ALLink;
 
-// --- EVENT QUEUE (ALEvtq) ---
 typedef struct ALEvtq_s {
     ALLink      freeList;
     ALLink      allocList;
 } ALEvtq;
+
+// --- CHANNEL STATE (used by ALCSPlayer) ---
+typedef struct {
+    u32 unk0;
+    u16 unkA;
+} ALChanState;
+
+// --- ALCSPlayer / N_ALCSPlayer (full definition for code_219D0.c, code_21AF0.c, code_21A80.c, code_21B50.c) ---
+typedef struct ALCSPlayer_s {
+    ALEvtq       evtq;
+    ALChanState  chanState[16];
+    u8           reserved[1024];
+} ALCSPlayer;
+
+typedef ALCSPlayer N_ALCSPlayer;   // alias for files that use N_ALCSPlayer
 
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
@@ -250,7 +264,7 @@ typedef struct {
     ALBank      *bankArray[1];
 } ALBankFile;
 
-// --- SEQUENCE FILE (bnkf.c) ---
+// --- SEQUENCE FILE ---
 typedef struct {
     u32 offset;
 } ALSeqData;
@@ -261,7 +275,7 @@ typedef struct {
     ALSeqData seqArray[1];
 } ALSeqFile;
 
-// --- MIDI / CSEQ STRUCTS (cseq.c) ---
+// --- MIDI / CSEQ ---
 typedef struct {
     u8 *base;
 } ALCMidiHdr;
@@ -274,11 +288,6 @@ typedef struct ALCSeq_s {
     u8          runningStatus;
     u8          status;
 } ALCSeq;
-
-// --- N_ALSeqPlayer (code_21B50.c) ---
-typedef struct N_ALSeqPlayer_s {
-    u8 reserved[1024];
-} N_ALSeqPlayer;
 
 // --- EVENTS ---
 typedef struct {
@@ -424,7 +433,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added ALLink + ALEvtq (fixes the prototype error at line 377). All previous audio fixes preserved.")
+    print("✅ n64_types.h updated: Full ALCSPlayer / N_ALCSPlayer with evtq + chanState[16] (fixes code_219D0.c, code_21AF0.c, code_21A80.c, code_21B50.c). All prior fixes preserved.")
 
 if __name__ == '__main__':
     fix_n64_types()
