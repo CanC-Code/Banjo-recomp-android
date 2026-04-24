@@ -148,16 +148,22 @@ typedef struct {
 #define AL_FILTER_ADD_SOURCE       6
 #define ERR_ALSYN_NO_UPDATE        3000
 
-// AL aux bus buffer IDs (RSP DMEM segment indices)
+// AL aux bus buffer IDs
 #define AL_AUX_L_OUT               4
 #define AL_AUX_R_OUT               5
+
+// AL wave type codes
+#define AL_ADPCM_WAVE              0
+#define AL_RAW16_WAVE              1
+
+// AL event type codes
+#define AL_UNK18_EVT               0x18
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
     int32_t (*handler)(void *, int16_t *, int32_t, int32_t, void *);
 } ALFilter;
 
-// Must be defined before ALAuxBus
 #define AL_MAX_SOURCES  8
 
 typedef struct {
@@ -213,17 +219,112 @@ typedef struct {
     u32         count;
 } ALRawLoop;
 
+// adpcmWave sub-struct (used by waveInfo.adpcmWave)
 typedef struct {
+    ALADPCMloop *loop;
+    ALADPCMBook *book;
+} ALADPCMWaveInfo;
+
+// rawWave sub-struct (used by waveInfo.rawWave)
+typedef struct {
+    ALRawLoop   *loop;
+} ALRAWWaveInfo;
+
+typedef struct {
+    u8          *base;
+    u32         baseLength;
     s32         type;
+    u8          flags;
     union {
-        ALADPCMloop adpcmloop;
-        ALRawLoop   rawloop;
-    } lp;
-    union {
-        ALADPCMBook *adpcmbook;
-        void        *nothing;
-    } bk;
+        ALADPCMWaveInfo adpcmWave;
+        ALRAWWaveInfo   rawWave;
+    } waveInfo;
 } ALWaveTable;
+
+// --- AUDIO BANK TYPES ---
+typedef struct {
+    s32         attackTime;
+    s32         decayTime;
+    s32         releaseTime;
+    u8          attackVolume;
+    u8          decayVolume;
+} ALEnvelope;
+
+typedef struct {
+    ALEnvelope  *envelope;
+    ALWaveTable *wavetable;
+    ALPan       pan;
+    u8          volume;
+    u8          flags;
+    u8          pad[2];
+} ALSound;
+
+typedef struct {
+    u8          volume;
+    u8          pan;
+    u8          priority;
+    u8          flags;
+    u8          tremType;
+    u8          tremRate;
+    u8          tremDepth;
+    u8          tremDelay;
+    u8          vibType;
+    u8          vibRate;
+    u8          vibDepth;
+    u8          vibDelay;
+    s16         bendRange;
+    s16         soundCount;
+    ALSound     **soundArray;
+} ALInstrument;
+
+typedef struct {
+    s16         instCount;
+    u8          flags;
+    u8          pad;
+    s32         sampleRate;
+    ALInstrument *percussion;
+    ALInstrument **instArray;
+} ALBank;
+
+typedef struct {
+    s32         revision;
+    s32         bankCount;
+    ALBank      **bankArray;
+} ALBankFile;
+
+// --- SEQUENCE FILE ---
+typedef struct {
+    s32         seqCount;
+    u8          *seqArray[1];
+} ALSeqFile;
+
+// --- AUDIO EVENT QUEUE TYPES ---
+typedef struct {
+    OSMesgQueue *msgQ;
+    u32          head;
+    u32          tail;
+    u32          count;
+} ALEvtq;
+
+// ALEvent message union - fields observed from code_219D0.c usage
+typedef struct {
+    f32 unk0;
+    f32 unk4;
+} ALUnk18Msg;
+
+typedef struct {
+    s32  type;
+    union {
+        ALUnk18Msg unk18;
+        u8         raw[16];
+    } msg;
+} ALEvent;
+
+// --- CS PLAYER (compact sequence player) ---
+typedef struct {
+    ALEvtq      evtq;
+    u8          reserved[256];
+} ALCSPlayer;
 
 // --- AUDIO PARAM UPDATE STRUCTS ---
 typedef struct {
@@ -258,6 +359,7 @@ extern OSThread *__osRunningThread;
 void* __n_allocParam();
 void n_alEnvmixerParam(void *filter, s32 paramID, void *ptr);
 s32 _n_timeToSamples(ALMicroTime t);
+void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 #define ALFailIf(cond, code) if(cond) return;
 #ifdef __cplusplus
 }
