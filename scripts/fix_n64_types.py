@@ -2,9 +2,9 @@ import os
 
 def fix_n64_types():
     """
-    Generates a consolidated n64_types.h file to replace conflicting headers
-    and resolve missing ALPVoice physical state fields, ALCSPlayer sequencing states,
-    and missing event definitions.
+    Generates a consolidated n64_types.h file to replace conflicting headers.
+    Restores the 'offset' member to ALPVoice_s while maintaining the 
+    hardware-level members required by the audio microcode drivers.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -224,6 +224,7 @@ typedef struct ALPVoice_s {
     s32                  em_pan;
     s32                  em_dryamt;
     s32                  em_wetamt;
+    s32                  offset; // Restored for specific bkawrapper logic
 } ALPVoice;
 
 typedef ALPVoice PVoice;
@@ -865,7 +866,7 @@ void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Resolved ALPVoice and ALCSPlayer members, added event constants.")
+    print("✅ n64_types.h updated: Restored missing 'offset' struct member to ALPVoice.")
 
 if __name__ == '__main__':
     fix_n64_types()
