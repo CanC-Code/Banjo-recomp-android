@@ -3,7 +3,7 @@ import os
 def fix_n64_types():
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
-    # Wipe original headers that conflict with our minimal definitions
+    # Wipe original conflicting headers
     headers_to_wipe = [
         'include/2.0L/PR/libaudio.h',
         'include/2.0L/PR/n_libaudio.h',
@@ -255,7 +255,30 @@ typedef struct {
 
 typedef ALCSPlayer N_ALCSPlayer;
 
-// --- N_ALVoice (used by n_synstartvoice*.c) ---
+// --- EVENTS (ALEvent must be defined BEFORE prototypes that use it) ---
+typedef struct {
+    u32 ticks;
+    u8  status;
+    u8  byte1;
+    u8  byte2;
+    u32 duration;
+} ALMIDIEvent;
+
+typedef struct {
+    f32 unk0;
+    f32 unk4;
+} ALUnk18Event;
+
+typedef struct {
+    s32 type;
+    union {
+        ALMIDIEvent  midi;
+        ALUnk18Event unk18;
+        u8           raw[32];
+    } msg;
+} ALEvent;
+
+// --- N_ALVoice / voice param structs (for n_synstartvoice*.c) ---
 typedef struct ALPVoice_s ALPVoice;
 
 typedef struct N_ALVoice_s {
@@ -268,7 +291,6 @@ typedef struct ALPVoice_s {
     s32 offset;
 } ALPVoice;
 
-// --- Param structures for voice start ---
 typedef struct {
     s32          delta;
     s32          type;
@@ -312,7 +334,7 @@ typedef struct {
 
 typedef struct {
     ALFilter    filter;
-    s32         paramSamples;   // required by n_synstartvoice*.c
+    s32         paramSamples;
     u8          reserved[1020];
 } ALSyn;
 
@@ -332,8 +354,8 @@ typedef struct {
 #define AL_AUX_L_OUT              0
 #define AL_AUX_R_OUT              1
 
-// Filter / param constants used across core1/audio/
-#define AL_FILTER_ADD_SOURCE      0x01   // <-- This was missing
+// Filter / param constants used by core1/audio/
+#define AL_FILTER_ADD_SOURCE      0x01
 #define AL_FILTER_START_VOICE     0x10
 #define AL_FILTER_START_VOICE_ALT 0x11
 #define AL_FILTER_ADD_UPDATE      0x20
@@ -350,6 +372,7 @@ extern OSThread  *__osRunningThread;
 void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
+// Functions required by n_synstartvoice*.c
 void *__n_allocParam(void);
 void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
 
@@ -366,7 +389,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated with AL_FILTER_ADD_SOURCE and previous audio fixes.")
+    print("✅ n64_types.h fully fixed: ALEvent moved before prototypes + all previous audio fixes restored.")
 
 if __name__ == '__main__':
     fix_n64_types()
