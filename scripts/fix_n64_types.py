@@ -814,6 +814,7 @@ typedef struct {
 #define AL_FILTER_START_VOICE_ALT 14
 #define AL_FILTER_SET_SOURCE      15
 #define AL_FILTER_ADD_SOURCE      16
+#define AL_FILTER_STOP_VOICE      17
 
 #define AL_FX                 0
 #define AL_FX_SMALLROOM       1
@@ -889,7 +890,7 @@ void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Corrected missing AL_FILTER_ADD_SOURCE constant.")
+    print("✅ n64_types.h updated: Appended AL_FILTER_STOP_VOICE to available constant mapping.")
 
 if __name__ == '__main__':
     fix_n64_types()
