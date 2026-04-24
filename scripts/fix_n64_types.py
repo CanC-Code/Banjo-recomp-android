@@ -426,11 +426,58 @@ typedef struct {
     } msg;
 } ALEvent;
 
+typedef ALEvent N_ALEvent;
+
 typedef struct ALEventListItem_s {
     ALLink      node;
     ALMicroTime delta;
     ALEvent     evt;
 } ALEventListItem;
+
+typedef struct {
+    u32     maxVoices;
+    u32     maxEvents;
+    u8      maxChannels;
+    u8      debugFlags;
+    void    *initOsc;
+    void    *updateOsc;
+    void    *stopOsc;
+    ALHeap  *heap;
+} ALSeqpConfig;
+
+// --- MIXER & FILTERS ---
+typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, Acmd *);
+typedef s32 (*ALSetParam)(void *, s32, void *);
+typedef s32 (*ALSetFXParam)(void *, s32, void *);
+
+typedef struct ALFilter_s {
+    struct ALFilter_s *source;
+    ALCmdHandler      handler;
+    ALSetParam        setParam;
+    s32               inp;
+    s32               outp;
+    s32               type;
+} ALFilter;
+
+typedef struct {
+    ALFilter    filter;
+    s32         sourceCount;
+    s32         maxSources;
+    ALFilter    **sources;
+} ALAuxBus;
+
+typedef ALAuxBus ALMainBus;
+typedef ALAuxBus N_ALAuxBus;
+
+typedef struct {
+    ALFilter    filter;
+    s32         paramSamples;
+    ALMainBus   *mainBus;
+    ALAuxBus    *auxBus;
+    u8          reserved[1020];
+} ALSyn;
+
+typedef ALSyn ALSynth;
 
 // --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
 typedef struct ALCSPlayer_s {
@@ -438,7 +485,19 @@ typedef struct ALCSPlayer_s {
     ALChanState  chanState[16];
     ALCSeq       *target;
     f32          uspt;
-    u8           reserved[1024 - sizeof(ALCSeq*) - sizeof(f32)];
+    ALBank       *bank;
+    ALSyn        *drvr;
+    s32          chanMask;
+    s32          nextDelta;
+    s32          state;
+    u16          vol;
+    u8           debugFlags;
+    s32          frameTime;
+    s32          curTime;
+    void         *initOsc;
+    void         *updateOsc;
+    void         *stopOsc;
+    u8           reserved[512];
 } ALCSPlayer;
 
 typedef ALCSPlayer ALSeqPlayer;
@@ -499,20 +558,6 @@ typedef struct {
     ALWaveTable *wave;
 } ALStartParamAlt;
 
-
-// --- MIXER & FILTERS ---
-typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, Acmd *);
-typedef s32 (*ALSetParam)(void *, s32, void *);
-typedef s32 (*ALSetFXParam)(void *, s32, void *);
-
-typedef struct ALFilter_s {
-    struct ALFilter_s *source;
-    ALCmdHandler      handler;
-    ALSetParam        setParam;
-    s32               inp;
-    s32               outp;
-    s32               type;
-} ALFilter;
 
 typedef struct {
     ALFilter    filter;
@@ -651,23 +696,6 @@ typedef struct ALEnvMixer_s {
     ALFilter **sources;
 } ALEnvMixer;
 
-typedef struct {
-    ALFilter    filter;
-    s32         sourceCount;
-    s32         maxSources;
-    ALFilter    **sources;
-} ALAuxBus;
-
-typedef ALAuxBus ALMainBus;
-typedef ALAuxBus N_ALAuxBus;
-
-typedef struct {
-    ALFilter    filter;
-    s32         paramSamples;
-    u8          reserved[1020];
-} ALSyn;
-
-typedef ALSyn ALSynth;
 
 typedef struct {
     ALSyn *drvr;
@@ -683,6 +711,7 @@ typedef struct {
 #define ADPCMFBYTES               9
 #define LFSAMPLES                 4
 #define FIXED_SAMPLE              160
+#define AL_USEC_PER_FRAME         16667
 
 #define AL_BANK_VERSION           1
 #define AL_UNK18_EVT              18
@@ -785,7 +814,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Corrected DMA pointer, injected VoiceStates, and aligned N_ struct definitions.")
+    print("✅ n64_types.h updated: Resolved ALSyn auxBus, ALSeqpConfig, ALCSPlayer states, and AL_USEC_PER_FRAME.")
 
 if __name__ == '__main__':
     fix_n64_types()
