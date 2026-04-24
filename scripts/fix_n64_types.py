@@ -292,8 +292,13 @@ typedef struct ALCSeq_s {
     f32         qnpt;
 } ALCSeq;
 
-// Add this typedef to alias ALCSeq as ALSeq
 typedef ALCSeq ALSeq;
+
+// --- ALCSeqMarker ---
+typedef struct ALCSeqMarker_s {
+    u32 ticks;
+    u8  track;
+} ALCSeqMarker;
 
 // --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
 typedef struct ALCSPlayer_s {
@@ -311,6 +316,24 @@ typedef ALCSPlayer N_ALSeqPlayer;
 #define AL_SEQP_PLAY_EVT          0x01
 #define AL_SEQP_MIDI_EVT          0x02
 #define AL_SEQP_STOP_EVT          0x03
+#define AL_SEQ_MIDI_EVT           0x02
+#define AL_SEQ_END_EVT            0x04
+#define AL_CSP_LOOPSTART           0x05
+#define AL_CSP_LOOPEND             0x06
+
+#define AL_MIDI_NoteOn            0x90
+#define AL_MIDI_NoteOff           0x80
+#define AL_MIDI_KeyPressure       0xA0
+#define AL_MIDI_ControlChange     0xB0
+#define AL_MIDI_ProgramChange     0xC0
+#define AL_MIDI_ChannelPressure   0xD0
+#define AL_MIDI_PitchBend         0xE0
+
+#define AL_MIDI_META             0xFF
+#define AL_MIDI_META_EOT         0x2F
+#define AL_CMIDI_LOOPSTART_CODE   0x70
+#define AL_CMIDI_LOOPEND_CODE     0x71
+#define AL_CMIDI_BLOCK_CODE       0x72
 
 typedef struct {
     u32 ticks;
@@ -335,6 +358,7 @@ typedef struct {
             u8 type;
             u8 byte1;
             u8 byte2;
+            u8 byte3;  // Added for cseq.c
         } tempo;
         u8 raw[32];
     } msg;
@@ -409,8 +433,6 @@ typedef struct {
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
 #define AL_BANK_VERSION           1
-#define AL_MIDI_ControlChange     0xB0
-#define AL_MIDI_ChannelModeSelect 0xB0
 #define AL_UNK18_EVT              18
 #define ERR_ALBNKFNEW             10
 #define AL_AUX_L_OUT              0
@@ -423,9 +445,6 @@ typedef struct {
 #define ERR_ALSYN_NO_UPDATE       100
 
 #define AL_TRACK_END              0xFF
-#define AL_MIDI_Meta              0xFF
-#define AL_MIDI_META_TEMPO        0x51
-#define AL_TEMPO_EVT              0x51
 
 #ifdef __cplusplus
 extern "C" {
@@ -454,7 +473,7 @@ void n_alEnvmixerParam(void *pvoice, s32 type, void *update);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Added typedef for ALSeq and fixed ALCSPlayer_s reserved array.")
+    print("✅ n64_types.h updated: Added ALCSeqMarker, byte3, and all missing MIDI/sequence constants.")
 
 if __name__ == '__main__':
     fix_n64_types()
