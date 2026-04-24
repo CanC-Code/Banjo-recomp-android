@@ -39,7 +39,14 @@ typedef double             f64;
 #include <stddef.h>
 #include <math.h>
 
-// --- MATH CONSTANTS ---
+// --- MATH CONSTANTS & MACROS ---
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#define DEGREES_TO_RADIANS(d) ((d) * M_PI / 180.0)
+#define RADIANS_TO_DEGREES(r) ((r) * 180.0 / M_PI)
+
 #ifndef TRUE
 #define TRUE 1
 #endif
@@ -124,6 +131,14 @@ typedef struct {
     s32 len;
     s32 count;
 } ALHeap;
+
+typedef struct {
+    ALMicroTime attackTime;
+    ALMicroTime decayTime;
+    ALMicroTime releaseTime;
+    u8          attackVolume;
+    u8          decayVolume;
+} ALEnv; // Short for Envelope in some headers
 
 typedef struct {
     ALMicroTime attackTime;
@@ -325,7 +340,7 @@ void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Cumulative N64 types restored and updated.")
+    print(f"✅ Math constants (M_PI) and Actor helpers added.")
 
 if __name__ == '__main__':
     fix_n64_types()
