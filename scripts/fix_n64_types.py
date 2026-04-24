@@ -328,21 +328,28 @@ typedef struct {
 } ALSeqFile;
 
 // --- COMPACT MIDI SEQUENCE TYPES ---
-// ALCMidiHdr: header for a compact MIDI sequence blob
 typedef struct {
-    u16         division;   // ticks per quarter note (qnpt)
+    u16         division;   
     u16         trackCount;
     u32         trackOffset[1];
 } ALCMidiHdr;
 
-// ALCSeq: compact sequence parser state
+// ALCSeq: Expanded to include state tracking members required by cseq.c
 typedef struct {
     ALCMidiHdr  *base;
     u32         trackEnd[16];
     u32         trackPos[16];
     u8          lastStatus[16];
-    s32         qnpt;       // quarter notes per tick (from header division)
+    s32         qnpt;       
     u32         trackCount;
+    u32         validTracks;    // Track bitmask
+    u32         lastDeltaTicks; // Delta since last process
+    u32         lastTicks;      // Total ticks
+    u32         deltaFlag;      // Timing state flag
+    u8          *curBUPtr[16];  // Current track buffer pointers
+    u32         curBULen[16];   // Current track buffer lengths
+    u8          *curLoc[16];    // Current data locations
+    s32         evtDeltaTicks[16]; // Ticks remaining until next event
 } ALCSeq;
 
 // --- AUDIO EVENT QUEUE TYPES ---
@@ -353,7 +360,6 @@ typedef struct {
     u32          count;
 } ALEvtq;
 
-// ALEvent message sub-structs
 typedef struct {
     s32  ticks;
     u8   status;
@@ -400,15 +406,13 @@ typedef struct {
 typedef struct {
     ALEvtq      evtq;
     ALCSeq      *target;
-    s32         uspt;       // microseconds per tick
+    s32         uspt;       
     ALChanState chanState[AL_MAX_CHANNELS];
     u8          reserved[128];
 } ALCSPlayer;
 
-// N_ prefixed aliases used by decompiled source
 typedef ALCSPlayer N_ALCSPlayer;
 
-// N_ALSeqPlayer: sequence player (MIDI sequencer variant)
 typedef struct {
     ALEvtq      evtq;
     u8          reserved[512];
