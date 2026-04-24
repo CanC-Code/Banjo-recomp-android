@@ -201,11 +201,23 @@ typedef struct {
     ALWaveTable *wave;
 } ALStartParamAlt;
 
+// Mixer & Aux Bus
+typedef struct {
+    ALFilter    filter;
+    s32         sourceCount;
+    s32         maxSources;
+    ALFilter    **sources;
+} ALAuxBus;
+
+#define AL_AUX_L_OUT 0
+#define AL_AUX_R_OUT 1
+
 // Audio Constants
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
-#define AL_FILTER_ADD_UPDATE     3
-#define ERR_ALSYN_NO_UPDATE      100
+#define AL_FILTER_ADD_UPDATE      3
+#define AL_FILTER_ADD_SOURCE      4
+#define ERR_ALSYN_NO_UPDATE       100
 
 typedef struct {
     ALFilter            filter;
@@ -313,7 +325,7 @@ void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ OS Thread States Added: {types_path}")
+    print(f"✅ Audio Aux Bus Support Added: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
