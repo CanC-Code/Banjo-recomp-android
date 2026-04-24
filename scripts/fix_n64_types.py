@@ -19,7 +19,7 @@ def fix_n64_types():
             with open(header, 'w') as f:
                 f.write("// Silenced by fix_n64_types.py to prevent redeclaration conflicts\n")
 
-    print(f"\nStep 2: Injecting Complete Audio Synthesis types into {types_path}...")
+    print(f"\nStep 2: Injecting Graphics and Hardware DMA types into {types_path}...")
     content = """#ifndef _BKA_ANDROID_N64_TYPES_H_
 #define _BKA_ANDROID_N64_TYPES_H_
 
@@ -55,17 +55,12 @@ typedef struct {
     int32_t m[4][4];
 } Mtx;
 
-// --- OS TYPES & INTERRUPTS ---
-#define OS_STATE_STOPPED    1
-#define OS_STATE_RUNNABLE   2
-#define OS_STATE_RUNNING    4
-#define OS_STATE_WAITING    8
-
+// --- OS KERNEL & DMA TYPES ---
 typedef s32 OSPri;
 typedef void* OSMesg;
 typedef u32 OSIntMask;
 
-#define OS_IM_NONE          0
+#define OS_IM_NONE 0
 
 typedef struct OSMesgQueue_s {
     u32 valid;
@@ -84,7 +79,52 @@ typedef struct OSThread_s {
     int fp;
 } OSThread;
 
-// --- AUDIO BASE TYPES ---
+typedef struct OSIoMesg_s {
+    OSMesg      hdr;
+    u32         devAddr;
+    void        *dramAddr;
+    u32         size;
+    OSMesgQueue *retQueue;
+} OSIoMesg;
+
+typedef struct OSPiHandle_s {
+    u8  type;
+    u32 baseAddr;
+    u32 latency;
+    u32 pulse;
+    u32 pageSize;
+    u32 relDuration;
+    u32 domain;
+} OSPiHandle;
+
+// --- CONTROLLER INPUT TYPES ---
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errno;
+} OSContPad;
+
+// --- GRAPHICS (GBI) ---
+// Gfx is the fundamental command unit for the N64 RSP
+typedef uint64_t Gfx;
+
+// Vtx_t represents the raw vertex data as seen by the hardware
+typedef struct {
+    short ob[3];    /* x, y, z */
+    u16   flag;
+    short tc[2];    /* texture coordinates */
+    u8    cn[4];    /* color or normal */
+} Vtx_t;
+
+// Vtx is a union used to ensure alignment and provide alternate views
+typedef union {
+    Vtx_t v;
+    long long force_alignment;
+} Vtx;
+
+// --- AUDIO SYNTHESIS TYPES ---
+// (Keeping existing audio types from previous step)
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 typedef uint64_t Acmd;
@@ -96,7 +136,6 @@ typedef struct {
     s32 count;
 } ALHeap;
 
-// --- FILTER SYSTEM ---
 typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 
@@ -109,24 +148,6 @@ typedef struct ALFilter_s {
     s32               type;
 } ALFilter;
 
-// Filter Type IDs
-#define AL_SYN_FILTER       1
-#define AL_RESAMPLE_FILTER  2
-#define AL_ENV_FILTER       3
-#define AL_FX_FILTER        4
-#define AL_AUX_FILTER       5
-
-// Parameter IDs
-#define AL_FILTER_SET_WAVETABLE     1
-#define AL_FILTER_SET_PITCH         2
-#define AL_FILTER_SET_UNITY_PITCH   3
-#define AL_FILTER_START             4
-#define AL_FILTER_STOP              5
-
-// Filter output IDs
-#define AL_RESAMPLER_OUT            1
-
-// --- MIXER & ENVELOPE TYPES ---
 typedef struct ALParam_s {
     struct ALParam_s    *next;
     s32                 delta;
@@ -137,18 +158,15 @@ typedef struct {
     ALFilter            filter;
     ALParam             *ctrlList;
     ALParam             *freeList;
-    // Mixer state
     s16                 *outBuf;
     s32                 lptr;
 } ALEnvMixer;
 
-// --- LINKED LISTS ---
 typedef struct ALLink_s {
     struct ALLink_s *next;
     struct ALLink_s *prev;
 } ALLink;
 
-// --- EVENT SYSTEM ---
 typedef struct {
     ALLink      node;
     s32         delta;
@@ -164,7 +182,6 @@ typedef struct {
 
 typedef ALEvtq ALEventQueue;
 
-// --- EFFECTS (FX) SYSTEM ---
 typedef struct {
     s32         input;
     s32         output;
@@ -193,35 +210,7 @@ typedef struct {
     ALFilter    filter;
 } ALLowPass;
 
-// FX Presets
-#define AL_FX_NONE          0
-#define AL_FX_SMALLROOM     1
-#define AL_FX_BIGROOM       2
-#define AL_FX_CHORUS        3
-#define AL_FX_FLANGE        4
-#define AL_FX_ECHO          5
-#define AL_FX_CUSTOM        6
-
-// --- PRE-EXISTING VOICES & SYNTH ---
-typedef struct PVoice_s {
-    ALFilter    filter;
-    struct PVoice_s *next;
-    s32         offset;
-} PVoice;
-
-typedef struct ALSyn_s {
-    PVoice      *pVoiceList;
-    s32         paramSamples;
-    u32         curSamples;
-    u32         maxSamples;
-} ALSyn;
-
-typedef struct ALGlobals_s {
-    ALSyn *drvr;
-    u8    reserved[1024];
-} ALGlobals;
-
-// --- EVENT DEFINITIONS ---
+// --- EVENT MESSAGES ---
 typedef struct {
     s32  type;
     union {
@@ -229,21 +218,16 @@ typedef struct {
     } msg;
 } ALEvent;
 
-// --- EXTERNALS ---
+// --- EXTERNALS & STUBS ---
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern ALGlobals *alGlobals;
-extern ALSyn *n_syn;
-extern OSThread *__osRunningThread;
-
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 void alLink(ALLink *ln, ALLink *to);
 void alUnlink(ALLink *ln);
 void alCopy(void *src, void *dst, s32 size);
 OSIntMask osSetIntMask(OSIntMask mask);
 void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
-
 #ifdef __cplusplus
 }
 #endif
@@ -254,7 +238,7 @@ void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Audio Synthesis Engine Types Injected: {types_path}")
+    print(f"✅ Hardware & Graphics Types Injected: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
