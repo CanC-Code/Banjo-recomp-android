@@ -58,13 +58,11 @@ typedef u32 OSIntMask;
 
 #define OS_IM_NONE 0
 
-// Thread States
 #define OS_STATE_STOPPED    1
 #define OS_STATE_RUNNABLE   2
 #define OS_STATE_RUNNING    4
 #define OS_STATE_WAITING    8
 
-// Thread Priorities
 #define OS_PRIORITY_IDLE    0
 #define OS_PRIORITY_RMON    250
 #define OS_PRIORITY_VIMGR   254
@@ -130,18 +128,92 @@ typedef union {
     long long force_alignment;
 } Vtx;
 
-// --- AUDIO TYPES & N_AUDIO ---
+// --- AUDIO TYPES & BANK SYSTEM ---
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
 typedef u64 Acmd;
 
-typedef struct {
-    u8 *base;
-    u8 *cur;
-    s32 len;
-    s32 count;
-} ALHeap;
+// ADPCM / Wave Types
+#define AL_ADPCM_WAVE   0
+#define AL_RAW16_WAVE   1
 
+typedef struct {
+    u32 order;
+    u32 npredictors;
+    s16 *book;
+} ALADPCMBook;
+
+typedef struct {
+    u32 start;
+    u32 end;
+    u32 count;
+    s16 state[16];
+} ALADPCMloop, ALRawLoop;
+
+typedef struct {
+    u8          *base;
+    s32         len;
+    u8          type;
+    u8          flags;
+    union {
+        struct {
+            ALADPCMloop *loop;
+            ALADPCMBook *book;
+        } adpcmWave;
+        struct {
+            ALRawLoop   *loop;
+        } rawWave;
+    } waveInfo;
+} ALWaveTable;
+
+typedef struct {
+    ALWaveTable *wavetable;
+    u8          samplePan;
+    u8          sampleVolume;
+    f32         reverb;
+} ALSound;
+
+typedef struct {
+    u8          volume;
+    u8          pan;
+    u8          priority;
+    u8          flags;
+    u8          tremType;
+    u8          tremRate;
+    u8          tremDepth;
+    u8          tremDelay;
+    u8          vibType;
+    u8          vibRate;
+    u8          vibDepth;
+    u8          vibDelay;
+    s16         bendRange;
+    s16         soundCount;
+    ALSound     *soundArray[1];
+} ALInstrument;
+
+typedef struct {
+    s16         instCount;
+    u8          *flags;
+    ALInstrument *instArray[1];
+} ALBank;
+
+typedef struct {
+    u32         revision;
+    s16         bankCount;
+    ALBank      *bankArray[1];
+} ALBankFile;
+
+typedef struct {
+    s32         instrumentCount;
+    ALInstrument **instruments;
+} ALSeqFile;
+
+// --- SEQUencer / PLAYER ---
+typedef struct {
+    u8 reserved[256];
+} ALCSPlayer;
+
+// --- FILTER & SYNTH ---
 typedef s32 (*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 
@@ -159,14 +231,6 @@ typedef struct ALParam_s {
     s32                 delta;
     s32                 type;
 } ALParam;
-
-typedef struct {
-    u8 *base;
-    u32 len;
-    u8  type;
-    u8  flags;
-    void *loop;
-} ALWaveTable;
 
 typedef struct PVoice_s {
     ALFilter    filter;
@@ -188,44 +252,25 @@ typedef struct ALStartParam_s {
     u16 unity;
 } ALStartParam;
 
-typedef struct {
-    struct ALParam_s *next;
-    s32 delta;
-    s32 type;
-    u16 unity;
-    ALPan pan;
-    u16 volume;
-    u16 fxMix;
-    u16 pitch;
-    s32 samples;
-    ALWaveTable *wave;
-} ALStartParamAlt;
-
-// Mixer & Aux Bus
-typedef struct {
-    ALFilter    filter;
-    s32         sourceCount;
-    s32         maxSources;
-    ALFilter    **sources;
-} ALAuxBus;
-
-#define AL_AUX_L_OUT 0
-#define AL_AUX_R_OUT 1
-
-// Audio Constants
 #define AL_FILTER_START_VOICE     1
 #define AL_FILTER_START_VOICE_ALT 2
 #define AL_FILTER_ADD_UPDATE      3
 #define AL_FILTER_ADD_SOURCE      4
 #define ERR_ALSYN_NO_UPDATE       100
 
+// Event System
+#define AL_UNK18_EVT    18
+
 typedef struct {
-    ALFilter            filter;
-    ALParam             *ctrlList;
-    ALParam             *freeList;
-    s16                 *outBuf;
-    s32                 lptr;
-} ALEnvMixer;
+    s32 type;
+    union {
+        struct {
+            f32 unk0;
+            f32 unk4;
+        } unk18;
+        u8 raw[32];
+    } msg;
+} ALEvent;
 
 typedef struct ALLink_s {
     struct ALLink_s *next;
@@ -235,9 +280,7 @@ typedef struct ALLink_s {
 typedef struct {
     ALLink      node;
     s32         delta;
-    union {
-        u8      raw[16];
-    } evt;
+    ALEvent     evt;
 } ALEventListItem;
 
 typedef struct {
@@ -247,54 +290,16 @@ typedef struct {
 
 typedef ALEvtq ALEventQueue;
 
-typedef struct {
-    s32         input;
-    s32         output;
-    s32         fbcoef;
-    s32         ffcoef;
-    s32         gain;
-} ALDelay;
-
-typedef struct {
-    s32         maxDelay;
-    s32         section_count;
-    ALDelay     *delay;
-} ALFx;
-
-typedef struct {
-    s32         maxVoices;
-    s32         maxEvents;
-    s32         maxChannels;
-    s32         sampleRate;
-    void        *params;
-} ALSynConfig;
-
-typedef void* (*ALSetFXParam)(void *, s32, void *);
-
-typedef struct {
-    ALFilter    filter;
-} ALLowPass;
-
+// --- SYNTH GLOBALS ---
 typedef struct {
     PVoice      *pVoiceList;
     s32         paramSamples;
-    u32         curSamples;
-    u32         maxSamples;
 } ALSyn;
 
 typedef struct {
     ALSyn *drvr;
-    u8    reserved[1024];
 } ALGlobals;
 
-typedef struct {
-    s32  type;
-    union {
-        u8 raw[16];
-    } msg;
-} ALEvent;
-
-// --- C++ COMPATIBILITY & EXTERNS ---
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -308,7 +313,6 @@ void alLink(ALLink *ln, ALLink *to);
 void alUnlink(ALLink *ln);
 void alCopy(void *src, void *dst, s32 size);
 OSIntMask osSetIntMask(OSIntMask mask);
-void* alHeapAlloc(ALHeap *hp, s32 count, s32 size);
 void* __n_allocParam();
 s32 _n_timeToSamples(ALMicroTime t);
 void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
@@ -325,7 +329,7 @@ void n_alEnvmixerParam(PVoice *v, s32 type, void *ptr);
     os.makedirs(os.path.dirname(types_path), exist_ok=True)
     with open(types_path, 'w') as f:
         f.write(content)
-    print(f"✅ Audio Aux Bus Support Added: {types_path}")
+    print(f"✅ Audio Bank & Sequence Player Support Added: {types_path}")
 
 if __name__ == '__main__':
     fix_n64_types()
