@@ -18,7 +18,7 @@ def sanitize_and_patch_types():
         'ALMicroTime', 'ALFilter', 'ALParam', 'N_ALFilter',
         'N_ALSyn', 'ALEvtq', 'ALEvent', 'ALVoiceHandler', 'ALSetParam',
         'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig', 'N_ALVoice',
-        'ALWaveTable', 'ALStartParam', 'ALStartParamAlt',
+        'ALWaveTable', 'ALStartParam', 'ALStartParamAlt', 'ALAuxBus', 'ALFx',
         'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'OSThread', 
         'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
     ]
@@ -57,6 +57,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
 typedef void (*ALCmdHandler)(void *, s16, void *);
 
 typedef struct ALWaveTable_s ALWaveTable;
+typedef struct ALFx_s ALFx;
 
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
@@ -67,6 +68,14 @@ typedef struct ALFilter_s {
     short               outp;
     int                 type;
 } ALFilter;
+
+typedef struct ALAuxBus_s {
+    ALFilter    filter;
+    s32         sourceCount;
+    s32         maxSources;
+    ALFilter    **sources;
+    ALFx        *fx;
+} ALAuxBus;
 
 typedef struct N_ALFilter_s {
     struct N_ALFilter_s *source;
