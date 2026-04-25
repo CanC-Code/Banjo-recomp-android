@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Restores precise audio linkage required by bkawrapper, including extended
-    ALPVoice envelope targets, corrected filter constants, and valid ALEvent mapping.
+    Resolves csplayer and env compile failures by expanding ALChanState, ALEvent unions,
+    fixing structure naming (tremelo), and deduplicating sequence/filter constants.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -148,6 +148,8 @@ typedef ALEvtq ALEventQueue;
 typedef struct {
     u32 unk0;
     u16 unkA;
+    f32 pitchBend;
+    u8  priority;
 } ALChanState;
 
 // --- AUDIO STRUCTURES ---
@@ -413,12 +415,14 @@ typedef struct ALCSeqMarker_s {
 #define AL_SEQP_PROG_EVT          0x0a
 #define AL_TREM_OSC_EVT           0x0b
 #define AL_VIB_OSC_EVT            0x0c
+#define AL_CSP_NOTEOFF_EVT        0x0d
+#define AL_SEQP_PRIORITY_EVT      0x0e
 
-#define AL_SEQ_REF_EVT            0x09
-#define AL_NOTE_END_EVT           0x0A
+#define AL_SEQ_REF_EVT            0x19
+#define AL_NOTE_END_EVT           0x1A
+#define AL_SEQ_MIDI_EVT           0x12
+#define AL_SEQ_END_EVT            0x14
 
-#define AL_SEQ_MIDI_EVT           0x02
-#define AL_SEQ_END_EVT            0x04
 #define AL_CSP_LOOPSTART          0x05
 #define AL_CSP_LOOPEND            0x06
 #define AL_TEMPO_EVT              0x51
@@ -490,6 +494,7 @@ typedef struct {
         } tempo;
         struct {
             struct N_ALVoice_s *voice;
+            u8 chan;
         } note;
         struct {
             struct N_ALVoice_s *voice;
@@ -499,7 +504,12 @@ typedef struct {
         struct {
             struct ALVoiceState_s *vs;
             void *oscState;
+            u8 chan;
         } osc;
+        struct {
+            u8 chan;
+            u8 priority;
+        } sppriority;
         u8 raw[32];
     } msg;
 } ALEvent;
@@ -581,7 +591,7 @@ typedef struct ALVoiceState_s {
     ALMicroTime           envEndTime;
     f32                   pitch;
     f32                   vibrato;
-    f32                   tremolo;
+    f32                   tremelo;
     u8                    envPhase;
     u8                    flags;
     u16                   envGain;
@@ -595,6 +605,9 @@ typedef struct ALVoiceState_s {
     u8                    inst;
     u8                    unk[16];
 } ALVoiceState;
+
+typedef ALVoiceState N_ALVoiceState;
+typedef void* ALFxRef;
 
 // --- ALCSPlayer / N_ALCSPlayer / N_ALSeqPlayer ---
 typedef struct ALCSPlayer_s {
@@ -796,16 +809,13 @@ typedef struct {
 #define AL_MAIN_L_OUT             0
 #define AL_MAIN_R_OUT             1
 
-#define AL_RESAMPLER_OUT           0
+#define AL_RESAMPLER_OUT          0
 #define AL_FILTER_ADD_UPDATE      1
 #define AL_FILTER_SUB_UPDATE      2
 #define AL_FILTER_START           3
 #define AL_FILTER_STOP            4
 #define AL_FILTER_SET_VOL         5
-#define AL_FILTER_SET_VOLUME      5
 #define AL_FILTER_SET_PITCH       6
-#define AL_FILTER_SET_PAN         7
-#define AL_FILTER_SET_FXAMT       8
 #define AL_FILTER_SET_WAVETABLE   9
 #define AL_FILTER_FREE_VOICE      10
 #define AL_FILTER_SET_UNITY_PITCH 11
@@ -815,6 +825,9 @@ typedef struct {
 #define AL_FILTER_SET_SOURCE      15
 #define AL_FILTER_ADD_SOURCE      16
 #define AL_FILTER_STOP_VOICE      17
+#define AL_FILTER_SET_VOLUME      18 
+#define AL_FILTER_SET_PAN         19
+#define AL_FILTER_SET_FXAMT       20
 
 #define AL_FX                 0
 #define AL_FX_SMALLROOM       1
@@ -832,6 +845,7 @@ typedef struct {
 
 #define AL_STOPPED                0
 #define AL_PLAYING                1
+#define AL_STOPPING               2
 #define AL_ADPCM                  10
 #define AL_ENVMIX                 11
 #define AL_RESAMPLE               12
@@ -873,7 +887,7 @@ void alEvtqPostEvent(ALEvtq *evtq, ALEvent *evt, ALMicroTime delta);
 void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
 void *__n_allocParam(void);
-void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
+s32 n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
 
 #define ALFailIf(cond, err) if (cond) return;
 
@@ -890,7 +904,7 @@ void n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Appended AL_FILTER_STOP_VOICE to available constant mapping.")
+    print("✅ n64_types.h updated: Rectified struct members, eliminated constant collisions, and fixed ALVoiceState typos.")
 
 if __name__ == '__main__':
     fix_n64_types()
