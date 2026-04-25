@@ -120,7 +120,7 @@ typedef struct { u32 words[2]; } Acmd;
 typedef struct { u32 w0; u32 w1; } Gfx;
 typedef long Mtx_t[4][4];
 typedef union { Mtx_t m; long long int force_structure_alignment; } Mtx;
-typedef struct Sprite_s Sprite;
+typedef struct sprite Sprite;
 
 typedef struct { s16 ob[16]; } ADPCM_STATE;
 typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
