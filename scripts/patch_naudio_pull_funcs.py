@@ -1,122 +1,130 @@
 import os
 import re
 
-def patch_naudio_and_sdk_types():
+def sanitize_and_patch_types():
     """
-    Expands n64_types.h to include missing SDK types and audio internals
-    required by synthInternals.h and model.h, and fixes header collisions.
+    Sanitizes n64_types.h by removing duplicate typedefs and injecting 
+    the correct BK-specific types with robust preprocessor guards.
     """
     header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
-    include_dir = 'Android/app/src/main/cpp/ultra/' # Directory for polyfills
     
     if not os.path.exists(header_path):
         print(f"❌ Error: {header_path} not found.")
         return
 
-    # 1. Create a bool.h polyfill to fix the "bool.h not found" error
-    bool_h_path = os.path.join(include_dir, "bool.h")
-    with open(bool_h_path, "w") as f:
-        f.write("#ifndef _BOOL_H_\n#define _BOOL_H_\n#include <stdbool.h>\n#endif\n")
-    print("✅ Created bool.h polyfill.")
-
     with open(header_path, 'r') as f:
-        content = f.read()
+        lines = f.readlines()
 
-    # 2. Add missing SDK and Audio types if not present
-    # We define these before the struct patches to ensure visibility
-    sdk_types = """
-// --- SDK and Audio Internal Types ---
+    # Types that are causing 'typedef redefinition' errors
+    conflict_types = [
+        'Acmd', 'Vtx', 'Vtx_t', 'Vtx_n', 'ALPan', 
+        'ADPCM_STATE', 'ALRawLoop', 'RESAMPLE_STATE', 'POLEF_STATE',
+        'ALSynConfig', 'ALDMANew', 'ALDMAproc', 'OSThread'
+    ]
+
+    # Filter out any existing lines that define these types to prevent collisions
+    # This cleans up both original code and previous failed injection attempts.
+    clean_lines = []
+    skip_mode = False
+    for line in lines:
+        # Stop skipping if we hit a closing bracket for a struct we were skipping
+        if skip_mode and '}' in line and ';' in line:
+            skip_mode = False
+            continue
+        if skip_mode:
+            continue
+            
+        # Identify lines containing typedefs for our conflict list
+        if "typedef" in line and any(re.search(rf'\\b{t}\\b', line) for t in conflict_types):
+            # If it's a multiline struct/union, enter skip mode
+            if '{' in line and '}' not in line:
+                skip_mode = True
+            continue
+        
+        # Also remove the OSThread_s struct definition to allow our guarded version
+        if "struct OSThread_s" in line:
+            if '{' in line and '}' not in line:
+                skip_mode = True
+            continue
+
+        clean_lines.append(line)
+
+    content = "".join(clean_lines)
+
+    # Standard BK-Specific Types Block with individual guards
+    bk_types_block = """
+/* --- Banjo-Kazooie Android Recomp Types Block --- */
+#ifndef _BK_SDK_TYPES_H_
+#define _BK_SDK_TYPES_H_
+
+#ifndef _ACMD_H_
+#define _ACMD_H_
+typedef struct { u32 words[2]; } Acmd;
+#endif
+
+#ifndef _ALPAN_H_
+#define _ALPAN_H_
 typedef s32 ALPan;
-typedef struct {
-    u32 words[2];
-} Acmd;
+#endif
 
-typedef struct {
-    s16     ob[16];     /* pcm samples */
-} ADPCM_STATE;
-
-typedef struct {
-    u32     start;
-    u32     end;
-    u32     count;
-    ADPCM_STATE *state;
-} ALRawLoop;
-
-typedef s32 (*ALDMAproc)(s32 addr, s32 len, void *state);
+#ifndef _ALDMA_H_
+#define _ALDMA_H_
+typedef s32 (*ALDMAproc)(s32, s32, void *);
 typedef ALDMAproc (*ALDMANew)(void *state);
+#endif
 
-typedef struct {
-    u32     force_alignment;
-} RESAMPLE_STATE, POLEF_STATE;
+#ifndef _AUDIO_STATES_H_
+#define _AUDIO_STATES_H_
+typedef struct { s16 ob[16]; } ADPCM_STATE;
+typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
+typedef struct { u32 force_alignment; } RESAMPLE_STATE, POLEF_STATE;
+#endif
 
+#ifndef _ALSYNCONFIG_H_
+#define _ALSYNCONFIG_H_
 typedef struct {
-    u32     maxVVoices;
-    u32     maxPVoices;
-    u32     maxUpdates;
-    u32     maxEvents;
-    void    *heap;
-    u32     outputRate;
-    void    *fxType;
+    u32 maxVVoices; u32 maxPVoices; u32 maxUpdates; u32 maxEvents;
+    void *heap; u32 outputRate; void *fxType;
 } ALSynConfig;
+#endif
 
 #ifndef _VTX_H_
-typedef struct {
-    short ob[3];
-    unsigned short flag;
-    short tc[2];
-    unsigned char cn[4];
-} Vtx_t;
-
-typedef struct {
-    short ob[3];
-    unsigned short flag;
-    short tc[2];
-    signed char n[3];
-    unsigned char a;
-} Vtx_n;
-
-typedef union {
-    Vtx_t v;
-    Vtx_n n;
-    long long int force_structure_alignment;
-} Vtx;
+#define _VTX_H_
+typedef struct { short ob[3]; unsigned short flag; short tc[2]; unsigned char cn[4]; } Vtx_t;
+typedef struct { short ob[3]; unsigned short flag; short tc[2]; signed char n[3]; unsigned char a; } Vtx_n;
+typedef union { Vtx_t v; Vtx_n n; long long int force_alignment; } Vtx;
 #endif
+
+#ifndef _OS_THREAD_GUARD
+#define _OS_THREAD_GUARD
+typedef struct OSThread_s {
+    struct OSThread_s *next;
+    s32 priority;
+    void *stack;
+    void *unused;
+} OSThread;
+#endif
+
+#endif /* _BK_SDK_TYPES_H_ */
 """
 
-    if "typedef struct { u32 words[2]; } Acmd;" not in content:
-        # Insert types at the top of the file, after the basic u8/s32 defines
-        content = re.sub(r'(typedef.*s64;)', r'\1\n' + sdk_types, content)
+    # Inject the block after basic primitive types (u8, s64, etc.)
+    match = re.search(r'typedef.*s64;', content)
+    if match:
+        insertion_point = match.end()
+        final_content = content[:insertion_point] + bk_types_block + content[insertion_point:]
+    else:
+        final_content = bk_types_block + content
 
-    # 3. Guard OSThread to prevent redefinition in exceptasm.cpp
-    if "typedef struct OSThread_s" in content and "#ifndef _OS_THREAD_GUARD" not in content:
-        content = re.sub(
-            r'(typedef struct OSThread_s\s+\{.*?\s+\} OSThread;)',
-            r'#ifndef _OS_THREAD_GUARD\n#define _OS_THREAD_GUARD\n\1\n#endif',
-            content, flags=re.DOTALL
-        )
-
-    # 4. Re-apply the sequence arrays for ALCSeq/ALCSeqMarker (Maintenance)
-    bk_fields = "    u8 lastStatus[16];\n    u8 *curBUPtr[16];\n"
-    
-    def clean_and_patch(text, struct_name):
-        pattern = r'(struct\s+\w*?' + struct_name + r'.*?\{)(.*?)(\}\s*' + struct_name + r'?;)'
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            header, body, footer = match.groups()
-            body = re.sub(r'.*lastStatus.*;\n?', '', body)
-            body = re.sub(r'.*curBUPtr.*;\n?', '', body)
-            body = re.sub(r'.*curPtr.*;\n?', '', body)
-            new_body = body.rstrip() + "\n" + bk_fields
-            return text[:match.start()] + header + new_body + footer + text[match.end():]
-        return text
-
-    content = clean_and_patch(content, "ALCSeq")
-    content = clean_and_patch(content, "ALCSeqMarker")
+    # Re-apply structural fixes for the Sequencer (Maintenance)
+    final_content = re.sub(r'(struct\s+ALCSeq\s+\{)(.*?)(\}\s*ALCSeq;)', 
+                           r'\\1\n    u8 lastStatus[16];\n    u8 *curBUPtr[16];\n\\3', 
+                           final_content, flags=re.DOTALL)
 
     with open(header_path, 'w') as f:
-        f.write(content)
+        f.write(final_content)
 
-    print("✅ n64_types.h updated with PR types, audio states, and redefinition guards.")
+    print("✅ n64_types.h sanitized and BK standard types injected.")
 
 if __name__ == '__main__':
-    patch_naudio_and_sdk_types()
+    sanitize_and_patch_types()
