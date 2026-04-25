@@ -10,7 +10,7 @@ def sanitize_and_patch_types():
     with open(header_path, 'r') as f:
         content = f.read()
 
-    # 1. Expanded list: Now includes all AL, OS, and PI missing dependencies
+    # 1. Expanded list includes all AL, OS, and PI missing dependencies
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
         'RESAMPLE_STATE', 'POLEF_STATE', 'ALSynConfig', 
@@ -28,7 +28,7 @@ def sanitize_and_patch_types():
         # Matches single-line primitive typedefs
         content = re.sub(rf'typedef\s+[^;{{}}]+?\s*{t}\s*;', '', content)
 
-    # 3. Inject the clean, standard libultra BK-types block
+    # 3. Inject the clean, standard libultra BK-types block with corrected dramAddr mapping
     bk_types_block = """
 #ifndef _BK_SDK_TYPES_H_
 #define _BK_SDK_TYPES_H_
@@ -158,7 +158,7 @@ typedef struct OSIoMesg_s {
     u8 flags;
     OSPiHandle *piHandle;
     u32 devAddr;
-    u32 bmca;
+    void *dramAddr;
     u32 size;
     OSMesgQueue *mq;
     OSMesg msg;
