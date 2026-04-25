@@ -7,7 +7,7 @@ def sanitize_and_patch_types():
         print(f"File not found: {header_path}")
         return
 
-    # 1. Expanded list includes all AL, OS, PI, Graphics, and Controller dependencies
+    # 1. Expanded list includes all AL, OS, PI, Graphics, Sequence, and Audio Bank dependencies
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
         'RESAMPLE_STATE', 'POLEF_STATE', 'ALSynConfig', 
@@ -17,7 +17,9 @@ def sanitize_and_patch_types():
         'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig', 'N_ALVoice',
         'ALWaveTable', 'ALStartParam', 'ALStartParamAlt', 'ALAuxBus', 'ALFx',
         'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'OSThread', 
-        'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
+        'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap',
+        'ALCSPlayer', 'N_ALCSPlayer', 'N_ALSeqPlayer', 'ALSound', 'ALInstrument',
+        'ALBank', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo'
     ]
 
     with open(header_path, 'r') as f:
@@ -54,17 +56,69 @@ typedef long Mtx_t[4][4];
 typedef union { Mtx_t m; long long int force_structure_alignment; } Mtx;
 typedef struct sprite Sprite;
 
-/* N64 Standard Audio primitives */
+/* N64 Standard Audio primitives and Constants */
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
+
+#define AL_ADPCM_WAVE 0
+#define AL_RAW16_WAVE 1
+
+#define AL_SEQP_MIDI_EVT 0
+#define AL_MIDI_ControlChange 0xB0
+#define AL_MIDI_ChannelModeSelect 0xB0
 
 /* Audio Function Pointers */
 typedef void (*ALVoiceHandler)(void *);
 typedef s32  (*ALSetParam)(void *, s32, void *);
 typedef void (*ALCmdHandler)(void *, s16, void *);
 
-typedef struct ALWaveTable_s ALWaveTable;
 typedef struct ALFx_s ALFx;
+
+/* Audio Bank and Seq Types (Opaque unless properties are directly accessed) */
+typedef struct ALSound_s ALSound;
+typedef struct ALInstrument_s ALInstrument;
+typedef struct ALBank_s ALBank;
+typedef struct ALSeqFile_s ALSeqFile;
+typedef struct ALCSPlayer_s ALCSPlayer;
+typedef struct N_ALCSPlayer_s N_ALCSPlayer;
+typedef struct N_ALSeqPlayer_s N_ALSeqPlayer;
+
+/* WaveTable and ADPCM Types */
+typedef struct { s16 ob[16]; } ADPCM_STATE;
+typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
+
+typedef struct {
+    u32         order;
+    u32         npredictors;
+    s16         *book;
+} ALADPCMBook;
+
+typedef struct {
+    u32         start;
+    u32         end;
+    u32         count;
+    ADPCM_STATE *state;
+} ALADPCMloop;
+
+typedef struct {
+    ALADPCMloop *loop;
+    ALADPCMBook *book;
+} ALADPCMWaveInfo;
+
+typedef struct {
+    ALRawLoop *loop;
+} ALRAWWaveInfo;
+
+typedef struct ALWaveTable_s {
+    u8          *base;
+    s32         len;
+    u8          type;
+    u8          flags;
+    union {
+        ALADPCMWaveInfo adpcmWave;
+        ALRAWWaveInfo   rawWave;
+    } waveInfo;
+} ALWaveTable;
 
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
@@ -123,7 +177,12 @@ typedef struct {
 
 typedef struct ALEvent_s {
     s16 type;
-    union { s32 i[3]; void *p[3]; } msg;
+    union { 
+        s32 i[3]; 
+        void *p[3]; 
+        struct { f32 unk0; f32 unk4; } unk18;
+        struct { s32 ticks; u8 status; u8 byte1; u8 byte2; } midi;
+    } msg;
 } ALEvent;
 
 typedef struct {
@@ -187,8 +246,6 @@ typedef struct N_ALSyn_s {
     u8 pad[512];
 } N_ALSyn;
 
-typedef struct { s16 ob[16]; } ADPCM_STATE;
-typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
 typedef struct { u32 force_alignment; } RESAMPLE_STATE, POLEF_STATE;
 
 typedef struct {
