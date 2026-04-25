@@ -17,7 +17,8 @@ def sanitize_and_patch_types():
         'Vtx_t', 'Vtx_n', 'Vtx', 'ALDMANew', 'ALDMAproc',
         'ALMicroTime', 'ALFilter', 'ALParam', 'N_ALFilter',
         'N_ALSyn', 'ALEvtq', 'ALEvent', 'ALVoiceHandler', 'ALSetParam',
-        'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig',
+        'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig', 'N_ALVoice',
+        'ALWaveTable', 'ALStartParam', 'ALStartParamAlt',
         'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'f32', 'f64',
         'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
     ]
@@ -55,6 +56,8 @@ typedef void (*ALVoiceHandler)(void *);
 typedef s32  (*ALSetParam)(void *, s32, void *);
 typedef void (*ALCmdHandler)(void *, s16, void *);
 
+typedef struct ALWaveTable_s ALWaveTable;
+
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
@@ -80,6 +83,28 @@ typedef struct ALParam_s {
     union { f32 f; s32 i; } data;
 } ALParam;
 
+typedef struct {
+    struct ALParam_s *next;
+    s32 delta;
+    s16 type;
+    s16 unity;
+    ALWaveTable *wave;
+} ALStartParam;
+
+typedef struct {
+    struct ALParam_s *next;
+    s32 delta;
+    s16 type;
+    s16 unity;
+    u8 pan;
+    u8 volume;
+    u8 fxMix;
+    u8 _pad;
+    f32 pitch;
+    s32 samples;
+    ALWaveTable *wave;
+} ALStartParamAlt;
+
 typedef struct ALEvent_s {
     s16 type;
     union { s32 i[3]; void *p[3]; } msg;
@@ -97,14 +122,6 @@ typedef struct ALEvtq_s {
     u8 pad[128];
 } ALEvtq;
 
-typedef struct N_ALSyn_s {
-    u8 pad[512];
-} N_ALSyn;
-
-typedef struct N_PVoice_s {
-    u8 pad[64];
-} N_PVoice;
-
 typedef struct ALVoice_s {
     u8 pad[64];
 } ALVoice;
@@ -114,6 +131,45 @@ typedef struct ALVoiceConfig_s {
     s16 fxBus;
     u8 unityPitch;
 } ALVoiceConfig;
+
+/* Specific N_Audio definitions replacing earlier opaque blobs */
+typedef struct N_PVoice_s {
+    void *node_next;
+    void *node_prev;
+    struct N_ALVoice_s *vvoice;
+    ALFilter *channelKnob;
+    void *decoder;
+    void *resampler;
+    void *envmixer;
+    s32 offset;
+    u8 pad[64];
+} N_PVoice;
+
+typedef struct N_ALVoice_s {
+    void *node_next;
+    void *node_prev;
+    N_PVoice *pvoice;
+    ALWaveTable *table;
+    void *clientPrivate;
+    s16 state;
+    s16 priority;
+    s16 fxBus;
+    s16 unityPitch;
+} N_ALVoice;
+
+typedef struct N_ALSyn_s {
+    void *node_next;
+    void *node_prev;
+    s32 outputRate;
+    s32 maxOutSamples;
+    void *drvr;
+    void *head;
+    void *mainBus;
+    void *auxBus;
+    void *filterList;
+    s32 paramSamples;
+    u8 pad[512];
+} N_ALSyn;
 
 /* Graphics and Sequence Types */
 typedef struct { u32 words[2]; } Acmd;
