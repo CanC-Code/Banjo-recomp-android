@@ -225,7 +225,7 @@ typedef struct ALCSeq_s {
     u32 deltaFlag;
     u8* curLoc[16];
     s32 evtDeltaTicks[16];
-    u32 curBUPtr[16];
+    u8* curBUPtr[16];     /* Resolved pointers for sequence buffer loop targeting */
     u32 curBULen[16];
     u8  lastStatus[16];
     u8  pad[64];
@@ -237,7 +237,7 @@ typedef struct {
     u32 lastTicks;
     u32 lastDeltaTicks;
     u8* curLoc[16];
-    u32 curBUPtr[16];
+    u8* curBUPtr[16];     /* Resolved pointers for sequence buffer loop targeting */
     u32 curBULen[16];
     s32 evtDeltaTicks[16];
     u8  lastStatus[16];
