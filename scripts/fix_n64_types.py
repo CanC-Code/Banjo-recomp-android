@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Resolves n_audio filter failures by realigning ALCmdHandler to 2 arguments,
-    expanding ALAuxBus/ALSyn, and defining missing DMEM/DSP N_Audio constants.
+    Resolves the standard libaudio vs n_audio engine conflict by decoupling 
+    ALFilter/ALSyn (5 args) from N_ALFilter/N_ALSyn (2 args).
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -570,12 +570,16 @@ typedef struct {
     u8  unityPitch;
 } ALVoiceConfig;
 
-// --- MIXER & FILTERS ---
-// Updated to N_Audio 2-argument signature
-typedef Acmd *(*ALCmdHandler)(s32, Acmd *);
+// --- DUAL AUDIO ENGINES DECOUPLING ---
+// Standard libaudio engine signatures
+typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, Acmd *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 typedef s32 (*ALSetFXParam)(void *, s32, void *);
 
+// Next-Generation N_Audio engine signatures
+typedef Acmd *(*N_ALCmdHandler)(s32, Acmd *);
+
+// 1. STANDARD LIBAUDIO FILTERS
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
     ALCmdHandler      handler;
@@ -594,7 +598,6 @@ typedef struct {
 } ALAuxBus;
 
 typedef ALAuxBus ALMainBus;
-typedef ALAuxBus N_ALAuxBus;
 
 typedef struct {
     ALFilter    filter;
@@ -604,6 +607,35 @@ typedef struct {
     ALAuxBus    *auxBus;
     u8          reserved[1016];
 } ALSyn;
+
+// 2. N_AUDIO (NEXT-GEN) FILTERS
+typedef struct N_ALFilter_s {
+    struct N_ALFilter_s *source;
+    N_ALCmdHandler      handler;
+    ALSetParam          setParam;
+    s32                 inp;
+    s32                 outp;
+    s32                 type;
+} N_ALFilter;
+
+typedef struct {
+    N_ALFilter           filter;
+    s32                  sourceCount;
+    s32                  maxSources;
+    N_ALFilter           **sources;
+    struct ALFx_s        *fx;
+} N_ALAuxBus;
+
+typedef N_ALAuxBus N_ALMainBus;
+
+typedef struct {
+    N_ALFilter  filter;
+    s32         paramSamples;
+    s32         outputRate;
+    N_ALMainBus *mainBus;
+    N_ALAuxBus  *auxBus;
+    u8          reserved[1016];
+} N_ALSyn;
 
 typedef ALSyn ALSynth;
 
@@ -703,8 +735,9 @@ typedef struct {
     ALWaveTable *wave;
 } ALStartParamAlt;
 
+// Standard ALLoadFilter
 typedef struct {
-    ALFilter    filter;
+    ALFilter filter;
     ADPCM_STATE *state;
     ADPCM_STATE *lstate;
     ALWaveTable *table;
@@ -718,8 +751,23 @@ typedef struct {
     s32         memin;
 } ALLoadFilter;
 
-typedef ALLoadFilter N_ALLoadFilter;
+// N_Audio ALLoadFilter
+typedef struct {
+    N_ALFilter filter;
+    ADPCM_STATE *state;
+    ADPCM_STATE *lstate;
+    ALWaveTable *table;
+    s32         bookSize;
+    ALADPCMloop loop;
+    ALDMAproc   dma;
+    void        *dmaState;
+    s32         sample;
+    s32         lastsam;
+    s32         first;
+    s32         memin;
+} N_ALLoadFilter;
 
+// Standard ALResampler
 typedef struct {
     ALFilter filter;
     RESAMPLE_STATE *state;
@@ -731,6 +779,19 @@ typedef struct {
     void *ctrlList;
     void *ctrlTail;
 } ALResampler;
+
+// N_Audio ALResampler
+typedef struct {
+    N_ALFilter filter;
+    RESAMPLE_STATE *state;
+    f32 delta;
+    s32 first;
+    s32 motion;
+    f32 ratio;
+    s32 upitch;
+    void *ctrlList;
+    void *ctrlTail;
+} N_ALResampler;
 
 typedef struct {
     ALFilter    filter;
@@ -788,6 +849,7 @@ typedef struct {
     s32 outputRate;
 } ALSynConfig;
 
+// Standard ALEnvMixer
 typedef struct ALEnvMixer_s {
     ALFilter filter;
     s32      state;
@@ -803,8 +865,6 @@ typedef struct ALEnvMixer_s {
     f32      envStep;
     ALParam  *ctrlList;
     ALParam  *paramFreeList;
-    
-    // Mix Parameters
     s32      delta;
     s32      segEnd;
     s32      volume;
@@ -813,8 +873,6 @@ typedef struct ALEnvMixer_s {
     s32      wetamt;
     s32      cvolL;
     s32      cvolR;
-    
-    // Added Envelope parameters
     s32      motion;
     s32      ltgt;
     s32      rtgt;
@@ -826,9 +884,44 @@ typedef struct ALEnvMixer_s {
     ALFilter **sources;
 } ALEnvMixer;
 
+// N_Audio ALEnvMixer
+typedef struct N_ALEnvMixer_s {
+    N_ALFilter filter;
+    s32      state;
+    s16      *first;
+    ALMicroTime firstEndTime;
+    s16      *next;
+    ALMicroTime nextEndTime;
+    s32      pitch;
+    s32      step;
+    s32      upitch;
+    ALMicroTime envEndTime;
+    f32      envLevel;
+    f32      envStep;
+    ALParam  *ctrlList;
+    ALParam  *paramFreeList;
+    s32      delta;
+    s32      segEnd;
+    s32      volume;
+    s32      pan;
+    s32      dryamt;
+    s32      wetamt;
+    s32      cvolL;
+    s32      cvolR;
+    s32      motion;
+    s32      ltgt;
+    s32      rtgt;
+    s32      lratm;
+    s32      lratl;
+    s32      rratm;
+    s32      rratl;
+    ALParam  *ctrlTail;
+    N_ALFilter **sources;
+} N_ALEnvMixer;
+
 typedef struct {
-    ALSyn *drvr;
-    u8    reserved[1024];
+    N_ALSyn *drvr;
+    u8       reserved[1024];
 } ALGlobals;
 
 
@@ -919,7 +1012,7 @@ extern "C" {
 #endif
 
 extern ALGlobals *alGlobals;
-extern ALSyn     *n_syn;
+extern N_ALSyn   *n_syn;
 extern OSThread  *__osRunningThread;
 
 extern Acmd *alFxPull(void *, s16 *, s32, s32, Acmd *);
@@ -974,7 +1067,7 @@ s32 n_alSynAllocVoice(ALVoice *voice, ALVoiceConfig *vc);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Filter handler realigned to N_Audio spec and structural offsets mapped.")
+    print("✅ n64_types.h updated: Decoupled libaudio (5-arg) and n_audio (2-arg) filter structures.")
 
 if __name__ == '__main__':
     fix_n64_types()
