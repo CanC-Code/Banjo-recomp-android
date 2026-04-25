@@ -19,7 +19,8 @@ def sanitize_and_patch_types():
         'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'OSThread', 
         'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap',
         'ALCSPlayer', 'N_ALCSPlayer', 'N_ALSeqPlayer', 'ALSound', 'ALInstrument',
-        'ALBank', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo'
+        'ALBank', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo',
+        'ALEnvelope', 'ALKeyMap', 'ALSeqData'
     ]
 
     with open(header_path, 'r') as f:
@@ -74,15 +75,6 @@ typedef void (*ALCmdHandler)(void *, s16, void *);
 
 typedef struct ALFx_s ALFx;
 
-/* Audio Bank and Seq Types (Opaque unless properties are directly accessed) */
-typedef struct ALSound_s ALSound;
-typedef struct ALInstrument_s ALInstrument;
-typedef struct ALBank_s ALBank;
-typedef struct ALSeqFile_s ALSeqFile;
-typedef struct ALCSPlayer_s ALCSPlayer;
-typedef struct N_ALCSPlayer_s N_ALCSPlayer;
-typedef struct N_ALSeqPlayer_s N_ALSeqPlayer;
-
 /* WaveTable and ADPCM Types */
 typedef struct { s16 ob[16]; } ADPCM_STATE;
 typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
@@ -119,6 +111,72 @@ typedef struct ALWaveTable_s {
         ALRAWWaveInfo   rawWave;
     } waveInfo;
 } ALWaveTable;
+
+/* Audio Bank Definitions */
+typedef struct {
+    ALMicroTime attackTime;
+    ALMicroTime decayTime;
+    ALMicroTime releaseTime;
+    u8 attackVolume;
+    u8 decayVolume;
+} ALEnvelope;
+
+typedef struct {
+    u8 velocityMin;
+    u8 velocityMax;
+    u8 keyMin;
+    u8 keyMax;
+    u8 keyBase;
+    s8 detune;
+} ALKeyMap;
+
+typedef struct ALSound_s {
+    ALEnvelope  *envelope;
+    ALKeyMap    *keyMap;
+    ALWaveTable *wavetable;
+    u8          samplePan;
+    u8          sampleVolume;
+    u8          flags;
+} ALSound;
+
+typedef struct ALInstrument_s {
+    u8          volume;
+    u8          pan;
+    u8          priority;
+    u8          flags;
+    u8          tremType;
+    u8          tremRate;
+    u8          tremDepth;
+    u8          tremDelay;
+    u8          vibType;
+    u8          vibRate;
+    u8          vibDepth;
+    u8          vibDelay;
+    s16         bendRange;
+    s16         soundCount;
+    ALSound     *soundArray[1];
+} ALInstrument;
+
+typedef struct ALBank_s {
+    s16         instCount;
+    u8          flags;
+    u8          pad;
+    s32         sampleRate;
+    ALInstrument *percussion;
+    ALInstrument *instArray[1];
+} ALBank;
+
+/* SeqFile Definitions */
+typedef struct {
+    u8 *offset;
+    s32 len;
+} ALSeqData;
+
+typedef struct ALSeqFile_s {
+    s16 revision;
+    s16 seqCount;
+    ALSeqData seqArray[1];
+} ALSeqFile;
 
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
@@ -206,6 +264,34 @@ typedef struct ALVoiceConfig_s {
     s16 fxBus;
     u8 unityPitch;
 } ALVoiceConfig;
+
+/* Sequence Players with populated Evtq fields */
+typedef struct ALCSPlayer_s {
+    void *node_next;
+    void *node_prev;
+    void *node_handler;
+    void *node_clientData;
+    ALEvtq evtq;
+    u8 pad[256];
+} ALCSPlayer;
+
+typedef struct N_ALCSPlayer_s {
+    void *node_next;
+    void *node_prev;
+    void *node_handler;
+    void *node_clientData;
+    ALEvtq evtq;
+    u8 pad[256];
+} N_ALCSPlayer;
+
+typedef struct N_ALSeqPlayer_s {
+    void *node_next;
+    void *node_prev;
+    void *node_handler;
+    void *node_clientData;
+    ALEvtq evtq;
+    u8 pad[256];
+} N_ALSeqPlayer;
 
 /* Specific N_Audio definitions replacing earlier opaque blobs */
 typedef struct N_PVoice_s {
