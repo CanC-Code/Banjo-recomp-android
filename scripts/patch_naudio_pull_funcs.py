@@ -1,40 +1,38 @@
 import os
 
-def revert_overpatched_signatures():
+def patch_naudio_signatures():
     """
-    Sister script to modify n64_types.h inline.
-    Reverts the bus, resample, and save N_Audio pull functions back to their 
-    strict 2-argument signatures (s32, Acmd *) required by the C implementation, 
-    while leaving the ADPCM and EnvMixer signatures intact.
+    Corrects the specific n_al...Pull function signatures to match the C 
+    implementation arguments required by the Banjo-Kazooie N_Audio engine.
+    Applies the necessary changes to a fresh baseline.
     """
     file_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
     if not os.path.exists(file_path):
-        print(f"❌ Error: {file_path} not found.")
+        print(f"❌ Error: {file_path} not found. Ensure fix_n64_types.py ran first.")
         return
 
     with open(file_path, 'r') as f:
         content = f.read()
 
-    # Safely revert the over-patched bus and effect pull routines back to the 2-arg signature
-    replacements = [
-        ("extern Acmd *n_alResamplePull(void *, s32, Acmd *);", "extern Acmd *n_alResamplePull(s32, Acmd *);"),
-        ("extern Acmd *n_alAuxBusPull(void *, s32, Acmd *);", "extern Acmd *n_alAuxBusPull(s32, Acmd *);"),
-        ("extern Acmd *n_alMainBusPull(void *, s32, Acmd *);", "extern Acmd *n_alMainBusPull(s32, Acmd *);"),
-        ("extern Acmd *n_alFxPull(void *, s32, Acmd *);", "extern Acmd *n_alFxPull(s32, Acmd *);"),
-        ("extern Acmd *n_alSavePull(void *, s32, Acmd *);", "extern Acmd *n_alSavePull(s32, Acmd *);")
-    ]
-
-    for old_sig, new_sig in replacements:
-        if old_sig in content:
-            content = content.replace(old_sig, new_sig)
-        else:
-            print(f"⚠️ Warning: Target signature not found: {old_sig}")
+    # 1. Fix the explicitly failing ADPCM signature (4 args expected)
+    # This matches the implementation in src/core1/audio/n_adpcm.c
+    content = content.replace(
+        "extern Acmd *n_alAdpcmPull(s32, Acmd *);",
+        "extern Acmd *n_alAdpcmPull(void *, s16 *, s32, Acmd *);"
+    )
+    
+    # 2. Fix the explicitly failing EnvMixer signature (3 args expected)
+    # This matches the implementation requested by src/core1/audio/n_auxbus.c
+    content = content.replace(
+        "extern Acmd *n_alEnvmixerPull(s32, Acmd *);",
+        "extern Acmd *n_alEnvmixerPull(void *, s32, Acmd *);"
+    )
 
     with open(file_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h patched: N_Audio bus and effect signatures reverted to 2-arguments.")
+    print("✅ n64_types.h patched: N_Audio ADPCM and EnvMixer function signatures correctly realigned.")
 
 if __name__ == '__main__':
-    revert_overpatched_signatures()
+    patch_naudio_signatures()
