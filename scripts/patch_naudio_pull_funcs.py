@@ -1,45 +1,72 @@
 import os
 
-def patch_naudio_signatures():
+def patch_audio_engine():
     """
-    Corrects the specific n_al...Pull function signatures to match the C 
-    implementation arguments required by the Banjo-Kazooie N_Audio engine.
-    Applies the necessary changes to a fresh baseline.
+    Comprehensive patch for the N_Audio engine parameters.
+    Addresses N_ALSyn struct missing members, remaining function signature
+    mismatches, and a legacy implicit argument call in n_reverb.c.
     """
-    file_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
+    header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
-    if not os.path.exists(file_path):
-        print(f"❌ Error: {file_path} not found. Ensure fix_n64_types.py ran first.")
-        return
+    if os.path.exists(header_path):
+        with open(header_path, 'r') as f:
+            content = f.read()
 
-    with open(file_path, 'r') as f:
-        content = f.read()
+        # 1. Fix the ADPCM signature
+        content = content.replace(
+            "extern Acmd *n_alAdpcmPull(s32, Acmd *);",
+            "extern Acmd *n_alAdpcmPull(void *, s16 *, s32, Acmd *);"
+        )
+        
+        # 2. Fix the EnvMixer signature
+        content = content.replace(
+            "extern Acmd *n_alEnvmixerPull(s32, Acmd *);",
+            "extern Acmd *n_alEnvmixerPull(void *, s32, Acmd *);"
+        )
 
-    # 1. Fix the ADPCM signature (4 args expected)
-    # Matches the implementation in src/core1/audio/n_adpcm.c
-    content = content.replace(
-        "extern Acmd *n_alAdpcmPull(s32, Acmd *);",
-        "extern Acmd *n_alAdpcmPull(void *, s16 *, s32, Acmd *);"
-    )
-    
-    # 2. Fix the EnvMixer signature (3 args expected)
-    # Matches the implementation called in src/core1/audio/n_auxbus.c
-    content = content.replace(
-        "extern Acmd *n_alEnvmixerPull(s32, Acmd *);",
-        "extern Acmd *n_alEnvmixerPull(void *, s32, Acmd *);"
-    )
+        # 3. Fix the Resample signature (Matches N_PVoice*, s16*, Acmd*)
+        content = content.replace(
+            "extern Acmd *n_alResamplePull(s32, Acmd *);",
+            "extern Acmd *n_alResamplePull(N_PVoice *, s16 *, Acmd *);"
+        )
+        # Fallback for previous patch attempt
+        content = content.replace(
+            "extern Acmd *n_alResamplePull(void *, s32, Acmd *);",
+            "extern Acmd *n_alResamplePull(N_PVoice *, s16 *, Acmd *);"
+        )
 
-    # 3. Fix the Resample signature (3 args expected)
-    # Matches the implementation called in src/core1/audio/n_env.c
-    content = content.replace(
-        "extern Acmd *n_alResamplePull(s32, Acmd *);",
-        "extern Acmd *n_alResamplePull(void *, s32, Acmd *);"
-    )
+        # 4. Fix the FxPull signature (Takes void)
+        content = content.replace(
+            "extern Acmd *n_alFxPull(s32, Acmd *);",
+            "extern Acmd *n_alFxPull(void);"
+        )
 
-    with open(file_path, 'w') as f:
-        f.write(content)
+        # 5. Inject the missing 'sv_dramout' into the N_ALSyn struct
+        if "sv_dramout;" not in content:
+            content = content.replace("} N_ALSyn;", "    s32 sv_dramout;\n} N_ALSyn;")
 
-    print("✅ n64_types.h patched: N_Audio ADPCM, EnvMixer, and Resample function signatures correctly realigned.")
+        with open(header_path, 'w') as f:
+            f.write(content)
+        print("✅ n64_types.h patched: Signatures and N_ALSyn struct fully aligned.")
+    else:
+        print(f"❌ Error: {header_path} not found.")
+
+    # 6. Fix legacy 0-argument call in n_reverb.c
+    reverb_path = 'src/core1/audio/n_reverb.c'
+    if os.path.exists(reverb_path):
+        with open(reverb_path, 'r') as f:
+            reverb_content = f.read()
+        
+        # The modern compiler caught `ptr = n_alAuxBusPull();` missing arguments.
+        # We supply the standard N_Audio auxbus arguments: (sampleOffset, Acmd *p)
+        if "ptr = n_alAuxBusPull();" in reverb_content:
+            reverb_content = reverb_content.replace(
+                "ptr = n_alAuxBusPull();", 
+                "ptr = n_alAuxBusPull(0, ptr);"
+            )
+            with open(reverb_path, 'w') as f:
+                f.write(reverb_content)
+            print("✅ n_reverb.c patched: Fixed implicit n_alAuxBusPull arguments.")
 
 if __name__ == '__main__':
-    patch_naudio_signatures()
+    patch_audio_engine()
