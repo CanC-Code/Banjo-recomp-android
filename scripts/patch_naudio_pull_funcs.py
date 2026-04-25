@@ -4,8 +4,9 @@ import re
 def patch_audio_engine():
     """
     Comprehensive patch for the N_Audio engine parameters.
-    Enforces strict topological type-declaration ordering and removes
-    colliding base-Libultra array definitions to fix C++ compilation errors.
+    Fixes 'unknown type name' errors by using fundamental C primitive types
+    in the top-level struct declarations, completely avoiding dependency 
+    on Libultra typedefs being parsed beforehand.
     """
     header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
@@ -23,7 +24,7 @@ def patch_audio_engine():
     content = content.replace("extern Acmd *n_alResamplePull(void *, s32, Acmd *);", "extern Acmd *n_alResamplePull(N_PVoice *, s16 *, Acmd *);")
     content = content.replace("extern Acmd *n_alFxPull(s32, Acmd *);", "extern Acmd *n_alFxPull(void);")
 
-    # 2. Top-level missing structs (Must be declared before they are used in standard unions/structs)
+    # 2. Top-level missing structs using fundamental C types
     top_structs = """
 #ifndef BK_AUDIO_PATCHES_TOP
 #define BK_AUDIO_PATCHES_TOP
@@ -32,22 +33,22 @@ typedef struct ALPlayer_s {
     struct ALPlayer_s *next;
     void *clientData;
     void (*handler)(void *);
-    s64 callTime;
-    s32 samplesLeft;
+    long long callTime;    // Maps to s64
+    int samplesLeft;       // Maps to s32
 } ALPlayer;
 
 typedef struct ALEndEvent_s {
-    s16 type;
-    u32 ticks;
-    u8 status;
-    u8 len;
+    short type;            // Maps to s16
+    unsigned int ticks;    // Maps to u32
+    unsigned char status;  // Maps to u8
+    unsigned char len;     // Maps to u8
 } ALEndEvent;
 
 typedef struct ALLoopEvent_s {
-    s16 type;
-    u8 *start;
-    u8 *end;
-    s32 count;
+    short type;            // Maps to s16
+    unsigned char *start;  // Maps to u8*
+    unsigned char *end;    // Maps to u8*
+    int count;             // Maps to s32
 } ALLoopEvent;
 
 #define AL_SEQP_LOOP_EVT 0x80
@@ -58,14 +59,17 @@ typedef struct ALLoopEvent_s {
 
 #endif // BK_AUDIO_PATCHES_TOP
 """
-    # Hoist dependencies to the top of the file
-    if "BK_AUDIO_PATCHES_TOP" not in content:
-        if "#define _N64_TYPES_H_" in content:
-            content = content.replace("#define _N64_TYPES_H_", "#define _N64_TYPES_H_\n" + top_structs)
-        else:
-            content = top_structs + "\n" + content
 
-    # 3. Bottom-level missing structs (Must be declared after ALEvent is fully defined)
+    # Remove previous top_structs injection if it exists to allow clean replacement
+    content = re.sub(r'#ifndef BK_AUDIO_PATCHES_TOP.*?#endif // BK_AUDIO_PATCHES_TOP', '', content, flags=re.DOTALL)
+
+    # Hoist dependencies to the top of the file
+    if "#define _N64_TYPES_H_" in content:
+        content = content.replace("#define _N64_TYPES_H_", "#define _N64_TYPES_H_\n" + top_structs)
+    else:
+        content = top_structs + "\n" + content
+
+    # 3. Bottom-level missing structs
     bottom_structs = """
 #ifndef BK_AUDIO_PATCHES_BOTTOM
 #define BK_AUDIO_PATCHES_BOTTOM
@@ -84,33 +88,33 @@ typedef N_ALSyn N_ALSynth;
     if "BK_AUDIO_PATCHES_BOTTOM" not in content:
         content += bottom_structs
 
-    # 4. Clean residual generic Libultra arrays to avoid duplicate/shadowing member collisions
+    # 4. Clean residual generic Libultra arrays
     content = re.sub(r'u8\s+lastStatus\[16\];', '// removed lastStatus array', content)
     content = re.sub(r'u8\s*\*\s*curBUPtr\[16\];', '// removed curBUPtr array', content)
 
-    # 5. Inject custom Banjo-Kazooie fields
+    # 5. Inject custom Banjo-Kazooie fields using primitive types to match top declarations
     if "sv_dramout;" not in content:
-        content = re.sub(r'\}\s*N_ALSyn;', '    s32 sv_dramout;\n    s32 curSamples;\n    ALPlayer *head;\n    ALPlayer *n_sndp;\n} N_ALSyn;', content)
+        content = re.sub(r'\}\s*N_ALSyn;', '    int sv_dramout;\n    int curSamples;\n    ALPlayer *head;\n    ALPlayer *n_sndp;\n} N_ALSyn;', content)
 
     if "loopStart;" not in content:
-        content = re.sub(r'\}\s*ALCSPlayer;', '    u8 *loopStart;\n    u8 *loopEnd;\n    s32 loopCount;\n} ALCSPlayer;', content)
+        content = re.sub(r'\}\s*ALCSPlayer;', '    unsigned char *loopStart;\n    unsigned char *loopEnd;\n    int loopCount;\n} ALCSPlayer;', content)
 
-    if "u8 *trackStart;" not in content:
-        content = re.sub(r'\}\s*ALCSeq;', '    u8 *trackStart;\n    u8 *curPtr;\n    u8 lastStatus;\n} ALCSeq;', content)
+    if "unsigned char *trackStart;" not in content and "u8 *trackStart;" not in content:
+        content = re.sub(r'\}\s*ALCSeq;', '    unsigned char *trackStart;\n    unsigned char *curPtr;\n    unsigned char lastStatus;\n} ALCSeq;', content)
 
-    if "s32 curTicks;" not in content:
-        content = re.sub(r'\}\s*ALCSeqMarker;', '    u8 *curPtr;\n    u8 lastStatus;\n    s32 curTicks;\n} ALCSeqMarker;', content)
+    if "curTicks;" not in content:
+        content = re.sub(r'\}\s*ALCSeqMarker;', '    unsigned char *curPtr;\n    unsigned char lastStatus;\n    int curTicks;\n} ALCSeqMarker;', content)
 
     if "ALEndEvent end;" not in content:
         content = re.sub(r'(ALTempoEvent\s+tempo;)', r'\1\n    ALEndEvent end;\n    ALLoopEvent loop;', content)
 
-    if "u32 ticks;" not in content:
-        content = re.sub(r'\}\s*ALTempoEvent;', '    u32 ticks;\n    u8 len;\n} ALTempoEvent;', content)
+    if "unsigned int ticks;" not in content and "u32 ticks;" not in content:
+        content = re.sub(r'\}\s*ALTempoEvent;', '    unsigned int ticks;\n    unsigned char len;\n} ALTempoEvent;', content)
 
     with open(header_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h patched: Strict topological ordering enforced and array conflicts resolved.")
+    print("✅ n64_types.h patched: Primitive C types used to avoid declaration ordering issues.")
 
     # 6. Reverb implicit call fix (Maintained)
     reverb_path = 'src/core1/audio/n_reverb.c'
