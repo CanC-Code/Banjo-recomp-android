@@ -15,24 +15,31 @@ def patch_naudio_signatures():
     with open(file_path, 'r') as f:
         content = f.read()
 
-    # 1. Fix the explicitly failing ADPCM signature (4 args expected)
-    # This matches the implementation in src/core1/audio/n_adpcm.c
+    # 1. Fix the ADPCM signature (4 args expected)
+    # Matches the implementation in src/core1/audio/n_adpcm.c
     content = content.replace(
         "extern Acmd *n_alAdpcmPull(s32, Acmd *);",
         "extern Acmd *n_alAdpcmPull(void *, s16 *, s32, Acmd *);"
     )
     
-    # 2. Fix the explicitly failing EnvMixer signature (3 args expected)
-    # This matches the implementation requested by src/core1/audio/n_auxbus.c
+    # 2. Fix the EnvMixer signature (3 args expected)
+    # Matches the implementation called in src/core1/audio/n_auxbus.c
     content = content.replace(
         "extern Acmd *n_alEnvmixerPull(s32, Acmd *);",
         "extern Acmd *n_alEnvmixerPull(void *, s32, Acmd *);"
     )
 
+    # 3. Fix the Resample signature (3 args expected)
+    # Matches the implementation called in src/core1/audio/n_env.c
+    content = content.replace(
+        "extern Acmd *n_alResamplePull(s32, Acmd *);",
+        "extern Acmd *n_alResamplePull(void *, s32, Acmd *);"
+    )
+
     with open(file_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h patched: N_Audio ADPCM and EnvMixer function signatures correctly realigned.")
+    print("✅ n64_types.h patched: N_Audio ADPCM, EnvMixer, and Resample function signatures correctly realigned.")
 
 if __name__ == '__main__':
     patch_naudio_signatures()
