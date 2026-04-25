@@ -7,7 +7,7 @@ def sanitize_and_patch_types():
         print(f"File not found: {header_path}")
         return
 
-    # 1. Expanded list includes all AL, OS, PI, Graphics, Sequence, and Audio Bank dependencies
+    # Expanded list includes all AL, OS, PI, Graphics, Sequence, and Audio Bank dependencies
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
         'RESAMPLE_STATE', 'POLEF_STATE', 'ALSynConfig', 
@@ -26,14 +26,12 @@ def sanitize_and_patch_types():
     with open(header_path, 'r') as f:
         content = f.read()
 
-    # 2. Aggressively strip existing definitions (handles multi-line structs/unions)
+    # Aggressively strip existing definitions (handles multi-line structs/unions)
     for t in types_to_clean:
-        # Matches: typedef struct/union [Optional_Tag] { ... } TypeName;
         content = re.sub(rf'typedef\s+(struct|union)\s+([a-zA-Z0-9_]+\s*)?{{.*?}}\s*{t}\s*;', '', content, flags=re.DOTALL)
-        # Matches single-line primitive typedefs
         content = re.sub(rf'typedef\s+[^;{{}}]+?\s*{t}\s*;', '', content)
 
-    # 3. Inject the comprehensive libultra BK-types block
+    # Inject the comprehensive libultra BK-types block
     bk_types_block = """
 #ifndef _BK_SDK_TYPES_H_
 #define _BK_SDK_TYPES_H_
@@ -190,14 +188,29 @@ typedef struct ALSeqFile_s {
     ALSeqData seqArray[1];
 } ALSeqFile;
 
+/* Compressed MIDI Header and Sequence Types */
 typedef struct {
-    u32 pad;
+    u32 magic;
+    u32 headerSize;
+    u16 format;
+    u16 trackCount;
+    s16 division;
+    u32 trackOffset[16];
 } ALCMidiHdr;
 
 typedef struct ALCSeq_s {
     ALCMidiHdr *base;
-    s32 qnpt;
-    u8 pad[64];
+    u32 validTracks;
+    f32 qnpt;
+    u32 lastDeltaTicks;
+    u32 lastTicks;
+    u32 deltaFlag;
+    u8* curLoc[16];
+    s32 evtDeltaTicks[16];
+    u32 curBUPtr[16];
+    u32 curBULen[16];
+    u8  lastStatus[16];
+    u8  pad[64];
 } ALCSeq;
 
 /* Standard N64 Libaudio Structs */
@@ -440,7 +453,7 @@ typedef struct OSIoMesg_s {
 
 #endif
 """
-    # 4. Insert immediately after the base s64/u64 primitives
+    # Insert immediately after the base s64/u64 primitives
     match = re.search(r'typedef.*s64;', content)
     if match:
         content = content[:match.end()] + bk_types_block + content[match.end():]
