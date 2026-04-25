@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Resolves csplayer and env compile failures by expanding ALChanState, ALEvent unions,
-    fixing structure naming (tremelo), and deduplicating sequence/filter constants.
+    Resolves csplayer and n_load compile failures by defining ALOscInit function
+    pointers, missing ADPCM dc_* fields, ALVoiceConfig, and MIDI bitmasks.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -129,29 +129,6 @@ typedef struct {
 } Vtx_t;
 typedef union { Vtx_t v; long long force_alignment; } Vtx;
 
-// --- LINKED LIST & EVENT QUEUE ---
-typedef struct ALLink_s {
-    struct ALLink_s *next;
-    struct ALLink_s *prev;
-} ALLink;
-
-typedef struct ALEvtq_s {
-    ALLink      freeList;
-    ALLink      allocList;
-    s32         eventCount;
-} ALEvtq;
-
-// Define ALEventQueue mapping
-typedef ALEvtq ALEventQueue;
-
-// --- CHANNEL STATE ---
-typedef struct {
-    u32 unk0;
-    u16 unkA;
-    f32 pitchBend;
-    u8  priority;
-} ALChanState;
-
 // --- AUDIO STRUCTURES ---
 typedef s32 ALMicroTime;
 typedef u8 ALPan; 
@@ -194,6 +171,66 @@ typedef struct {
     s32 unk[16];
 } ENVMIX_STATE;
 
+// Oscillator Function Pointers
+typedef ALMicroTime (*ALOscInit)(void **oscState, f32 *initVal, u8 oscType, u8 oscRate, u8 oscDepth, u8 oscDelay);
+typedef ALMicroTime (*ALOscUpdate)(void *oscState, f32 *updateVal);
+typedef void        (*ALOscStop)(void *oscState);
+
+// Linked List & Event Queue
+typedef struct ALLink_s {
+    struct ALLink_s *next;
+    struct ALLink_s *prev;
+} ALLink;
+
+typedef struct ALEvtq_s {
+    ALLink      freeList;
+    ALLink      allocList;
+    s32         eventCount;
+} ALEvtq;
+
+// Define ALEventQueue mapping
+typedef ALEvtq ALEventQueue;
+
+// ADPCM Wave definitions 
+typedef struct {
+    u32 start;
+    u32 end;
+    u32 count;
+    s16 state[16];
+} ALADPCMloop;
+
+typedef struct {
+    s32 order;
+    s32 npredictors;
+    s16 book[1];
+} ALADPCMBook;
+
+typedef struct {
+    ALADPCMloop *loop;
+    ALADPCMBook *book;
+} ALADPCMWaveInfo;
+
+typedef struct {
+    u32 start;
+    u32 end;
+    u32 count;
+} ALRawLoop;
+
+typedef struct {
+    ALRawLoop *loop;
+} ALRawWaveInfo;
+
+typedef struct ALWaveTable_s {
+    u8 *base;
+    u32 len;
+    u8  type;
+    u8  flags;
+    union {
+        ALADPCMWaveInfo adpcmWave;
+        ALRawWaveInfo   rawWave;
+    } waveInfo;
+} ALWaveTable;
+
 // The Physical Voice definition mapping engine state to audio filters
 typedef struct ALPVoice_s {
     ALLink               node;
@@ -201,6 +238,10 @@ typedef struct ALPVoice_s {
     ALLink               pfreeNode;
     ADPCM_STATE          *dc_state;
     ADPCM_STATE          *dc_lstate;
+    ALWaveTable          *dc_table;
+    s32                  dc_sample;
+    s32                  dc_bookSize;
+    ALADPCMloop          dc_loop;
     ALDMAproc            dc_dma;
     void                 *dc_dmaState;
     s32                  dc_lastsam;
@@ -269,45 +310,6 @@ typedef struct {
 } ALKeyMap;
 
 typedef struct {
-    u32 start;
-    u32 end;
-    u32 count;
-    s16 state[16];
-} ALADPCMloop;
-
-typedef struct {
-    s32 order;
-    s32 npredictors;
-    s16 book[1];
-} ALADPCMBook;
-
-typedef struct {
-    ALADPCMloop *loop;
-    ALADPCMBook *book;
-} ALADPCMWaveInfo;
-
-typedef struct {
-    u32 start;
-    u32 end;
-    u32 count;
-} ALRawLoop;
-
-typedef struct {
-    ALRawLoop *loop;
-} ALRawWaveInfo;
-
-typedef struct ALWaveTable_s {
-    u8 *base;
-    u32 len;
-    u8  type;
-    u8  flags;
-    union {
-        ALADPCMWaveInfo adpcmWave;
-        ALRawWaveInfo   rawWave;
-    } waveInfo;
-} ALWaveTable;
-
-typedef struct {
     ALEnvelope  *envelope;
     ALKeyMap    *keyMap;
     ALWaveTable *wavetable;
@@ -347,6 +349,16 @@ typedef struct {
     u16         bankCount;
     ALBank      *bankArray[1];
 } ALBankFile;
+
+// Channel State definition
+typedef struct {
+    u32 unk0;
+    u16 unkA;
+    f32 pitchBend;
+    u8  priority;
+    u8  sustain;
+    ALInstrument *instrument;
+} ALChanState;
 
 // --- SEQUENCE FILE ---
 typedef struct {
@@ -436,6 +448,9 @@ typedef struct ALCSeqMarker_s {
 #define AL_MIDI_PitchBend         0xE0
 #define AL_MIDI_ChannelModeSelect 0xB0
 
+#define AL_MIDI_StatusMask        0xF0
+#define AL_MIDI_ChannelMask       0x0F
+
 #define AL_MIDI_Meta              0xFF
 #define AL_MIDI_META_TEMPO        0x51
 #define AL_MIDI_META_EOT          0x2F
@@ -447,6 +462,7 @@ typedef struct ALCSeqMarker_s {
 #define AL_PHASE_DECAY            1
 #define AL_PHASE_SUSTAIN          2
 #define AL_PHASE_RELEASE          3
+#define AL_PHASE_NOTEON           4
 
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
@@ -523,15 +539,21 @@ typedef struct ALEventListItem_s {
 } ALEventListItem;
 
 typedef struct {
-    u32     maxVoices;
-    u32     maxEvents;
-    u8      maxChannels;
-    u8      debugFlags;
-    void    *initOsc;
-    s32     (*updateOsc)(void *, f32 *);
-    void    *stopOsc;
-    ALHeap  *heap;
+    u32         maxVoices;
+    u32         maxEvents;
+    u8          maxChannels;
+    u8          debugFlags;
+    ALOscInit   initOsc;
+    ALOscUpdate updateOsc;
+    ALOscStop   stopOsc;
+    ALHeap      *heap;
 } ALSeqpConfig;
+
+typedef struct {
+    s16 priority;
+    s16 fxBus;
+    u8  unityPitch;
+} ALVoiceConfig;
 
 // --- MIXER & FILTERS ---
 typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, Acmd *);
@@ -593,6 +615,8 @@ typedef struct ALVoiceState_s {
     f32                   vibrato;
     f32                   tremelo;
     u8                    envPhase;
+    u8                    phase;
+    u8                    channel;
     u8                    flags;
     u16                   envGain;
     u8                    state;
@@ -626,9 +650,9 @@ typedef struct ALCSPlayer_s {
     u8               debugFlags;
     s32              frameTime;
     s32              curTime;
-    void             *initOsc;
-    s32              (*updateOsc)(void *, f32 *);
-    void             *stopOsc;
+    ALOscInit        initOsc;
+    ALOscUpdate      updateOsc;
+    ALOscStop        stopOsc;
     u8               maxChannels;
     ALVoiceState     *vFreeList;
     ALVoiceState     *vAllocHead;
@@ -853,6 +877,12 @@ typedef struct {
 #define AL_MAINBUS                14
 #define AL_SAVE                   15
 
+#define AL_SUSTAIN                64
+#define AL_VOL_FULL               127
+
+#define NO_SOUND_ERR_MASK         0x01
+#define NO_VOICE_ERR_MASK         0x02
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -888,6 +918,7 @@ void alFilterNew(ALFilter *f, ALCmdHandler h, ALSetParam s, s32 type);
 
 void *__n_allocParam(void);
 s32 n_alEnvmixerParam(N_PVoice *filter, s32 paramID, void *param);
+s32 n_alSynAllocVoice(ALVoice *voice, ALVoiceConfig *vc);
 
 #define ALFailIf(cond, err) if (cond) return;
 
