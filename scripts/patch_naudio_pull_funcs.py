@@ -7,7 +7,7 @@ def sanitize_and_patch_types():
         print(f"File not found: {header_path}")
         return
 
-    # Expanded list includes all AL, OS, PI, Graphics, Sequence, and Audio Bank dependencies
+    # Expanded list to include ALCSeqMarker
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
         'RESAMPLE_STATE', 'POLEF_STATE', 'ALSynConfig', 
@@ -20,7 +20,8 @@ def sanitize_and_patch_types():
         'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap',
         'ALCSPlayer', 'N_ALCSPlayer', 'N_ALSeqPlayer', 'ALSound', 'ALInstrument',
         'ALBank', 'ALBankFile', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo',
-        'ALEnvelope', 'ALKeyMap', 'ALSeqData', 'ALSeqChannel', 'ALCSeq', 'ALCMidiHdr'
+        'ALEnvelope', 'ALKeyMap', 'ALSeqData', 'ALSeqChannel', 'ALCSeq', 'ALCMidiHdr',
+        'ALCSeqMarker'
     ]
 
     with open(header_path, 'r') as f:
@@ -62,15 +63,32 @@ typedef s32 ALPan;
 #define AL_ADPCM_WAVE 0
 #define AL_RAW16_WAVE 1
 
-#define AL_SEQP_MIDI_EVT 0
-#define AL_MIDI_ControlChange 0xB0
+/* Standard MIDI and Sequence Event Macros */
+#define AL_SEQP_MIDI_EVT        0
+#define AL_TEMPO_EVT            10
+#define AL_SEQP_BANK_EVT        11
+#define AL_SEQP_PLAY_EVT        12
+#define AL_SEQP_SEQ_EVT         13
+#define AL_SEQP_VOL_EVT         14
+#define AL_SEQP_META_EVT        15
+#define AL_SEQ_END_EVT          16
+#define AL_CSP_LOOPSTART        17
+#define AL_CSP_LOOPEND          18
+#define AL_SEQ_MIDI_EVT         19
+
+#define AL_MIDI_NoteOn          0x90
+#define AL_MIDI_ControlChange   0xB0
+#define AL_MIDI_ProgramChange   0xC0
+#define AL_MIDI_ChannelPressure 0xD0
 #define AL_MIDI_ChannelModeSelect 0xB0
 
-#define AL_MIDI_Meta 0xFF
-#define AL_MIDI_META_TEMPO 0x51
-#define AL_TEMPO_EVT 10
-#define AL_SEQP_BANK_EVT 11
-#define AL_SEQP_PLAY_EVT 12
+#define AL_MIDI_Meta            0xFF
+#define AL_MIDI_META_TEMPO      0x51
+#define AL_MIDI_META_EOT        0x2F
+
+#define AL_CMIDI_LOOPSTART_CODE 0x2E
+#define AL_CMIDI_LOOPEND_CODE   0x2D
+#define AL_CMIDI_BLOCK_CODE     0xFE
 
 /* Audio Function Pointers */
 typedef void (*ALVoiceHandler)(void *);
@@ -213,6 +231,18 @@ typedef struct ALCSeq_s {
     u8  pad[64];
 } ALCSeq;
 
+/* Sequence Marker to snapshot sequence state (loops/jumps) */
+typedef struct {
+    u32 validTracks;
+    u32 lastTicks;
+    u32 lastDeltaTicks;
+    u8* curLoc[16];
+    u32 curBUPtr[16];
+    u32 curBULen[16];
+    s32 evtDeltaTicks[16];
+    u8  lastStatus[16];
+} ALCSeqMarker;
+
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
@@ -274,9 +304,11 @@ typedef struct ALEvent_s {
         s32 i[3]; 
         void *p[3]; 
         struct { f32 unk0; f32 unk4; } unk18;
-        struct { s32 ticks; u8 status; u8 byte1; u8 byte2; } midi;
+        struct { s32 ticks; u8 status; u8 byte1; u8 byte2; u32 duration; } midi;
         struct { u8 status; u8 type; u8 byte1; u8 byte2; u8 byte3; } tempo;
         struct { ALBank *bank; } spbank;
+        struct { void *seq; } spseq;
+        struct { s16 vol; } spvol;
     } msg;
 } ALEvent;
 
