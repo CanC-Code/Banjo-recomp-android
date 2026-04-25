@@ -10,16 +10,18 @@ def sanitize_and_patch_types():
     with open(header_path, 'r') as f:
         content = f.read()
 
-    # 1. Expanded list: Now includes all AL (Audio Library) missing dependencies
+    # 1. Expanded list: Now includes all AL, OS, and PI missing dependencies
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
         'RESAMPLE_STATE', 'POLEF_STATE', 'ALSynConfig', 
         'Vtx_t', 'Vtx_n', 'Vtx', 'ALDMANew', 'ALDMAproc',
         'ALMicroTime', 'ALFilter', 'ALParam', 'N_ALFilter',
-        'N_ALSyn', 'ALEvtq', 'ALEvent', 'ALVoiceHandler', 'ALSetParam'
+        'N_ALSyn', 'ALEvtq', 'ALEvent', 'ALVoiceHandler', 'ALSetParam',
+        'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig',
+        'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'f32', 'f64'
     ]
 
-    # 2. Aggressively strip existing definitions 
+    # 2. Aggressively strip existing definitions (handles multi-line structs/unions)
     for t in types_to_clean:
         # Matches: typedef struct/union [Optional_Tag] { ... } TypeName;
         content = re.sub(rf'typedef\s+(struct|union)\s+([a-zA-Z0-9_]+\s*)?{{.*?}}\s*{t}\s*;', '', content, flags=re.DOTALL)
@@ -31,6 +33,10 @@ def sanitize_and_patch_types():
 #ifndef _BK_SDK_TYPES_H_
 #define _BK_SDK_TYPES_H_
 
+/* Basic Primitives */
+typedef float f32;
+typedef double f64;
+
 /* N64 Standard Audio primitives */
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
@@ -38,6 +44,7 @@ typedef s32 ALPan;
 /* Audio Function Pointers */
 typedef void (*ALVoiceHandler)(void *);
 typedef s32  (*ALSetParam)(void *, s32, void *);
+typedef void (*ALCmdHandler)(void *, s16, void *);
 
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
@@ -78,6 +85,20 @@ typedef struct N_ALSyn_s {
     u8 pad[512];
 } N_ALSyn;
 
+typedef struct N_PVoice_s {
+    u8 pad[64];
+} N_PVoice;
+
+typedef struct ALVoice_s {
+    u8 pad[64];
+} ALVoice;
+
+typedef struct ALVoiceConfig_s {
+    s16 priority;
+    s16 fxBus;
+    u8 unityPitch;
+} ALVoiceConfig;
+
 /* Graphics and Sequence Types */
 typedef struct { u32 words[2]; } Acmd;
 typedef struct { s16 ob[16]; } ADPCM_STATE;
@@ -96,6 +117,7 @@ typedef union { Vtx_t v; Vtx_n n; long long int force_alignment; } Vtx;
 typedef s32 (*ALDMAproc)(s32, s32, void *);
 typedef ALDMAproc (*ALDMANew)(void *state);
 
+/* OS Thread and PI / IO Message Types */
 #ifndef _OS_THREAD_GUARD
 #define _OS_THREAD_GUARD
 typedef struct OSThread_s {
@@ -105,6 +127,42 @@ typedef struct OSThread_s {
     void *unused;
 } OSThread;
 #endif
+
+typedef void * OSMesg;
+
+typedef struct OSMesgQueue_s {
+    OSThread *mtqueue;
+    OSThread *fullqueue;
+    s32 validCount;
+    s32 first;
+    s32 msgCount;
+    OSMesg *msg;
+} OSMesgQueue;
+
+typedef struct OSPiHandle_s {
+    struct OSPiHandle_s *next;
+    u8 type;
+    u8 latency;
+    u8 pageSize;
+    u8 relDuration;
+    u8 pulse;
+    u8 domain;
+    u32 baseAddress;
+    u32 speed;
+    u32 transferInfo;
+} OSPiHandle;
+
+typedef struct OSIoMesg_s {
+    u16 hdr;
+    u8 err;
+    u8 flags;
+    OSPiHandle *piHandle;
+    u32 devAddr;
+    u32 bmca;
+    u32 size;
+    OSMesgQueue *mq;
+    OSMesg msg;
+} OSIoMesg;
 
 #endif
 """
@@ -117,7 +175,7 @@ typedef struct OSThread_s {
 
     with open(header_path, 'w') as f:
         f.write(content)
-    print("✅ n64_types.h sanitized and extended BK audio types re-injected.")
+    print("✅ n64_types.h sanitized and extended BK audio/OS types re-injected.")
 
 if __name__ == '__main__':
     sanitize_and_patch_types()
