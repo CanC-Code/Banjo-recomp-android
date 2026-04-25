@@ -10,7 +10,7 @@ def sanitize_and_patch_types():
     with open(header_path, 'r') as f:
         content = f.read()
 
-    # 1. Expanded list includes all AL, OS, and PI missing dependencies
+    # 1. Expanded list includes all AL, OS, PI, Graphics, and Controller dependencies
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
         'RESAMPLE_STATE', 'POLEF_STATE', 'ALSynConfig', 
@@ -18,7 +18,8 @@ def sanitize_and_patch_types():
         'ALMicroTime', 'ALFilter', 'ALParam', 'N_ALFilter',
         'N_ALSyn', 'ALEvtq', 'ALEvent', 'ALVoiceHandler', 'ALSetParam',
         'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig',
-        'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'f32', 'f64'
+        'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'f32', 'f64',
+        'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
     ]
 
     # 2. Aggressively strip existing definitions (handles multi-line structs/unions)
@@ -28,7 +29,7 @@ def sanitize_and_patch_types():
         # Matches single-line primitive typedefs
         content = re.sub(rf'typedef\s+[^;{{}}]+?\s*{t}\s*;', '', content)
 
-    # 3. Inject the clean, standard libultra BK-types block with corrected dramAddr mapping
+    # 3. Inject the comprehensive libultra BK-types block
     bk_types_block = """
 #ifndef _BK_SDK_TYPES_H_
 #define _BK_SDK_TYPES_H_
@@ -36,6 +37,14 @@ def sanitize_and_patch_types():
 /* Basic Primitives */
 typedef float f32;
 typedef double f64;
+
+/* Hardware and Input Types */
+typedef struct {
+    u16 button;
+    s8  stick_x;
+    s8  stick_y;
+    u8  errcode;
+} OSContPad;
 
 /* N64 Standard Audio primitives */
 typedef s32 ALMicroTime;
@@ -76,7 +85,14 @@ typedef struct ALEvent_s {
     union { s32 i[3]; void *p[3]; } msg;
 } ALEvent;
 
-/* Opaque/padded blobs to satisfy compiler size checks if used by value or pointer */
+typedef struct {
+    u8 *base;
+    u8 *cur;
+    s32 len;
+    s32 count;
+} ALHeap;
+
+/* Opaque/padded blobs to satisfy compiler size checks */
 typedef struct ALEvtq_s {
     u8 pad[128];
 } ALEvtq;
@@ -101,6 +117,11 @@ typedef struct ALVoiceConfig_s {
 
 /* Graphics and Sequence Types */
 typedef struct { u32 words[2]; } Acmd;
+typedef struct { u32 w0; u32 w1; } Gfx;
+typedef long Mtx_t[4][4];
+typedef union { Mtx_t m; long long int force_structure_alignment; } Mtx;
+typedef struct Sprite_s Sprite;
+
 typedef struct { s16 ob[16]; } ADPCM_STATE;
 typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
 typedef struct { u32 force_alignment; } RESAMPLE_STATE, POLEF_STATE;
@@ -175,7 +196,7 @@ typedef struct OSIoMesg_s {
 
     with open(header_path, 'w') as f:
         f.write(content)
-    print("✅ n64_types.h sanitized and extended BK audio/OS types re-injected.")
+    print("✅ n64_types.h sanitized and extended BK graphics/audio/OS types re-injected.")
 
 if __name__ == '__main__':
     sanitize_and_patch_types()
