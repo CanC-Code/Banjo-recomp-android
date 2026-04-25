@@ -20,7 +20,7 @@ def sanitize_and_patch_types():
         'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap',
         'ALCSPlayer', 'N_ALCSPlayer', 'N_ALSeqPlayer', 'ALSound', 'ALInstrument',
         'ALBank', 'ALBankFile', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo',
-        'ALEnvelope', 'ALKeyMap', 'ALSeqData', 'ALSeqChannel'
+        'ALEnvelope', 'ALKeyMap', 'ALSeqData', 'ALSeqChannel', 'ALCSeq', 'ALCMidiHdr'
     ]
 
     with open(header_path, 'r') as f:
@@ -67,6 +67,12 @@ typedef s32 ALPan;
 #define AL_SEQP_MIDI_EVT 0
 #define AL_MIDI_ControlChange 0xB0
 #define AL_MIDI_ChannelModeSelect 0xB0
+
+#define AL_MIDI_Meta 0xFF
+#define AL_MIDI_META_TEMPO 0x51
+#define AL_TEMPO_EVT 10
+#define AL_SEQP_BANK_EVT 11
+#define AL_SEQP_PLAY_EVT 12
 
 /* Audio Function Pointers */
 typedef void (*ALVoiceHandler)(void *);
@@ -184,6 +190,16 @@ typedef struct ALSeqFile_s {
     ALSeqData seqArray[1];
 } ALSeqFile;
 
+typedef struct {
+    u32 pad;
+} ALCMidiHdr;
+
+typedef struct ALCSeq_s {
+    ALCMidiHdr *base;
+    s32 qnpt;
+    u8 pad[64];
+} ALCSeq;
+
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
@@ -246,6 +262,8 @@ typedef struct ALEvent_s {
         void *p[3]; 
         struct { f32 unk0; f32 unk4; } unk18;
         struct { s32 ticks; u8 status; u8 byte1; u8 byte2; } midi;
+        struct { u8 status; u8 type; u8 byte1; u8 byte2; u8 byte3; } tempo;
+        struct { ALBank *bank; } spbank;
     } msg;
 } ALEvent;
 
@@ -278,7 +296,7 @@ typedef struct ALSeqChannel_s {
     u8 pad_C[64];
 } ALSeqChannel;
 
-/* Sequence Players with populated Evtq and chanState fields */
+/* Sequence Players with populated Evtq, chanState, target, and uspt fields */
 typedef struct ALCSPlayer_s {
     void *node_next;
     void *node_prev;
@@ -286,7 +304,9 @@ typedef struct ALCSPlayer_s {
     void *node_clientData;
     ALEvtq evtq;
     ALSeqChannel chanState[16];
-    u8 pad[256];
+    ALCSeq *target;
+    s32 uspt;
+    u8 pad[248];
 } ALCSPlayer;
 
 typedef struct N_ALCSPlayer_s {
@@ -296,7 +316,9 @@ typedef struct N_ALCSPlayer_s {
     void *node_clientData;
     ALEvtq evtq;
     ALSeqChannel chanState[16];
-    u8 pad[256];
+    ALCSeq *target;
+    s32 uspt;
+    u8 pad[248];
 } N_ALCSPlayer;
 
 typedef struct N_ALSeqPlayer_s {
@@ -306,7 +328,9 @@ typedef struct N_ALSeqPlayer_s {
     void *node_clientData;
     ALEvtq evtq;
     ALSeqChannel chanState[16];
-    u8 pad[256];
+    ALCSeq *target;
+    s32 uspt;
+    u8 pad[248];
 } N_ALSeqPlayer;
 
 /* Specific N_Audio definitions replacing earlier opaque blobs */
