@@ -3,10 +3,9 @@ import re
 
 def patch_audio_engine():
     """
-    Fixes the ALCSeq and ALCSeqMarker struct definitions in n64_types.h.
-    The previous patch incorrectly converted the Banjo-Kazooie specific 
-    arrays `lastStatus[16]` and `curBUPtr[16]` into standard libultra scalars
-    `lastStatus` and `curPtr`. This restores the custom BK arrays.
+    Restores the Banjo-Kazooie specific 16-channel audio arrays.
+    This script targets the end of the ALCSeq and ALCSeqMarker structs
+    to ensure the fields are present for cseq.c to compile.
     """
     header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
     
@@ -17,42 +16,31 @@ def patch_audio_engine():
     with open(header_path, 'r') as f:
         content = f.read()
 
-    # Clean up any leftover comments from the previous bad patch
-    content = content.replace("// removed lastStatus array", "")
-    content = content.replace("// removed curBUPtr array", "")
+    # Define the fields required by Banjo's cseq.c
+    bk_fields = "    unsigned char lastStatus[16];\n    unsigned char *curBUPtr[16];\n"
 
-    def fix_struct(struct_content):
-        # 1. Remove incorrect scalar fields injected previously
-        struct_content = re.sub(r'unsigned char\s*\*\s*curPtr\s*;', '', struct_content)
-        struct_content = re.sub(r'unsigned char\s*lastStatus\s*;', '', struct_content)
-        struct_content = re.sub(r'u8\s*\*\s*curPtr\s*;', '', struct_content)
-        struct_content = re.sub(r'u8\s*lastStatus\s*;', '', struct_content)
-        
-        # 2. Remove array fields if they already exist so we don't duplicate them on re-runs
-        struct_content = re.sub(r'unsigned char\s*lastStatus\[16\]\s*;', '', struct_content)
-        struct_content = re.sub(r'unsigned char\s*\*\s*curBUPtr\[16\]\s*;', '', struct_content)
-        struct_content = re.sub(r'u8\s*lastStatus\[16\]\s*;', '', struct_content)
-        struct_content = re.sub(r'u8\s*\*\s*curBUPtr\[16\]\s*;', '', struct_content)
+    # Helper to safely inject fields into a typedef struct
+    def inject_into_struct(full_text, struct_name, fields):
+        # Pattern looks for the closing brace of the struct with the specific name
+        pattern = r'\}\s*' + struct_name + r';'
+        if struct_name in full_text and fields not in full_text:
+            # We insert the fields right before the closing brace
+            return re.sub(r'(\n\s*)(\}\s*' + struct_name + r';)', r'\1' + fields + r'\2', full_text)
+        return full_text
 
-        # 3. Append the correct multi-track array fields for Banjo-Kazooie
-        return struct_content + "    unsigned char lastStatus[16];\n    unsigned char *curBUPtr[16];\n"
+    # Apply injections
+    content = inject_into_struct(content, "ALCSeq", bk_fields)
+    content = inject_into_struct(content, "ALCSeqMarker", bk_fields)
 
-    # Apply to ALCSeq
-    alcseq_match = re.search(r'(typedef struct .*?\{)(.*?)(\}\s*ALCSeq;)', content, re.DOTALL)
-    if alcseq_match:
-        fixed_body = fix_struct(alcseq_match.group(2))
-        content = content[:alcseq_match.start()] + alcseq_match.group(1) + fixed_body + alcseq_match.group(3) + content[alcseq_match.end():]
-
-    # Apply to ALCSeqMarker
-    alcseqmarker_match = re.search(r'(typedef struct .*?\{)(.*?)(\}\s*ALCSeqMarker;)', content, re.DOTALL)
-    if alcseqmarker_match:
-        fixed_body = fix_struct(alcseqmarker_match.group(2))
-        content = content[:alcseqmarker_match.start()] + alcseqmarker_match.group(1) + fixed_body + alcseqmarker_match.group(3) + content[alcseqmarker_match.end():]
+    # Clean up previous incorrect scalar injections if they exist
+    # These often cause "subscripted value is not an array" errors if left behind
+    content = re.sub(r'unsigned char\s+lastStatus\s*;', '// removed scalar', content)
+    content = re.sub(r'unsigned char\s*\*\s*curPtr\s*;', '// removed scalar', content)
 
     with open(header_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h patched: Restored custom Banjo-Kazooie ALCSeq and ALCSeqMarker arrays (lastStatus[16] & curBUPtr[16]).")
+    print("✅ n64_types.h updated: Successfully restored BK-specific audio track arrays.")
 
 if __name__ == '__main__':
     patch_audio_engine()
