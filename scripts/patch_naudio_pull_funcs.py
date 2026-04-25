@@ -19,8 +19,8 @@ def sanitize_and_patch_types():
         'N_ALSyn', 'ALEvtq', 'ALEvent', 'ALVoiceHandler', 'ALSetParam',
         'ALCmdHandler', 'N_PVoice', 'ALVoice', 'ALVoiceConfig', 'N_ALVoice',
         'ALWaveTable', 'ALStartParam', 'ALStartParamAlt',
-        'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'f32', 'f64',
-        'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
+        'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'OSThread', 
+        'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
     ]
 
     # 2. Aggressively strip existing definitions (handles multi-line structs/unions)
@@ -198,10 +198,15 @@ typedef ALDMAproc (*ALDMANew)(void *state);
 #ifndef _OS_THREAD_GUARD
 #define _OS_THREAD_GUARD
 typedef struct OSThread_s {
-    struct OSThread_s *next;
-    s32 priority;
-    void *stack;
-    void *unused;
+    struct OSThread_s   *next;
+    s32                 priority;
+    struct OSThread_s   **queue;
+    struct OSThread_s   *tlnext;
+    u16                 state;
+    u16                 flags;
+    s32                 id;
+    int                 fp;
+    u64                 context_pad[38]; /* Standard OSThreadContext size wrapper */
 } OSThread;
 #endif
 
