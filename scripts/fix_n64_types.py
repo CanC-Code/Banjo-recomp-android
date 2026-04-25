@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Resolves csplayer MIDI event parsing failures by defining ALTempoEvent,
-    expanding ALChanState, and mapping required MIDI CC constants.
+    Resolves n_audio filter failures by realigning ALCmdHandler to 2 arguments,
+    expanding ALAuxBus/ALSyn, and defining missing DMEM/DSP N_Audio constants.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -571,7 +571,8 @@ typedef struct {
 } ALVoiceConfig;
 
 // --- MIXER & FILTERS ---
-typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, Acmd *);
+// Updated to N_Audio 2-argument signature
+typedef Acmd *(*ALCmdHandler)(s32, Acmd *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 typedef s32 (*ALSetFXParam)(void *, s32, void *);
 
@@ -585,10 +586,11 @@ typedef struct ALFilter_s {
 } ALFilter;
 
 typedef struct {
-    ALFilter    filter;
-    s32         sourceCount;
-    s32         maxSources;
-    ALFilter    **sources;
+    ALFilter           filter;
+    s32                sourceCount;
+    s32                maxSources;
+    ALFilter           **sources;
+    struct ALFx_s      *fx;
 } ALAuxBus;
 
 typedef ALAuxBus ALMainBus;
@@ -597,9 +599,10 @@ typedef ALAuxBus N_ALAuxBus;
 typedef struct {
     ALFilter    filter;
     s32         paramSamples;
+    s32         outputRate;
     ALMainBus   *mainBus;
     ALAuxBus    *auxBus;
-    u8          reserved[1020];
+    u8          reserved[1016];
 } ALSyn;
 
 typedef ALSyn ALSynth;
@@ -756,7 +759,7 @@ typedef struct {
     ALLowPass *lp;
 } ALDelay;
 
-typedef struct {
+typedef struct ALFx_s {
     ALFilter filter;
     s16 *base;
     s16 *input;
@@ -831,6 +834,7 @@ typedef struct {
 
 // --- AUDIO CONSTANTS ---
 #define AL_DECODER_IN             outp
+#define AL_DECODER_OUT            0
 #define AL_RESAMPLER_IN           outp
 #define ADPCMVSIZE                8
 #define ADPCMFSIZE                9
@@ -847,6 +851,17 @@ typedef struct {
 #define AL_AUX_R_OUT              1
 #define AL_MAIN_L_OUT             0
 #define AL_MAIN_R_OUT             1
+
+#define MAX_RATIO                 1.99996f
+#define UNITY_PITCH               32768.0f
+#define RANGE                     2.0f
+#define N_REVERB_OUTCOUNT         160
+
+#define N_AL_AUX_L_OUT            0x0340
+#define N_AL_AUX_R_OUT            0x03C0
+#define N_AL_TEMP_0               0x0440
+#define N_AL_TEMP_1               0x04C0
+#define N_AL_TEMP_2               0x0540
 
 #define AL_RESAMPLER_OUT          0
 #define AL_FILTER_ADD_UPDATE      1
@@ -911,6 +926,14 @@ extern Acmd *alFxPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alFxParamHdl(void *, s32, void *);
 extern s32 alFxParam(void *, s32, void *);
 
+extern Acmd *n_alFxPull(s32, Acmd *);
+extern Acmd *n_alEnvmixerPull(s32, Acmd *);
+extern Acmd *n_alAdpcmPull(s32, Acmd *);
+extern Acmd *n_alResamplePull(s32, Acmd *);
+extern Acmd *n_alAuxBusPull(s32, Acmd *);
+extern Acmd *n_alMainBusPull(s32, Acmd *);
+extern Acmd *n_alSavePull(s32, Acmd *);
+
 extern Acmd *alEnvmixerPull(void *, s16 *, s32, s32, Acmd *);
 extern s32 alEnvmixerParam(void *, s32, void *);
 
@@ -951,7 +974,7 @@ s32 n_alSynAllocVoice(ALVoice *voice, ALVoiceConfig *vc);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Defined ALTempoEvent explicitly, expanded ALChanState, and mapped required MIDI CC macros.")
+    print("✅ n64_types.h updated: Filter handler realigned to N_Audio spec and structural offsets mapped.")
 
 if __name__ == '__main__':
     fix_n64_types()
