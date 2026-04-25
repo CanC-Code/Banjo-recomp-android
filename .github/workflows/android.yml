@@ -57,6 +57,9 @@ jobs:
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
 
+     - name: 🖊️🖊️ driver and envelope structures
+        run: python3 scripts/patch_naudio_drvr_env.py
+
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
