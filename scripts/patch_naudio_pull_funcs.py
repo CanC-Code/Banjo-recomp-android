@@ -7,9 +7,6 @@ def sanitize_and_patch_types():
         print(f"File not found: {header_path}")
         return
 
-    with open(header_path, 'r') as f:
-        content = f.read()
-
     # 1. Expanded list includes all AL, OS, PI, Graphics, and Controller dependencies
     types_to_clean = [
         'ALPan', 'Acmd', 'ADPCM_STATE', 'ALRawLoop', 
@@ -22,6 +19,9 @@ def sanitize_and_patch_types():
         'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'OSThread', 
         'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap'
     ]
+
+    with open(header_path, 'r') as f:
+        content = f.read()
 
     # 2. Aggressively strip existing definitions (handles multi-line structs/unions)
     for t in types_to_clean:
@@ -47,6 +47,13 @@ typedef struct {
     u8  errcode;
 } OSContPad;
 
+/* Graphics and Sequence Types (Needed early for filter handlers) */
+typedef struct { u32 words[2]; } Acmd;
+typedef struct { u32 w0; u32 w1; } Gfx;
+typedef long Mtx_t[4][4];
+typedef union { Mtx_t m; long long int force_structure_alignment; } Mtx;
+typedef struct sprite Sprite;
+
 /* N64 Standard Audio primitives */
 typedef s32 ALMicroTime;
 typedef s32 ALPan;
@@ -62,7 +69,7 @@ typedef struct ALFx_s ALFx;
 /* Standard N64 Libaudio Structs */
 typedef struct ALFilter_s {
     struct ALFilter_s   *source;
-    ALVoiceHandler      handler;
+    Acmd                *(*handler)(void *, s16 *, s32, s32, Acmd *);
     ALSetParam          setParam;
     short               inp;
     short               outp;
@@ -79,7 +86,7 @@ typedef struct ALAuxBus_s {
 
 typedef struct N_ALFilter_s {
     struct N_ALFilter_s *source;
-    ALVoiceHandler      handler;
+    Acmd                *(*handler)(void *, s16 *, s32, s32, Acmd *);
     ALSetParam          setParam;
     short               inp;
     short               outp;
@@ -179,13 +186,6 @@ typedef struct N_ALSyn_s {
     s32 paramSamples;
     u8 pad[512];
 } N_ALSyn;
-
-/* Graphics and Sequence Types */
-typedef struct { u32 words[2]; } Acmd;
-typedef struct { u32 w0; u32 w1; } Gfx;
-typedef long Mtx_t[4][4];
-typedef union { Mtx_t m; long long int force_structure_alignment; } Mtx;
-typedef struct sprite Sprite;
 
 typedef struct { s16 ob[16]; } ADPCM_STATE;
 typedef struct { u32 start; u32 end; u32 count; ADPCM_STATE *state; } ALRawLoop;
