@@ -19,8 +19,8 @@ def sanitize_and_patch_types():
         'OSMesg', 'OSMesgQueue', 'OSPiHandle', 'OSIoMesg', 'OSThread', 
         'f32', 'f64', 'Gfx', 'Mtx_t', 'Mtx', 'Sprite', 'OSContPad', 'ALHeap',
         'ALCSPlayer', 'N_ALCSPlayer', 'N_ALSeqPlayer', 'ALSound', 'ALInstrument',
-        'ALBank', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo',
-        'ALEnvelope', 'ALKeyMap', 'ALSeqData'
+        'ALBank', 'ALBankFile', 'ALSeqFile', 'ALADPCMBook', 'ALADPCMloop', 'ALADPCMWaveInfo', 'ALRAWWaveInfo',
+        'ALEnvelope', 'ALKeyMap', 'ALSeqData', 'ALSeqChannel'
     ]
 
     with open(header_path, 'r') as f:
@@ -166,6 +166,12 @@ typedef struct ALBank_s {
     ALInstrument *instArray[1];
 } ALBank;
 
+typedef struct ALBankFile_s {
+    s16 revision;
+    s16 bankCount;
+    ALBank *bankArray[1];
+} ALBankFile;
+
 /* SeqFile Definitions */
 typedef struct {
     u8 *offset;
@@ -265,13 +271,21 @@ typedef struct ALVoiceConfig_s {
     u8 unityPitch;
 } ALVoiceConfig;
 
-/* Sequence Players with populated Evtq fields */
+/* Seq Channels */
+typedef struct ALSeqChannel_s {
+    u8 pad_0[10];
+    s16 unkA;
+    u8 pad_C[64];
+} ALSeqChannel;
+
+/* Sequence Players with populated Evtq and chanState fields */
 typedef struct ALCSPlayer_s {
     void *node_next;
     void *node_prev;
     void *node_handler;
     void *node_clientData;
     ALEvtq evtq;
+    ALSeqChannel chanState[16];
     u8 pad[256];
 } ALCSPlayer;
 
@@ -281,6 +295,7 @@ typedef struct N_ALCSPlayer_s {
     void *node_handler;
     void *node_clientData;
     ALEvtq evtq;
+    ALSeqChannel chanState[16];
     u8 pad[256];
 } N_ALCSPlayer;
 
@@ -290,6 +305,7 @@ typedef struct N_ALSeqPlayer_s {
     void *node_handler;
     void *node_clientData;
     ALEvtq evtq;
+    ALSeqChannel chanState[16];
     u8 pad[256];
 } N_ALSeqPlayer;
 
