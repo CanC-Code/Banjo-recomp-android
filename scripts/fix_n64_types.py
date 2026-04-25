@@ -3,8 +3,8 @@ import os
 def fix_n64_types():
     """
     Generates a consolidated n64_types.h file to replace conflicting headers.
-    Resolves csplayer and n_load compile failures by defining ALOscInit function
-    pointers, missing ADPCM dc_* fields, ALVoiceConfig, and MIDI bitmasks.
+    Resolves csplayer MIDI event parsing failures by defining ALTempoEvent,
+    expanding ALChanState, and mapping required MIDI CC constants.
     """
     types_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -358,6 +358,10 @@ typedef struct {
     u8  priority;
     u8  sustain;
     ALInstrument *instrument;
+    u8  fxmix;
+    u8  pan;
+    u8  vol;
+    s16 bendRange;
 } ALChanState;
 
 // --- SEQUENCE FILE ---
@@ -442,14 +446,22 @@ typedef struct ALCSeqMarker_s {
 #define AL_MIDI_NoteOn            0x90
 #define AL_MIDI_NoteOff           0x80
 #define AL_MIDI_KeyPressure       0xA0
+#define AL_MIDI_PolyKeyPressure   0xA0
 #define AL_MIDI_ControlChange     0xB0
 #define AL_MIDI_ProgramChange     0xC0
 #define AL_MIDI_ChannelPressure   0xD0
 #define AL_MIDI_PitchBend         0xE0
+#define AL_MIDI_PitchBendChange   0xE0
 #define AL_MIDI_ChannelModeSelect 0xB0
 
 #define AL_MIDI_StatusMask        0xF0
 #define AL_MIDI_ChannelMask       0x0F
+
+#define AL_MIDI_VOLUME_CTRL       0x07
+#define AL_MIDI_PAN_CTRL          0x0A
+#define AL_MIDI_PRIORITY_CTRL     0x10
+#define AL_MIDI_SUSTAIN_CTRL      0x40
+#define AL_MIDI_FX1_CTRL          0x5B
 
 #define AL_MIDI_Meta              0xFF
 #define AL_MIDI_META_TEMPO        0x51
@@ -463,6 +475,7 @@ typedef struct ALCSeqMarker_s {
 #define AL_PHASE_SUSTAIN          2
 #define AL_PHASE_RELEASE          3
 #define AL_PHASE_NOTEON           4
+#define AL_PHASE_SUSTREL          5
 
 #define AL_ADPCM_WAVE             0
 #define AL_RAW16_WAVE             1
@@ -479,6 +492,14 @@ typedef struct {
     f32 unk0;
     f32 unk4;
 } ALUnk18Event;
+
+typedef struct {
+    u8 status;
+    u8 type;
+    u8 byte1;
+    u8 byte2;
+    u8 byte3;
+} ALTempoEvent;
 
 // Sequence Player Event Structs
 typedef struct {
@@ -501,13 +522,7 @@ typedef struct {
         ALSpBankEvent spbank;  
         ALSpSeqEvent  spseq;   
         ALSpVolEvent  spvol;   
-        struct {
-            u8 status;
-            u8 type;
-            u8 byte1;
-            u8 byte2;
-            u8 byte3;
-        } tempo;
+        ALTempoEvent  tempo;
         struct {
             struct N_ALVoice_s *voice;
             u8 chan;
@@ -882,6 +897,7 @@ typedef struct {
 
 #define NO_SOUND_ERR_MASK         0x01
 #define NO_VOICE_ERR_MASK         0x02
+#define NOTE_OFF_ERR_MASK         0x04
 
 #ifdef __cplusplus
 extern "C" {
@@ -935,7 +951,7 @@ s32 n_alSynAllocVoice(ALVoice *voice, ALVoiceConfig *vc);
     with open(types_path, 'w') as f:
         f.write(content)
 
-    print("✅ n64_types.h updated: Rectified struct members, eliminated constant collisions, and fixed ALVoiceState typos.")
+    print("✅ n64_types.h updated: Defined ALTempoEvent explicitly, expanded ALChanState, and mapped required MIDI CC macros.")
 
 if __name__ == '__main__':
     fix_n64_types()
