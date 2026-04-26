@@ -1,115 +1,150 @@
 name: Android Build & OTR Verification
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+validate:
+runs-on: ubuntu-latest
 
-      - name: ☕ Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
+steps:
+  # --- CHECKOUT ---
+  - name: 📥 Checkout Code
+    uses: actions/checkout@v4
+    with:
+      submodules: recursive
 
-      - name: 🛠️ Set up Android SDK
-        uses: android-actions/setup-android@v3
+  # --- JAVA ---
+  - name: ☕ Set up JDK 17
+    uses: actions/setup-java@v4
+    with:
+      java-version: '17'
+      distribution: 'temurin'
 
-      - name: 🐘 Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.2
+  # --- PYTHON (GLOBAL FIX) ---
+  - name: 🐍 Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.11'
 
-      - name: 🖼️ Generate Android Icons
-        run: |
-          sudo apt-get update && sudo apt-get install -y imagemagick
-          if [ ! -f "icon_master.png" ]; then
-            convert -size 512x512 xc:blue icon_master.png
-          fi
-          python3 scripts/generate_icons.py icon_master.png
+  - name: 📦 Install Python Dependencies
+    run: |
+      python -m pip install --upgrade pip
+      pip install pyyaml
 
-      # --- PHASE 1: THE FOUNDATION (HEADER GENERATION) ---
-      # We build the master header and apply all cooperative patches first.
-      
-      - name: 🛠️ Master Header Generation
-        run: python3 scripts/fix_n64_types.py
+  # --- ANDROID ---
+  - name: 🛠️ Set up Android SDK
+    uses: android-actions/setup-android@v3
 
-      - name: 🧬 Repair Audio Structures
-        run: python3 scripts/banjo_structural_patch.py
+  # --- GRADLE CACHE ---
+  - name: 🐘 Setup Gradle
+    uses: gradle/actions/setup-gradle@v4
+    with:
+      gradle-version: 8.2
 
-      - name: 🧪 Inject Sanitizer Definitions
-        run: python3 scripts/patch_sanitizer_defs.py
+  # --- ICONS ---
+  - name: 🖼️ Generate Android Icons
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y imagemagick
 
-      - name: 🌍 Patch ALGlobals
-        run: python3 scripts/patch_alglobals.py
+      if [ ! -f "icon_master.png" ]; then
+        convert -size 512x512 xc:blue icon_master.png
+      fi
 
-      - name: ✏️ Patch OSPri & M_PI
-        run: python3 scripts/patch_ospri.py
+      python scripts/generate_icons.py icon_master.png
 
-      - name: 🎮 Patch Missing Graphics Macros
-        run: python3 scripts/fix_missing_macros.py
+  # =========================
+  # PHASE 1: HEADER FOUNDATION
+  # =========================
 
-      # --- PHASE 2: THE SANITIZATION (TOKEN REPLACEMENT) ---
-      # Now that n64_bool and n64_malloc are defined, we can safely replace them.
+  - name: 🛠️ Master Header Generation
+    run: python scripts/fix_n64_types.py
 
-      - name: 🧹 Codebase Sanitization
-        run: python3 scripts/sanitize_codebase.py .
+  - name: 🧬 Banjo Compatibility Layer
+    run: python scripts/banjo_structural_patch.py
 
-      # --- PHASE 3: THE CODE CLEANUP (DECOMPILER FIXES) ---
-      # These scripts now "look" at the Master Header to avoid redefinition errors.
+  - name: 🧪 Inject Sanitizer Definitions
+    run: python scripts/patch_sanitizer_defs.py
 
-      - name: 🩹 Auto-Fix N64 NULL Floats
-        run: python3 scripts/fix_null_floats.py
+  - name: 🌍 Patch ALGlobals
+    run: python scripts/patch_alglobals.py
 
-      - name: 🏗️ Auto-Hoist Function Pointers
-        run: python3 scripts/fix_function_pointers.py
+  - name: ✏️ Patch OSPri & M_PI
+    run: python scripts/patch_ospri.py
 
-      - name: 📐 Auto-Fix Struct Ordering
-        run: python3 scripts/fix_struct_ordering.py
+  - name: 🎮 Patch Missing Graphics Macros
+    run: python scripts/fix_missing_macros.py
 
-      - name: 🖊️ Final Include Guard Validation
-        run: python3 scripts/endif-fixer.py
+  # =========================
+  # PHASE 2: CODE SANITIZATION
+  # =========================
 
-      # --- BUILD & DEPLOY ---
+  - name: 🧹 Codebase Sanitization
+    run: python scripts/sanitize_codebase.py .
 
-      - name: 🗺️ Generate Asset Manifests
-        run: |
-          pip3 install pyyaml
-          python3 scripts/generate_manifest.py
+  # =========================
+  # PHASE 3: SAFE CLEANUP
+  # =========================
 
-      - name: 🐘 Build Full Game APK
-        run: |
-          cd Android
-          set -o pipefail
-          gradle clean assembleDebug \
-            -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
-            --info \
-            --stacktrace 2>&1 | tee ../build.log
+  - name: 🩹 Fix NULL Floats
+    run: python scripts/fix_null_floats.py
 
-      - name: 📦 Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bka-full-game-apk
-          path: Android/app/build/outputs/apk/debug/*.apk
+  - name: 🏗️ Fix Function Pointers
+    run: python scripts/fix_function_pointers.py
 
-      # --- DIAGNOSTICS ---
+  - name: 📐 Fix Struct Ordering
+    run: python scripts/fix_struct_ordering.py
 
-      - name: 🔍 Run Failure Analyzer
-        if: failure()
-        run: python3 scripts/analyze_build_log.py build.log
+  - name: 🖊️ Validate Include Guards
+    run: python scripts/endif-fixer.py
 
-      - name: 🚑 Upload Failure Logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bka-failure-logs
-          path: |
-            build.log
-            build_failure_summary.txt
+  # =========================
+  # BUILD PREP
+  # =========================
+
+  - name: 🗺️ Generate Asset Manifests
+    run: python scripts/generate_manifest.py
+
+  # =========================
+  # BUILD
+  # =========================
+
+  - name: 🐘 Build Full Game APK
+    run: |
+      cd Android
+      chmod +x gradlew
+      set -o pipefail
+
+      ./gradlew clean assembleDebug \
+        -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
+        --info \
+        --stacktrace 2>&1 | tee ../build.log
+
+  # =========================
+  # ARTIFACTS
+  # =========================
+
+  - name: 📦 Upload APK
+    if: success()
+    uses: actions/upload-artifact@v4
+    with:
+      name: bka-full-game-apk
+      path: Android/app/build/outputs/apk/debug/*.apk
+
+  # =========================
+  # FAILURE HANDLING
+  # =========================
+
+  - name: 🔍 Analyze Build Failure
+    if: failure()
+    run: python scripts/analyze_build_log.py build.log
+
+  - name: 🚑 Upload Failure Logs
+    if: failure()
+    uses: actions/upload-artifact@v4
+    with:
+      name: bka-failure-logs
+      path: |
+        build.log
+        build_failure_summary.txt
