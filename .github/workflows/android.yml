@@ -48,7 +48,7 @@ jobs:
       - name: 🧬 Apply Banjo Compatibility Layer
         run: python3 scripts/banjo_structural_patch.py
 
-      - name: 制 Inject Sanitizer Definitions
+      - name: 🧪 Inject Sanitizer Definitions
         run: python3 scripts/patch_sanitizer_defs.py
 
       - name: 🌍 Patch ALGlobals
@@ -98,7 +98,7 @@ jobs:
       - name: 📐 Auto-Fix Struct Ordering
         run: python3 scripts/fix_struct_ordering.py
 
-      - name: 🖊️ Final Include Guard Validation
+      - name: 制️ Final Include Guard Validation
         run: python3 scripts/endif-fixer.py
 
       # =========================
@@ -129,11 +129,66 @@ jobs:
           python3 scripts/harmonize_aarch64_headers.py --root .
         working-directory: ${{ github.workspace }}
 
-      - name: Harmonize_2
+      - name: 🛠️ Run Phase 2 Harmonizer
         run: |
+          cat << 'EOF' > scripts/harmonizer_2.py
+          #!/usr/bin/env python3
+          import os
+          import re
+          import sys
+
+          def run_phase2_harmonizer(workspace_root):
+              filepath = os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "n64_types.h")
+              if not os.path.exists(filepath):
+                  print(f"[-] ERROR: {filepath} missing")
+                  sys.exit(1)
+
+              with open(filepath, 'r', encoding='utf-8') as f:
+                  content = f.read()
+
+              if "/* --- HARMONIZER_" in content:
+                  content = content.split("/* --- HARMONIZER_")[0]
+
+              types_to_isolate = [
+                  'ALCmdHandler', 'ALSetParam', 'ALParam', 'ALPVoice', 'N_PVoice', 
+                  'ALSetFXParam', 'ALStartParam', 'ALStartParamAlt', 'ALFilter', 'N_ALVoice',
+                  'ALVoiceState', 'ALEvent', 'ALEventListItem'
+              ]
+              
+              for t in types_to_isolate:
+                  content = re.sub(rf'(?<!WRAPPER_)\b{t}\b', f'WRAPPER_{t}', content)
+                  
+              injection = """
+          /* --- HARMONIZER_V4_APPLIED --- */
+          #ifndef BKA_HARMONIZER_INJECT
+          #define BKA_HARMONIZER_INJECT
+          #include <PR/ultratypes.h>
+          typedef struct ALParam_s {
+              struct ALParam_s *next;
+              s32 delta;
+              s16 type;
+              union { f32 f; s32 i; } data;
+          } ALParam;
+          typedef ALParam ALStartParam;
+          typedef ALParam ALStartParamAlt;
+          typedef void (*ALCmdHandler)(void *, s16 *, s32, s32 *);
+          typedef s32  (*ALSetParam)(void *, s32, void *);
+          typedef s32  (*ALSetFXParam)(void *, s32, void *);
+          typedef struct ALFilter_s ALFilter;
+          typedef struct ALPVoice_s ALPVoice;
+          typedef struct N_PVoice_s N_PVoice;
+          typedef struct N_ALVoice_s N_ALVoice;
+          #endif
+          /* ----------------------------- */
+          """
+              with open(filepath, 'w', encoding='utf-8') as f:
+                  f.write(content.rstrip() + "\n\n" + injection.strip() + "\n")
+              print("[+] Harmonization applied to n64_types.h")
+          if __name__ == "__main__":
+              run_phase2_harmonizer(".")
+          EOF
           chmod +x scripts/harmonizer_2.py
-          python3 scripts/harmonizer_2.py --root .
-        working-directory: ${{ github.workspace }}
+          python3 scripts/harmonizer_2.py
 
       - name: 🐘 Build Full Game APK
         working-directory: Android
@@ -155,18 +210,14 @@ jobs:
       # DIAGNOSTICS
       # =========================
 
-      - name: 🔍 Run Failure Analyzer
-        if: failure()
-        run: python3 scripts/analyze_build_log.py build.log
-
-      - name: 📄 Debug: Output Header State
+      - name: 🔍 Run Failure Analyzer & Export Header
         if: failure()
         run: |
-          echo "===================================================="
-          echo "CURRENT STATE OF n64_types.h AT TIME OF FAILURE:"
-          echo "===================================================="
-          cat Android/app/src/main/cpp/ultra/n64_types.h
-          echo "===================================================="
+          python3 scripts/analyze_build_log.py build.log
+          echo "====================================================" >> build_failure_summary.txt
+          echo "FINAL STATE OF n64_types.h AT TIME OF FAILURE:" >> build_failure_summary.txt
+          echo "====================================================" >> build_failure_summary.txt
+          cat Android/app/src/main/cpp/ultra/n64_types.h >> build_failure_summary.txt
 
       - name: 🚑 Upload Failure Logs
         if: failure()
@@ -176,4 +227,3 @@ jobs:
           path: |
             build.log
             build_failure_summary.txt
-            Android/app/src/main/cpp/ultra/n64_types.h
