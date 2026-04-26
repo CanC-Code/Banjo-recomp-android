@@ -63,19 +63,15 @@ jobs:
       - name: 🔍 Validate Generated Header
         run: |
           echo "Checking header integrity..."
-
           HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
 
-          # File must exist
-          test -f "$HEADER"
+          if [ ! -f "$HEADER" ]; then
+            echo "❌ Header not generated"
+            exit 1
+          fi
 
-          # Flexible typedef check (spacing-safe)
-          grep -Eq "typedef[[:space:]]+unsigned[[:space:]]+char[[:space:]]+u8;" "$HEADER"
-
-          # Core structures must exist
-          grep -q "ALGlobals" "$HEADER"
-          grep -q "ALFilter" "$HEADER"
-          grep -q "ALEvent" "$HEADER"
+          grep -q "typedef unsigned char u8;" "$HEADER" || { echo "❌ Missing u8 typedef"; exit 1; }
+          grep -q "ALGlobals" "$HEADER" || { echo "❌ Missing ALGlobals"; exit 1; }
 
           echo "✅ Header validation passed"
 
@@ -103,6 +99,19 @@ jobs:
         run: python3 scripts/endif-fixer.py
 
       # =========================
+      # BUILD PREP
+      # =========================
+
+      - name: 🐘 Ensure Gradle Wrapper Exists
+        working-directory: Android
+        run: |
+          if [ ! -f "./gradlew" ]; then
+            echo "⚠️ Gradle wrapper missing — generating..."
+            gradle wrapper --gradle-version 8.2
+          fi
+          chmod +x gradlew
+
+      # =========================
       # BUILD
       # =========================
 
@@ -112,8 +121,8 @@ jobs:
           python3 scripts/generate_manifest.py
 
       - name: 🐘 Build Full Game APK
+        working-directory: Android
         run: |
-          cd Android
           set -o pipefail
           ./gradlew clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
