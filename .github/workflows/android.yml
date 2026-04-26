@@ -57,10 +57,10 @@ jobs:
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
 
-      - name: 🖊️🖊️ driver and envelope structures
+      - name: 🖊️🖊️ audio structures
         run: python3 scripts/patch_naudio_pull_funcs.py
 
-      - name: 🖊️🖊️ driver and envelope structures
+      - name: 🖊️🖊️ fix endifs
         run: python3 scripts/endif-fixer.py
 
       - name: 🗺️ Generate Asset Manifests
