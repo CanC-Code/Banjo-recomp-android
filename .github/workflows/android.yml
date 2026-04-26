@@ -70,8 +70,12 @@ jobs:
             exit 1
           fi
 
-          grep -q "typedef unsigned char u8;" "$HEADER" || { echo "❌ Missing u8 typedef"; exit 1; }
-          grep -q "ALGlobals" "$HEADER" || { echo "❌ Missing ALGlobals"; exit 1; }
+          # Using Extended Regex (-E) to handle variable spacing/tabs
+          grep -Eq "typedef[[:space:]]+unsigned[[:space:]]+char[[:space:]]+u8;" "$HEADER" \
+            || { echo "❌ Missing or malformed u8 typedef"; exit 1; }
+          
+          grep -q "ALGlobals" "$HEADER" \
+            || { echo "❌ Missing ALGlobals definition"; exit 1; }
 
           echo "✅ Header validation passed"
 
