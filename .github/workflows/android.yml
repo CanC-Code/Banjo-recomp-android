@@ -179,3 +179,4 @@ jobs:
           path: |
             build.log
             build_failure_summary.txt
+            Android/app/src/main/cpp/ultra/n64_types.h
