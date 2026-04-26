@@ -35,9 +35,6 @@ typedef double             f64;
 
 /* =========================
    PREPROCESSOR SDK INTERCEPTION
-   Temporarily rename original N64 SDK structs while we parse the headers.
-   This prevents them from triggering 'redefinition' errors against our
-   custom Android-specific implementations.
    ========================= */
 #define ALLink_s             __orig_ALLink_s
 #define ALLink               __orig_ALLink
@@ -66,11 +63,15 @@ typedef double             f64;
 #define AL_MIDI_FX_CTRL_2    __orig_AL_MIDI_FX_CTRL_2
 #define AL_MIDI_FX_CTRL_3    __orig_AL_MIDI_FX_CTRL_3
 
-/* * Force include the N64 SDK headers NOW.
- * Because they are guarded by standard N64 #ifndef tags, they will 
- * cache safely using the __orig_ names and cleanly skip re-parsing 
- * later in the actual .cpp source files.
+/* * ENABLE LEGACY SGI TYPEDEFS
+ * The N64 SDK hides Gfx, Mtx, and LookAt structs behind these legacy macros.
+ * We must explicitly define them so PR/gbi.h exposes the types to Clang C++.
  */
+#define _LANGUAGE_C 1
+#define _LANGUAGE_C_PLUS_PLUS 1
+#define F3DEX_GBI_2 1
+
+/* * Force include the N64 SDK headers NOW. */
 #include "PR/ultratypes.h"
 #include "PR/os.h"
 #include "PR/gbi.h"
@@ -176,8 +177,6 @@ typedef struct ALFilter_s {
 /*
  * DELEGATION NOTICE:
  * ALSynth and ALGlobals stubs have been REMOVED from this core file.
- * This prevents internal struct redefinitions when downstream scripts
- * (e.g. banjo_structural_patch.py) append their implementations.
  */
 
 #ifdef __cplusplus
@@ -200,7 +199,7 @@ extern struct ALGlobals_s *alGlobals;
     with open(types_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    print("✅ n64_types.h generated (harmonized SDK version)")
+    print("✅ n64_types.h generated (harmonized SDK version with SGI macros)")
 
 if __name__ == "__main__":
     fix_n64_types()
