@@ -27,6 +27,21 @@ def apply_regex_patch(filepath, patches):
     else:
         return False
 
+def prepend_to_file(filepath, text):
+    """
+    Safely injects unresolvable forward declarations at the top of a file 
+    without risking standard regex multiline start-of-string overlap.
+    """
+    if not os.path.exists(filepath):
+        return
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    if text.strip() not in content:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(text + content)
+        print(f"[+] Injected forward declarations into: {filepath}")
+
 def patch_extern_c_guards(workspace_root):
     """
     Injects #ifdef __cplusplus guards around raw extern "C" blocks in N64 headers
@@ -121,24 +136,53 @@ def patch_stdlib_conflicts(workspace_root):
     Comments out standard library redefinitions in the SDK headers 
     that conflict with Android NDK's bionic libc 'overloadable' attributes.
     """
-    # Patch newly renamed n64_string.h
     apply_regex_patch(os.path.join(workspace_root, "include", "n64_string.h"), [
         (r'(\bvoid\s+strcat\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
         (r'(\bvoid\s+strcpy\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
         (r'(\bs32\s+strlen\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */')
     ])
 
-    # Patch core1/mem.h
     apply_regex_patch(os.path.join(workspace_root, "include", "core1", "mem.h"), [
         (r'(\bvoid\s+memcpy\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
         (r'(\bvoid\s+memmove\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */')
     ])
 
-    # Patch functions.h
     apply_regex_patch(os.path.join(workspace_root, "include", "functions.h"), [
         (r'(\bvoid\s*\*\s*malloc\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
         (r'(\bvoid\s*\*\s*realloc\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */')
     ])
+
+def patch_audio_headers(workspace_root):
+    """
+    Resolves audio subsystem structure redefinitions by deferring to the recomp n64_types.h wrapper
+    and injects missing forward declarations for opaque audio engine pointers.
+    """
+    def defer_type(filepath, typedef_name):
+        apply_regex_patch(filepath, [
+            # Match block typedefs with a character bound limit to prevent greedy regex failure across the file
+            (r'typedef\s+(?:struct|union)\s*(?:\w+\s*)?\{[\s\S]{1,2000}?\}\s*' + typedef_name + r'\s*;', f'/* {typedef_name} deferred to n64_types.h */'),
+            # Match single-line alias typedefs
+            (r'typedef\s+(?:struct|union)\s+\w+\s+' + typedef_name + r'\s*;', f'/* {typedef_name} alias deferred */')
+        ])
+
+    # 1. n_libaudio.h
+    n_libaudio_path = os.path.join(workspace_root, "include", "2.0L", "PR", "n_libaudio.h")
+    if os.path.exists(n_libaudio_path):
+        prepend_to_file(n_libaudio_path, "typedef struct ALSeqMarker_s ALSeqMarker;\ntypedef struct ALCSeqMarker_s ALCSeqMarker;\n\n")
+        for struct_name in ['N_ALVoice', 'N_ALEvent', 'N_ALEventListItem', 'N_ALVoiceState']:
+            defer_type(n_libaudio_path, struct_name)
+
+    # 2. synthInternals.h
+    synth_internals_path = os.path.join(workspace_root, "include", "synthInternals.h")
+    if os.path.exists(synth_internals_path):
+        prepend_to_file(synth_internals_path, "#ifndef ADPCM_STATE_DEF\n#define ADPCM_STATE_DEF\ntypedef struct ADPCM_STATE_s ADPCM_STATE;\n#endif\n\n")
+        for struct_name in ['ALFilter', 'PVoice']:
+            defer_type(synth_internals_path, struct_name)
+
+    # 3. n_synth.h
+    n_synth_path = os.path.join(workspace_root, "include", "n_synth.h")
+    if os.path.exists(n_synth_path):
+        prepend_to_file(n_synth_path, "#ifndef ADPCM_STATE_DEF\n#define ADPCM_STATE_DEF\ntypedef struct ADPCM_STATE_s ADPCM_STATE;\n#endif\n\n")
 
 def run_harmonizer(workspace_root):
     print(f"Starting AArch64 Source Harmonization in: {workspace_root}")
@@ -190,6 +234,9 @@ def run_harmonizer(workspace_root):
 
     # 10. Disable conflicting prototype definitions overlapping with NDK headers
     patch_stdlib_conflicts(workspace_root)
+
+    # 11. Isolate and resolve Audio Subsystem redefinitions
+    patch_audio_headers(workspace_root)
 
     print("Source harmonization complete.")
 
