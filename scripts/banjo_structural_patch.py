@@ -18,24 +18,22 @@ def banjo_structural_harmony():
         return
 
     banjo_layer = """
-
 /* =========================
-BKA BANJO COMPAT LAYER
-(NON-DESTRUCTIVE)
-========================= */
+   BKA BANJO COMPAT LAYER
+   (HARMONIZED WITH SDK)
+   ========================= */
 #ifndef BKA_BANJO_LAYER
 #define BKA_BANJO_LAYER
 
 /* --- Safe typedef aliases --- */
 typedef ALEventListItem N_ALEventListItem;
-typedef ALCSeqMarker    ALSeqMarker;
 
-/* --- Missing constants --- */
-#define AL_SEQP_LOOP_EVT 10
-#define AL_MIDI_FX_CTRL_0 20
-#define AL_MIDI_FX_CTRL_1 21
-#define AL_MIDI_FX_CTRL_2 22
-#define AL_MIDI_FX_CTRL_3 23
+/* * NOTE: 
+ * - AL_SEQP_LOOP_EVT and AL_MIDI_FX_CTRL constants removed. 
+ * They are natively provided by the PR/libaudio.h enums now.
+ * - ALCSeqMarker alias removed to prevent 'unknown type' and 
+ * typedef redefinition conflicts with the N64 SDK.
+ */
 
 /* --- SAFE forward-only prototypes (no signature conflicts) --- */
 #ifdef __cplusplus
@@ -56,7 +54,6 @@ extern Acmd *n_alMainBusPull(void);
 #endif
 
 #endif /* BKA_BANJO_LAYER */
-
 """
 
     # Insert before final #endif
@@ -68,7 +65,7 @@ extern Acmd *n_alMainBusPull(void);
     with open(header_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print("✅ SAFE Banjo layer applied (no structural mutations).")
+    print("✅ SAFE Banjo layer applied (harmonized macros, no struct collisions).")
 
 
 if __name__ == "__main__":
