@@ -1,4 +1,4 @@
-name: Android Build & OTR Verification
+Name: Android Build & OTR Verification
 
 on:
   workflow_dispatch:
@@ -95,6 +95,12 @@ jobs:
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
 
+      - name: 🔍 Diagnostic: Dump Header State (Post-Fixes)
+        run: |
+          echo "--- START n64_types.h DUMP ---"
+          cat Android/app/src/main/cpp/ultra/n64_types.h || echo "Header not available for dump."
+          echo "--- END n64_types.h DUMP ---"
+
       - name: 📐 Auto-Fix Struct Ordering
         run: python3 scripts/fix_struct_ordering.py
 
@@ -127,11 +133,13 @@ jobs:
         run: |
           chmod +x scripts/harmonize_aarch64_headers.py
           python3 scripts/harmonize_aarch64_headers.py --root .
+        working-directory: ${{ github.workspace }}
 
       - name: Harmonize_2
         run: |
           chmod +x scripts/harmonizer_2.py
           python3 scripts/harmonizer_2.py --root .
+        working-directory: ${{ github.workspace }}
 
       - name: 🐘 Build Full Game APK
         working-directory: Android
@@ -153,23 +161,17 @@ jobs:
       # DIAGNOSTICS
       # =========================
 
-      - name: 🔍 Diagnostic: Capture State on Failure
+      - name: 🔍 Diagnostic: Merge Header into Build Log
         if: failure()
         run: |
-          HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
-          LOG="build.log"
-          
-          echo -e "\n\n================================================================================" >> $LOG
-          echo "DIAGNOSTIC DUMP: n64_types.h AT TIME OF FAILURE" >> $LOG
-          echo "================================================================================" >> $LOG
-          
-          if [ -f "$HEADER" ]; then
-            cat "$HEADER" >> $LOG
-          else
-            echo "FILE NOT FOUND: $HEADER (Build failed before header generation)" >> $LOG
-          fi
-          
-          echo -e "\n================================================================================" >> $LOG
+          # Ensure build.log exists even if the build failed before tee
+          touch build.log
+          printf "\n\n================================================================================\n" >> build.log
+          printf "DIAGNOSTIC: n64_types.h STATE AT TIME OF STOPPING\n" >> build.log
+          printf "================================================================================\n\n" >> build.log
+          cat Android/app/src/main/cpp/ultra/n64_types.h >> build.log 2>/dev/null || echo "[!] n64_types.h was not found at the expected path." >> build.log
+          printf "\n================================================================================\n" >> build.log
+        continue-on-error: true
 
       - name: 🔍 Run Failure Analyzer
         if: failure()
