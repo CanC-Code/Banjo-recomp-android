@@ -2,7 +2,6 @@
 import os
 import re
 import sys
-import subprocess
 
 def run_phase2_harmonizer(workspace_root):
     print(f"[+] Starting Phase 2 Audio Subsystem Harmonization in: {workspace_root}")
@@ -13,20 +12,19 @@ def run_phase2_harmonizer(workspace_root):
     if not os.path.exists(filepath):
         print(f"[-] CRITICAL ERROR: Could not find n64_types.h at {filepath}")
         sys.exit(1)
-        
-    # Attempt to reset n64_types.h to its clean, unmodified state to prevent double-patching artifacts
-    subprocess.run(["git", "checkout", "--", filepath], cwd=workspace_root, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    if "HARMONIZER_V3_APPLIED" in content:
-        print("[!] File already harmonized. Skipping to avoid double-patching.")
-        return True
+    # 2. Stateless Cleanup: Actively strip any prior harmonizer injections 
+    # This prevents the script from skipping execution or stacking duplicate blocks.
+    if "/* --- HARMONIZER_" in content:
+        print("[!] Found previous harmonizer injection. Stripping it to apply fresh...")
+        content = content.split("/* --- HARMONIZER_")[0]
 
-    # 2. Safely isolate the wrapper's audio namespace. 
-    # Using \b (word boundary) ensures we strictly rename the token regardless of whitespace or bracket formatting,
-    # completely avoiding the fragility of trying to delete multi-line C structs.
+    # 3. Safely isolate the wrapper's audio namespace. 
+    # Using \b (word boundary) ensures we strictly rename the token.
+    # The negative lookbehind (?<!WRAPPER_) ensures we never double-prefix (e.g., WRAPPER_WRAPPER_ALParam).
     types_to_isolate = [
         'ALCmdHandler', 'ALSetParam', 'ALParam', 'ALPVoice', 'N_PVoice', 
         'ALSetFXParam', 'ALStartParam', 'ALStartParamAlt', 'ALFilter', 'N_ALVoice',
@@ -35,12 +33,12 @@ def run_phase2_harmonizer(workspace_root):
     
     print("[+] Isolating conflicting wrapper namespaces...")
     for t in types_to_isolate:
-        content = re.sub(rf'\b{t}\b', f'WRAPPER_{t}', content)
+        content = re.sub(rf'(?<!WRAPPER_)\b{t}\b', f'WRAPPER_{t}', content)
         
-    # 3. Inject the structurally exact native definitions required by core1/audio.
-    # This provides the correct memory offsets (like v->pvoice->offset) for the N64 C files.
+    # 4. Inject the structurally exact native definitions required by core1/audio.
+    # This provides the correct memory offsets for the native C files.
     injection = """
-/* --- HARMONIZER_V3_APPLIED --- */
+/* --- HARMONIZER_V4_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -72,9 +70,10 @@ typedef struct N_ALVoice_s N_ALVoice;
 /* ----------------------------- */
 """
     
-    new_content = content + injection
+    # Append the injection block to the cleaned content
+    new_content = content.rstrip() + "\n\n" + injection.strip() + "\n"
     
-    # 4. Write back the cleanly separated file
+    # 5. Write back the cleanly separated file
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(new_content)
         
