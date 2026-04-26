@@ -1,4 +1,4 @@
-Name: Android Build & OTR Verification
+name: Android Build & OTR Verification
 
 on:
   workflow_dispatch:
@@ -95,12 +95,6 @@ jobs:
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
 
-      - name: 🔍 Diagnostic: Dump Header State (Post-Fixes)
-        run: |
-          echo "--- START n64_types.h DUMP ---"
-          cat Android/app/src/main/cpp/ultra/n64_types.h
-          echo "--- END n64_types.h DUMP ---"
-
       - name: 📐 Auto-Fix Struct Ordering
         run: python3 scripts/fix_struct_ordering.py
 
@@ -133,13 +127,11 @@ jobs:
         run: |
           chmod +x scripts/harmonize_aarch64_headers.py
           python3 scripts/harmonize_aarch64_headers.py --root .
-        working-directory: ${{ github.workspace }}
 
       - name: Harmonize_2
         run: |
           chmod +x scripts/harmonizer_2.py
           python3 scripts/harmonizer_2.py --root .
-        working-directory: ${{ github.workspace }}
 
       - name: 🐘 Build Full Game APK
         working-directory: Android
@@ -161,14 +153,23 @@ jobs:
       # DIAGNOSTICS
       # =========================
 
-      - name: 🔍 Diagnostic: Output Header on Failure
+      - name: 🔍 Diagnostic: Capture State on Failure
         if: failure()
         run: |
-          echo -e "\n================================================================================" >> build.log
-          echo "FINAL STATE OF n64_types.h AT TIME OF FAILURE:" >> build.log
-          echo "================================================================================" >> build.log
-          cat Android/app/src/main/cpp/ultra/n64_types.h >> build.log
-          echo -e "\n================================================================================" >> build.log
+          HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
+          LOG="build.log"
+          
+          echo -e "\n\n================================================================================" >> $LOG
+          echo "DIAGNOSTIC DUMP: n64_types.h AT TIME OF FAILURE" >> $LOG
+          echo "================================================================================" >> $LOG
+          
+          if [ -f "$HEADER" ]; then
+            cat "$HEADER" >> $LOG
+          else
+            echo "FILE NOT FOUND: $HEADER (Build failed before header generation)" >> $LOG
+          fi
+          
+          echo -e "\n================================================================================" >> $LOG
 
       - name: 🔍 Run Failure Analyzer
         if: failure()
