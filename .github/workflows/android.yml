@@ -131,6 +131,12 @@ jobs:
         working-directory: ${{ github.workspace }}
 
 
+
+      - name: Harmonize_2
+        run: |
+          chmod +x scripts/harmonizer_2.py
+
+
       - name: 🐘 Build Full Game APK
         working-directory: Android
         run: |
