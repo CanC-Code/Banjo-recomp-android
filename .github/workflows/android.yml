@@ -135,6 +135,8 @@ jobs:
       - name: Harmonize_2
         run: |
           chmod +x scripts/harmonizer_2.py
+          python3 scripts/harmonizer_2.py --root .
+        working-directory: ${{ github.workspace }}
 
 
       - name: 🐘 Build Full Game APK
