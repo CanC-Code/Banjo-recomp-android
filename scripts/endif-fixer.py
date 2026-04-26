@@ -7,29 +7,47 @@ def fix_unterminated_directives():
         print(f"File not found: {header_path}")
         return
 
-    with open(header_path, 'r') as f:
+    with open(header_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # Strip comments temporarily to accurately count preprocessor directives
-    # Match block comments /* ... */ and line comments // ...
-    content_no_comments = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-    content_no_comments = re.sub(r'//.*', '', content_no_comments)
+    # 1. Strip comments to avoid false positives in counts
+    # Strips /* block */ and // line comments
+    clean_content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    clean_content = re.sub(r'//.*', '', clean_content)
 
-    # Count opening and closing conditional directives
-    open_directives = len(re.findall(r'^\s*#(?:if|ifdef|ifndef)\b', content_no_comments, flags=re.MULTILINE))
-    close_directives = len(re.findall(r'^\s*#endif\b', content_no_comments, flags=re.MULTILINE))
+    # 2. Count opening vs closing directives
+    # We count #if, #ifdef, and #ifndef as openers
+    open_count = len(re.findall(r'^\s*#(?:if|ifdef|ifndef)\b', clean_content, flags=re.MULTILINE))
+    close_count = len(re.findall(r'^\s*#endif\b', clean_content, flags=re.MULTILINE))
 
-    missing_endifs = open_directives - close_directives
+    diff = open_count - close_count
 
-    if missing_endifs > 0:
-        print(f"Found {missing_endifs} unterminated conditional directive(s). Appending #endif...")
-        with open(header_path, 'a') as f:
-            f.write('\n' + '#endif /* Auto-closed by script */\n' * missing_endifs)
-        print("✅ n64_types.h include guards have been properly closed.")
-    elif missing_endifs < 0:
-        print(f"Warning: Found {-missing_endifs} extra #endif directives.")
+    if diff > 0:
+        print(f"⚠️ Found {diff} unterminated directive(s). Repairing...")
+        
+        # Ensure we don't append to a line that already has text
+        if not content.endswith('\n'):
+            content += '\n'
+            
+        # Append the missing terminators
+        for i in range(diff):
+            content += f"#endif /* BKA_AUTO_CLOSE_{i} */\n"
+            
+        with open(header_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print("✅ n64_types.h is now balanced.")
+
+    elif diff < 0:
+        # Extra endifs usually happen if a script injected content AFTER the final guard.
+        # This is dangerous as it can terminate the header early.
+        print(f"⚠️ Warning: Found {abs(diff)} extra #endif directives. File may be malformed.")
     else:
-        print("✅ Directives are already balanced.")
+        # Check if the very last non-empty line is an #endif
+        lines = [l.strip() for l in content.split('\n') if l.strip()]
+        if lines and not lines[-1].startswith('#endif'):
+            print("🧐 Balance is correct, but file does not end with #endif. Checking structure...")
+        else:
+            print("✅ n64_types.h directives are balanced and correctly terminated.")
 
 if __name__ == '__main__':
     fix_unterminated_directives()
