@@ -9,34 +9,33 @@ def patch_audio_structs():
         content = f.read()
 
     if 'sv_dramout' in content:
-        print("⏭️ sv_dramout already exists. Skipping.")
+        print("⏭️ sv_dramout already patched.")
         return
 
-    print("🛠️ Attempting aggressive patch for N_ALSyn structure...")
+    print("🛠️ Searching for N_ALSyn structure...")
     
-    # Strategy: Find the start of the N_ALSyn structure and inject the member.
-    # We look for the start of the struct, then find the next closing brace.
-    struct_start = re.search(r'struct\s+(N_ALSyn_s|N_ALSyn)\s*\{', content)
+    # This matches 'struct N_ALSyn_s {' or 'struct N_ALSyn {' or even anonymous structs labeled N_ALSyn
+    # It then finds the closing brace and injects the member.
+    struct_match = re.search(r'struct\s+(?:N_ALSyn_s|N_ALSyn)\s*\{', content)
     
-    if struct_start:
-        start_pos = struct_start.end()
-        # Find the end of this specific struct block
-        # (Assuming no nested structs with braces, which is standard for N64 audio)
-        end_brace_pos = content.find('}', start_pos)
+    if struct_match:
+        # Find the end of this block by matching the next closing brace
+        start_idx = struct_match.end()
+        end_brace_idx = content.find('}', start_idx)
         
-        if end_brace_pos != -1:
-            new_content = (
-                content[:end_brace_pos] + 
-                "    int sv_dramout; /* Added for Banjo Save routine */\n" + 
-                content[end_brace_pos:]
+        if end_brace_idx != -1:
+            content = (
+                content[:end_brace_idx] + 
+                "    int sv_dramout; /* Manual injection for n_save.c compatibility */\n" + 
+                content[end_brace_idx:]
             )
             with open(header_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            print("✅ Successfully injected sv_dramout into N_ALSyn.")
+                f.write(content)
+            print("✅ Injected sv_dramout into N_ALSyn structure.")
         else:
-            print("❌ Could not find closing brace for N_ALSyn.")
+            print("❌ Found N_ALSyn start but no closing brace.")
     else:
-        print("❌ Could not find N_ALSyn structure definition.")
+        print("❌ ERROR: Could not find N_ALSyn structure. Manual inspection required.")
 
 if __name__ == '__main__':
     patch_audio_structs()
