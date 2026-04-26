@@ -1,4 +1,4 @@
-Name: Android Build & OTR Verification
+name: Android Build & OTR Verification
 
 on:
   workflow_dispatch:
@@ -72,7 +72,7 @@ jobs:
 
           grep -Eq "typedef[[:space:]]+unsigned[[:space:]]+char[[:space:]]+u8;" "$HEADER" \
             || { echo "❌ Missing or malformed u8 typedef"; exit 1; }
-          
+
           grep -q "ALGlobals" "$HEADER" \
             || { echo "❌ Missing ALGlobals definition"; exit 1; }
 
@@ -94,12 +94,6 @@ jobs:
 
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
-
-      - name: 🔍 Diagnostic: Dump Header State (Post-Fixes)
-        run: |
-          echo "--- START n64_types.h DUMP ---"
-          cat Android/app/src/main/cpp/ultra/n64_types.h || echo "Header not available for dump."
-          echo "--- END n64_types.h DUMP ---"
 
       - name: 📐 Auto-Fix Struct Ordering
         run: python3 scripts/fix_struct_ordering.py
@@ -130,16 +124,16 @@ jobs:
           python3 scripts/generate_manifest.py
 
       - name: Harmonize AArch64 Headers
+        working-directory: ${{ github.workspace }}
         run: |
           chmod +x scripts/harmonize_aarch64_headers.py
           python3 scripts/harmonize_aarch64_headers.py --root .
-        working-directory: ${{ github.workspace }}
 
       - name: Harmonize_2
+        working-directory: ${{ github.workspace }}
         run: |
           chmod +x scripts/harmonizer_2.py
           python3 scripts/harmonizer_2.py --root .
-        working-directory: ${{ github.workspace }}
 
       - name: 🐘 Build Full Game APK
         working-directory: Android
@@ -161,15 +155,15 @@ jobs:
       # DIAGNOSTICS
       # =========================
 
-      - name: 🔍 Diagnostic: Merge Header into Build Log
+      - name: 🔍 Merge Header State into Build Log
         if: failure()
         run: |
-          # Ensure build.log exists even if the build failed before tee
           touch build.log
           printf "\n\n================================================================================\n" >> build.log
-          printf "DIAGNOSTIC: n64_types.h STATE AT TIME OF STOPPING\n" >> build.log
+          printf "DIAGNOSTIC: n64_types.h STATE AT TIME OF FAILURE\n" >> build.log
           printf "================================================================================\n\n" >> build.log
-          cat Android/app/src/main/cpp/ultra/n64_types.h >> build.log 2>/dev/null || echo "[!] n64_types.h was not found at the expected path." >> build.log
+          cat Android/app/src/main/cpp/ultra/n64_types.h >> build.log 2>/dev/null \
+            || printf "[!] n64_types.h was not found at the expected path.\n" >> build.log
           printf "\n================================================================================\n" >> build.log
         continue-on-error: true
 
