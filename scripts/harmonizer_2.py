@@ -4,13 +4,14 @@ import re
 import argparse
 import subprocess
 
-def aggressive_replace(filepath):
+def fix_n64_types(workspace_root):
     """
-    Safely and aggressively comments out conflicting type definitions 
-    without relying on exact whitespace matching.
+    Safely and aggressively strips conflicting mock definitions from the android wrapper
+    and injects the correct structural layouts.
     """
+    filepath = os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "n64_types.h")
     if not os.path.exists(filepath):
-        print(f"[-] Target wrapper not found: {filepath}")
+        print(f"[-] Fatal: n64_types.h not found at {filepath}")
         return False
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -18,73 +19,33 @@ def aggressive_replace(filepath):
 
     original_content = content
 
-    # Disable single-line aliases robustly
-    disables = [
-        r'typedef\s+ALEvent\s+N_ALEvent\s*;',
-        r'typedef\s+ALEventListItem\s+N_ALEventListItem\s*;',
-        r'typedef\s+ALVoiceState\s+N_ALVoiceState\s*;',
-        r'typedef\s+ALPVoice\s+PVoice\s*;',
-        r'typedef\s+ALPVoice\s+N_PVoice\s*;'
+    # 1. Strip all conflicting dummy types from the wrapper
+    structs_to_remove = [
+        'ALPVoice', 'ALFilter', 'N_ALVoice', 'N_PVoice', 
+        'ALParam', 'ALStartParam', 'ALStartParamAlt', 
+        'ALCmdHandler', 'ALSetParam'
     ]
-    for pattern in disables:
-        content = re.sub(pattern, '/* [Harmonizer] Disabled alias */', content)
-
-    # Disable full multi-line structs robustly
-    content = re.sub(r'typedef\s+struct\s+N_ALVoice_s\s*\{[^}]*\}\s*N_ALVoice\s*;', '/* [Harmonizer] N_ALVoice struct disabled */', content, flags=re.MULTILINE)
-    content = re.sub(r'typedef\s+struct\s+ALFilter_s\s*\{[^}]*\}\s*ALFilter\s*;', '/* [Harmonizer] ALFilter struct disabled */', content, flags=re.MULTILINE)
-
-    if content != original_content:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
-        print(f"[+] Successfully aggressively harmonized wrapper: {filepath}")
-        return True
     
-    print("[-] No changes were made to the wrapper. (Already patched?)")
-    return False
+    for sname in structs_to_remove:
+        # Match: typedef struct Name_s { ... } Name;
+        content = re.sub(r'(?s)typedef\s+struct\s+' + sname + r'_s\s*\{.*?\}\s*' + sname + r'\s*;', f'/* Stripped dummy {sname}_s */', content)
+        # Match: typedef struct { ... } Name;
+        content = re.sub(r'(?s)typedef\s+struct\s*\{.*?\}\s*' + sname + r'\s*;', f'/* Stripped dummy anon {sname} */', content)
+        # Match: struct Name_s { ... };
+        content = re.sub(r'(?s)struct\s+' + sname + r'_s\s*\{.*?\}\s*;', f'/* Stripped struct {sname}_s */', content)
+        # Match: typedef X Name;
+        content = re.sub(r'typedef\s+[^;\{]+?\s+' + sname + r'\s*;', f'/* Stripped alias {sname} */', content)
+        # Match: typedef void (*Name)(...);
+        content = re.sub(r'typedef\s+[^;]+?\(\s*\*\s*' + sname + r'\s*\)\s*\([^;]*\)\s*;', f'/* Stripped func ptr {sname} */', content)
 
-def prepend_to_file(filepath, text):
-    """
-    Injects required definitions safely at the top of a file.
-    """
-    if not os.path.exists(filepath):
-        print(f"[-] File not found for injection: {filepath}")
-        return
-        
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # Simple check to avoid double-injection
-    if "BKA_AUDIO_PATCH_H" not in content:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(text + content)
-        print(f"[+] Injected structural forward declarations into: {filepath}")
+    # 2. Inject the correct types at the end of the file.
+    # Because n64_types.h is included globally via compiler flags, this guarantees visibility.
+    injection = """
+/* --- HARMONIZER AUDIO PATCH --- */
+#ifndef HARMONIZER_AUDIO_PATCH_H
+#define HARMONIZER_AUDIO_PATCH_H
 
-def run_phase2_harmonizer(workspace_root):
-    print(f"Starting Phase 2 Audio Subsystem Harmonization in: {workspace_root}")
-
-    # 1. Restore native SDK headers to bring back the engine fields (e.g., ALPVoice->offset)
-    print("[+] Restoring SDK audio headers to original state...")
-    headers_to_restore = [
-        "include/2.0L/PR/n_libaudio.h",
-        "include/synthInternals.h",
-        "include/n_synth.h"
-    ]
-    for h in headers_to_restore:
-        h_path = os.path.join(workspace_root, h)
-        if os.path.exists(h_path):
-            subprocess.run(["git", "checkout", "--", h_path], cwd=workspace_root)
-            print(f"    -> Restored: {h}")
-
-    # 2. Patch the emulator wrapper (n64_types.h)
-    n64_types_path = os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "n64_types.h")
-    aggressive_replace(n64_types_path)
-
-    # 3. Define the missing structural parameters required by n_synstartvoice.c
-    # We must provide the actual struct layout so the compiler can resolve member assignments like 'update->delta'
-    struct_injection = """
-#ifndef BKA_AUDIO_PATCH_H
-#define BKA_AUDIO_PATCH_H
-
+// Provide the structurally complete ALParam so member offsets can be computed
 typedef struct ALParam_s {
     struct ALParam_s *next;
     s32 delta;
@@ -95,9 +56,11 @@ typedef struct ALParam_s {
 typedef ALParam ALStartParam;
 typedef ALParam ALStartParamAlt;
 
+// Provide correct function pointer signatures
 typedef void (*ALCmdHandler)(void *, s16 *, s32, s32 *);
 typedef s32  (*ALSetParam)(void *, s32, void *);
 
+// Forward declare missing sequence markers
 typedef struct ALSeqMarker_s ALSeqMarker;
 typedef struct ALCSeqMarker_s ALCSeqMarker;
 
@@ -106,20 +69,41 @@ typedef struct ALCSeqMarker_s ALCSeqMarker;
 typedef struct ADPCM_STATE_s ADPCM_STATE;
 #endif
 
-#endif // BKA_AUDIO_PATCH_H
-
+#endif // HARMONIZER_AUDIO_PATCH_H
 """
-
-    # Inject these definitions into the internal N64 headers
-    synth_internals_path = os.path.join(workspace_root, "include", "synthInternals.h")
-    n_synth_path = os.path.join(workspace_root, "include", "n_synth.h")
-    n_libaudio_path = os.path.join(workspace_root, "include", "2.0L", "PR", "n_libaudio.h")
     
-    prepend_to_file(synth_internals_path, struct_injection)
-    prepend_to_file(n_synth_path, struct_injection)
-    prepend_to_file(n_libaudio_path, struct_injection)
+    if "HARMONIZER_AUDIO_PATCH_H" not in content:
+        content = content + "\n" + injection
 
-    print("Phase 2 source harmonization strictly completed.")
+    if content != original_content:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"[+] Successfully patched and harmonized: {filepath}")
+        return True
+    else:
+        print("[-] No changes were necessary for n64_types.h")
+        return False
+
+def run_phase2_harmonizer(workspace_root):
+    print(f"Starting Phase 2 Audio Subsystem Harmonization in: {workspace_root}")
+
+    # 1. Restore native SDK headers to ensure no previous corrupted states
+    headers_to_restore = [
+        "include/2.0L/PR/n_libaudio.h",
+        "include/synthInternals.h",
+        "include/n_synth.h"
+    ]
+    for h in headers_to_restore:
+        h_path = os.path.join(workspace_root, h)
+        if os.path.exists(h_path):
+            subprocess.run(["git", "checkout", "--", h_path], cwd=workspace_root)
+            print(f"[+] Restored: {h}")
+
+    # 2. Execute the robust block replacement and global type injection
+    if not fix_n64_types(workspace_root):
+        print("[!] Warning: Script executed but no regex matches were applied. Verify file paths.")
+    
+    print("Phase 2 source harmonization successfully completed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 2: Harmonize Audio Subsystem SDK for AArch64 Android")
