@@ -124,6 +124,13 @@ jobs:
           pip3 install pyyaml
           python3 scripts/generate_manifest.py
 
+      - name: Harmonize AArch64 Headers
+        run: |
+          chmod +x scripts/harmonize_aarch64_headers.py
+          python3 scripts/harmonize_aarch64_headers.py --root .
+        working-directory: ${{ github.workspace }}
+
+
       - name: 🐘 Build Full Game APK
         working-directory: Android
         run: |
