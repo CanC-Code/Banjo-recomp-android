@@ -57,11 +57,6 @@ jobs:
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
 
-      - name: 🖊️🖊️ audio structures
-        run: python3 scripts/patch_naudio_pull_funcs.py
-
-
-
       - name: 🌍 fix alglobals
         run: python3 scripts/patch_alglobals.py
 
