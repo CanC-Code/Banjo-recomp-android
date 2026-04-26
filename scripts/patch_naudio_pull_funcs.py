@@ -8,11 +8,11 @@ def patch_naudio_pull_funcs():
     with open(header_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # Clean old ones first
-    conflict_pattern = r'extern\s+Acmd\s+\*\s*n_al(?:Fx|Envmixer|Adpcm|Resample|AuxBus|MainBus|Save)Pull\s*\([^;]*\);'
-    content = re.sub(conflict_pattern, '', content)
+    # Avoid duplicate signatures if the script runs twice
+    if 'n_alResamplePull(N_PVoice' in content:
+        print("⏭️ Signatures already patched.")
+        return
 
-    # Note: Using N_PVoice (which is an alias for ALPVoice in your header)
     pull_funcs = """
 #ifdef __cplusplus
 extern "C" {
@@ -28,7 +28,12 @@ extern Acmd *n_alMainBusPull();
 }
 #endif
 """
-    content += pull_funcs
+    # Place right before the final guard closing
+    pos = content.rfind('#endif /* BANJO_RECOMP_N64_TYPES_H */')
+    if pos != -1:
+        content = content[:pos] + pull_funcs + content[pos:]
+    else:
+        content += pull_funcs
 
     with open(header_path, 'w', encoding='utf-8') as f:
         f.write(content)
