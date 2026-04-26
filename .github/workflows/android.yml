@@ -65,6 +65,14 @@ jobs:
       - name: 🌍 fix alglobals
         run: python3 scripts/patch_alglobals.py
 
+
+      - name: ✏️ fix alglobals
+        run: python3 scripts/patch_ospri.py
+
+
+
+
+
       - name: 🖊️🖊️ fix endifs
         run: python3 scripts/endif-fixer.py
 
