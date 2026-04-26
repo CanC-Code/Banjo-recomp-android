@@ -3,7 +3,8 @@ import os
 def patch_missing_macros(filepath):
     """
     Injects missing N64 graphics macros required by the recompilation engine.
-    Ensures injection occurs inside the main include guards.
+    Ensures injection occurs inside the main include guards without colliding
+    with PR/gbi.h.
     """
     print(f"🔧 Checking {filepath} for missing N64 graphics macros...")
 
@@ -16,15 +17,17 @@ def patch_missing_macros(filepath):
 
     # If the cooperative guard is already there, we are done.
     if "BKA_MISSING_MACROS_DEFINED" in content:
-        print("⚡ Macros already exist, skipping.")
+        print("✅ Macros already exist, skipping.")
         return
 
     # Add G_TRI2 and any other common missing opcodes used in recomp
     macro_block = """
+/* =========================
+   RECOMPILATION OPCODE EXTENSIONS
+   ========================= */
 #ifndef BKA_MISSING_MACROS_DEFINED
 #define BKA_MISSING_MACROS_DEFINED
 
-/* Recompilation Engine Opcode Extensions */
 #ifndef G_TRI2
     #define G_TRI2 0xb1
 #endif
@@ -38,7 +41,7 @@ def patch_missing_macros(filepath):
 
     # Find the last #endif to ensure we stay inside the file's include guard
     last_endif_idx = content.rfind('#endif')
-    
+
     if last_endif_idx != -1:
         new_content = content[:last_endif_idx] + macro_block + "\n" + content[last_endif_idx:]
     else:
@@ -47,7 +50,7 @@ def patch_missing_macros(filepath):
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(new_content)
-    
+
     print("✅ Successfully injected missing graphics macros inside guards!")
 
 if __name__ == '__main__':
