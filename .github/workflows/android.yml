@@ -41,7 +41,7 @@ jobs:
         run: python3 scripts/fix_n64_types.py
 
       - name: 🧬 Repair Audio Structures
-        run: python3 scripts/patch_audio_structs.py
+        run: python3 scripts/banjo_structural_patch.py
 
       - name: 🧪 Inject Sanitizer Definitions
         run: python3 scripts/patch_sanitizer_defs.py
@@ -51,9 +51,6 @@ jobs:
 
       - name: ✏️ Patch OSPri & M_PI
         run: python3 scripts/patch_ospri.py
-
-      - name: 🖊️ Patch Audio Pull Functions
-        run: python3 scripts/patch_naudio_pull_funcs.py
 
       - name: 🎮 Patch Missing Graphics Macros
         run: python3 scripts/fix_missing_macros.py
