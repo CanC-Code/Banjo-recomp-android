@@ -1,51 +1,44 @@
 #!/usr/bin/env python3
 import os
-import re
 import argparse
 import subprocess
 
-def fix_n64_types(workspace_root):
+def apply_macro_harmonization(workspace_root):
     """
-    Safely and aggressively strips conflicting mock definitions from the android wrapper
-    and injects the correct structural layouts.
+    Uses C-preprocessor macros to dynamically rename conflicting types during 
+    the compilation of n64_types.h, bypassing the need for fragile regex stripping.
     """
     filepath = os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "n64_types.h")
     if not os.path.exists(filepath):
         print(f"[-] Fatal: n64_types.h not found at {filepath}")
         return False
 
+    # Attempt to reset n64_types.h to its clean, unmodified state to prevent double-patching artifacts
+    subprocess.run(["git", "checkout", "--", filepath], cwd=workspace_root, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    original_content = content
-
-    # 1. Strip all conflicting dummy types from the wrapper
-    structs_to_remove = [
-        'ALPVoice', 'ALFilter', 'N_ALVoice', 'N_PVoice', 
-        'ALParam', 'ALStartParam', 'ALStartParamAlt', 
-        'ALCmdHandler', 'ALSetParam'
+    # The exact list of conflicting dummy types generating errors in the ninja build log
+    override_list = [
+        'ALCmdHandler', 'ALSetParam', 'ALParam', 'ALPVoice', 'N_PVoice', 
+        'ALStartParam', 'ALStartParamAlt', 'ALFilter', 'N_ALVoice',
+        'ALVoiceState', 'ALEvent', 'ALEventListItem'
     ]
+
+    # Phase 1: Mask the conflicting wrapper types
+    top_macros = "\n/* --- HARMONIZER MACRO OVERRIDE START --- */\n"
+    for macro in override_list:
+        top_macros += f"#define {macro} DUMMY_{macro}\n"
+    top_macros += "/* --------------------------------------- */\n\n"
+
+    # Phase 2: Unmask and inject the structurally complete N64 SDK types
+    bottom_macros = "\n/* --- HARMONIZER MACRO OVERRIDE END --- */\n"
+    for macro in override_list:
+        bottom_macros += f"#undef {macro}\n"
     
-    for sname in structs_to_remove:
-        # Match: typedef struct Name_s { ... } Name;
-        content = re.sub(r'(?s)typedef\s+struct\s+' + sname + r'_s\s*\{.*?\}\s*' + sname + r'\s*;', f'/* Stripped dummy {sname}_s */', content)
-        # Match: typedef struct { ... } Name;
-        content = re.sub(r'(?s)typedef\s+struct\s*\{.*?\}\s*' + sname + r'\s*;', f'/* Stripped dummy anon {sname} */', content)
-        # Match: struct Name_s { ... };
-        content = re.sub(r'(?s)struct\s+' + sname + r'_s\s*\{.*?\}\s*;', f'/* Stripped struct {sname}_s */', content)
-        # Match: typedef X Name;
-        content = re.sub(r'typedef\s+[^;\{]+?\s+' + sname + r'\s*;', f'/* Stripped alias {sname} */', content)
-        # Match: typedef void (*Name)(...);
-        content = re.sub(r'typedef\s+[^;]+?\(\s*\*\s*' + sname + r'\s*\)\s*\([^;]*\)\s*;', f'/* Stripped func ptr {sname} */', content)
-
-    # 2. Inject the correct types at the end of the file.
-    # Because n64_types.h is included globally via compiler flags, this guarantees visibility.
-    injection = """
-/* --- HARMONIZER AUDIO PATCH --- */
-#ifndef HARMONIZER_AUDIO_PATCH_H
-#define HARMONIZER_AUDIO_PATCH_H
-
-// Provide the structurally complete ALParam so member offsets can be computed
+    bottom_macros += """
+// Provide the structurally complete ALParam so member offsets can be computed by the core N64 source
 typedef struct ALParam_s {
     struct ALParam_s *next;
     s32 delta;
@@ -68,21 +61,17 @@ typedef struct ALCSeqMarker_s ALCSeqMarker;
 #define ADPCM_STATE_DEF
 typedef struct ADPCM_STATE_s ADPCM_STATE;
 #endif
-
-#endif // HARMONIZER_AUDIO_PATCH_H
+/* --------------------------------------- */
 """
-    
-    if "HARMONIZER_AUDIO_PATCH_H" not in content:
-        content = content + "\n" + injection
 
-    if content != original_content:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
-        print(f"[+] Successfully patched and harmonized: {filepath}")
-        return True
-    else:
-        print("[-] No changes were necessary for n64_types.h")
-        return False
+    # Wrap the original content inside our preprocessor directives
+    new_content = top_macros + content + bottom_macros
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+        
+    print(f"[+] Successfully applied C-preprocessor macro masking to: {filepath}")
+    return True
 
 def run_phase2_harmonizer(workspace_root):
     print(f"Starting Phase 2 Audio Subsystem Harmonization in: {workspace_root}")
@@ -96,14 +85,13 @@ def run_phase2_harmonizer(workspace_root):
     for h in headers_to_restore:
         h_path = os.path.join(workspace_root, h)
         if os.path.exists(h_path):
-            subprocess.run(["git", "checkout", "--", h_path], cwd=workspace_root)
-            print(f"[+] Restored: {h}")
+            subprocess.run(["git", "checkout", "--", h_path], cwd=workspace_root, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            print(f"[+] Restored baseline SDK header: {h}")
 
-    # 2. Execute the robust block replacement and global type injection
-    if not fix_n64_types(workspace_root):
-        print("[!] Warning: Script executed but no regex matches were applied. Verify file paths.")
+    # 2. Execute the macro-level masking to safely bypass wrapper conflicts
+    apply_macro_harmonization(workspace_root)
     
-    print("Phase 2 source harmonization successfully completed.")
+    print("Phase 2 source harmonization successfully completed using Preprocessor Masking.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 2: Harmonize Audio Subsystem SDK for AArch64 Android")
