@@ -1,23 +1,23 @@
 import os
 
 def banjo_structural_harmony():
-header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
+    header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
-if not os.path.exists(header_path):
-    print(f"❌ {header_path} not found.")
-    return
+    if not os.path.exists(header_path):
+        print(f"❌ {header_path} not found.")
+        return
 
-with open(header_path, 'r', encoding='utf-8') as f:
-    content = f.read()
+    with open(header_path, 'r', encoding='utf-8') as f:
+        content = f.read()
 
-print("🚀 Applying SAFE Banjo compatibility layer...")
+    print("🚀 Applying SAFE Banjo compatibility layer...")
 
-# --- SAFETY: Do not reapply ---
-if "BKA_BANJO_LAYER" in content:
-    print("✅ Banjo layer already applied. Skipping.")
-    return
+    # --- SAFETY: Do not reapply ---
+    if "BKA_BANJO_LAYER" in content:
+        print("✅ Banjo layer already applied. Skipping.")
+        return
 
-banjo_layer = """
+    banjo_layer = """
 
 /* =========================
 BKA BANJO COMPAT LAYER
@@ -59,16 +59,17 @@ extern Acmd *n_alMainBusPull(void);
 
 """
 
-# Insert before final #endif
-if content.strip().endswith("#endif"):
-    content = content.rstrip()[:-6] + banjo_layer + "\n#endif\n"
-else:
-    content += banjo_layer
+    # Insert before final #endif
+    if content.strip().endswith("#endif"):
+        content = content.rstrip()[:-6] + banjo_layer + "\n#endif\n"
+    else:
+        content += banjo_layer
 
-with open(header_path, 'w', encoding='utf-8') as f:
-    f.write(content)
+    with open(header_path, 'w', encoding='utf-8') as f:
+        f.write(content)
 
-print("✅ SAFE Banjo layer applied (no structural mutations).")
+    print("✅ SAFE Banjo layer applied (no structural mutations).")
 
-if name == 'main':
-banjo_structural_harmony()
+
+if __name__ == "__main__":
+    banjo_structural_harmony()
