@@ -5,6 +5,7 @@ import sys
 TARGET_DIRS = ["src", "include"]
 
 # Pre-compile the token replacements for performance
+# These targets MUST be defined in your n64_types.h
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "TRUE",
@@ -51,14 +52,16 @@ def safe_token_replacement(content):
     return pattern.sub(replacer, content)
 
 def wrap_shadow_headers(content, filename):
+    """Wraps standard headers to prevent namespace collision with N64 symbols."""
     shadow_headers = ['string.h', 'math.h', 'stdlib.h', 'stdio.h', 'stdarg.h', 'stddef.h', 'time.h', 'assert.h', 'stdint.h']
     if filename in shadow_headers:
         if '#include_next' not in content:
-            return f"#ifdef __cplusplus\n#include_next <{filename}>\n#else\n{content}\n#endif\n"
+            return f"#ifndef BKA_SYS_WRAP_{filename.upper().replace('.','_')}\n#define BKA_SYS_WRAP_{filename.upper().replace('.','_')}\n#ifdef __cplusplus\n#include_next <{filename}>\n#else\n{content}\n#endif\n#endif\n"
     return content
 
 def fix_decompiler_artifacts(content, filename):
-    # 1. Fix shadowed variable names (e.g., u8 u8[10]; -> u8 buffer_u8[10];)
+    """Fixes common decompiler artifacts like variable shadowing and invalid array assignments."""
+    # 1. Fix shadowed variable names
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
@@ -66,9 +69,8 @@ def fix_decompiler_artifacts(content, filename):
         decl_line = rf'{indent}{type_name}\s+{var_name}\s*\['
         content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
         content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buffer_{var_name}[', content)
-        content = re.sub(rf'\b(memcpy|memset|memmove|n64_memcpy|n64_memset|n64_memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
-    # 2. Fix array assignments directly mapped from the decompiler
+    # 2. Fix invalid array assignments
     assign_pattern = re.compile(
         rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([^;]+)\s*;',
         re.MULTILINE
@@ -79,38 +81,23 @@ def fix_decompiler_artifacts(content, filename):
         src = src.strip()
         final_name = f"buffer_{name}" if dtype == name else name
 
-        # ENHANCEMENT: C++ Compiler Compatibility 
-        # If it's a literal initialization bracket { }, we keep it as standard C++ array initialization.
         if src.startswith('{') and src.endswith('}'):
             return f"{indent}{dtype} {final_name}[{size}] = {src};"
-
-        # Otherwise, if it's assigning an existing pointer to an array, we safely use n64_memcpy.
+        
+        # Use n64_memcpy (defined in our cooperative library)
         return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
 
-    # 3. Emergency tmp buffer injection (Thread-safe)
-    is_tmp_used = '[tmp]' in content or 'tmp[' in content
-    is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
-
-    if is_tmp_used and not is_tmp_declared:
-        # Changed to thread_local for better C++ standard compliance instead of GNU __thread
-        tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\n#ifdef __cplusplus\nstatic thread_local u8 tmp[1024] = {0};\n#else\nstatic _Thread_local u8 tmp[1024] = {0};\n#endif\n"
-        includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
-        if includes:
-            pos = includes[-1].end()
-            content = content[:pos] + tmp_decl + content[pos:]
-        else:
-            content = tmp_decl + content
-
-    # 4. Standard Math definition patches
-    if 'M_PI' in content and 'math.h' in content and '#define M_PI' not in content:
-        pi_fix = "\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n"
-        content = re.sub(r'^(#include <math\.h>)$', r'\1' + pi_fix, content, flags=re.MULTILINE)
+    # 3. Emergency tmp buffer (now using cooperative {0} init)
+    if '[tmp]' in content and not re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content):
+        tmp_decl = "\n/* BKA Emergency Buffer */\n#ifdef __cplusplus\nstatic thread_local u8 tmp[1024] = {0};\n#else\nstatic _Thread_local u8 tmp[1024] = {0};\n#endif\n"
+        content = tmp_decl + content
 
     return content
 
 def fix_linkage_conflicts(content):
+    """Ensures static functions have proper forward declarations to prevent linkage errors."""
     static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
@@ -123,18 +110,11 @@ def fix_linkage_conflicts(content):
             signatures.append(decl)
             existing_decls.add(decl)
 
-    for _, func_name in matches:
-        mismatch_pattern = rf"^(?!\s)(?<!static\s)([\w\s\*]*?\b{func_name}\b\s*\([^)]*\)\s*;)"
-        content = re.sub(mismatch_pattern, r"static \1", content, flags=re.MULTILINE)
-
     if signatures:
-        header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
+        header_block = "\n/* BKA Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
-        if includes:
-            pos = includes[-1].end()
-            content = content[:pos] + "\n" + header_block + content[pos:]
-        else:
-            content = header_block + "\n" + content
+        pos = includes[-1].end() if includes else 0
+        content = content[:pos] + "\n" + header_block + content[pos:]
     return content
 
 def sanitize_codebase(root_path):
@@ -145,28 +125,21 @@ def sanitize_codebase(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                # 🛡️ Process ONLY C/H files, SKIP C++ AND core headers
                 if not filename.endswith(('.c', '.h')): continue
+                
+                # CRITICAL: Do not sanitize the Master Header itself
                 if filename == "n64_types.h": continue
 
                 filepath = os.path.join(root, filename)
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
-                except Exception: 
-                    continue
+                except: continue
 
-                # 1. Safely replace tokens (ignores strings and comments)
                 content = safe_token_replacement(original_content)
-
-                # 2. Fix array assignments and uninitialized tmp variables
                 content = fix_decompiler_artifacts(content, filename)
-
-                # 3. Fix static/non-static conflicts
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
-
-                # 4. Wrap shadowed system headers
                 content = wrap_shadow_headers(content, filename)
 
                 if content != original_content:
