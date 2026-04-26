@@ -10,7 +10,6 @@ def apply_regex_patch(filepath, patches):
     Handles whitespace variability and multi-line patching robustly.
     """
     if not os.path.exists(filepath):
-        # Suppress missing file warnings unless debug is needed, keeps log clean
         return False
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -45,13 +44,9 @@ def patch_extern_c_guards(workspace_root):
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Only inject if the block exists and isn't already guarded
         if 'extern "C" {' in content and '#ifdef __cplusplus' not in content:
-            # Wrap the opening statement
             patched = re.sub(r'(extern\s+"C"\s*\{)', r'#ifdef __cplusplus\n\1\n#endif', content)
             
-            # The closing brace for extern "C" in PR headers is almost always the final brace in the file.
-            # Rfind maps the final instance safely without breaking intermediate structs.
             last_brace_idx = patched.rfind('}')
             if last_brace_idx != -1:
                 patched = patched[:last_brace_idx] + '#ifdef __cplusplus\n}\n#endif' + patched[last_brace_idx+1:]
@@ -63,7 +58,7 @@ def patch_extern_c_guards(workspace_root):
 
 def fix_string_shadowing(workspace_root):
     """
-    Resolves the <cstring> standard library compilation failure by renaming the custom 
+    Resolves <cstring> standard library compilation failures by renaming the custom 
     N64 string.h to n64_string.h and updating all internal #include directives.
     """
     string_h_path = os.path.join(workspace_root, "include", "string.h")
@@ -73,7 +68,6 @@ def fix_string_shadowing(workspace_root):
         os.rename(string_h_path, n64_string_path)
         print("[+] Renamed include/string.h to include/n64_string.h to prevent NDK shadowing")
     
-    # Update local includes across the codebase to utilize the newly isolated header name
     search_dirs = [
         os.path.join(workspace_root, "src"),
         os.path.join(workspace_root, "include")
@@ -92,43 +86,97 @@ def fix_string_shadowing(workspace_root):
                         (r'^#include\s*[<"]string\.h[>"]', '#include "n64_string.h"')
                     ])
 
+def fix_time_shadowing(workspace_root):
+    """
+    Resolves <ctime> standard library compilation failures by renaming 
+    the custom SDK time.h to n64_time.h to prevent NDK namespace shadowing.
+    """
+    time_h_path = os.path.join(workspace_root, "include", "time.h")
+    n64_time_path = os.path.join(workspace_root, "include", "n64_time.h")
+    
+    if os.path.exists(time_h_path):
+        os.rename(time_h_path, n64_time_path)
+        print("[+] Renamed include/time.h to include/n64_time.h to prevent NDK shadowing")
+    
+    search_dirs = [
+        os.path.join(workspace_root, "src"),
+        os.path.join(workspace_root, "include")
+    ]
+    
+    for sdir in search_dirs:
+        if not os.path.exists(sdir):
+            continue
+        for root, _, files in os.walk(sdir):
+            for file in files:
+                if file.endswith((".c", ".cpp", ".h")):
+                    filepath = os.path.join(root, file)
+                    if filepath == n64_time_path:
+                        continue
+                    apply_regex_patch(filepath, [
+                        (r'^#include\s*[<"]time\.h[>"]', '#include "n64_time.h"')
+                    ])
+
+def patch_stdlib_conflicts(workspace_root):
+    """
+    Comments out standard library redefinitions in the SDK headers 
+    that conflict with Android NDK's bionic libc 'overloadable' attributes.
+    """
+    # Patch newly renamed n64_string.h
+    apply_regex_patch(os.path.join(workspace_root, "include", "n64_string.h"), [
+        (r'(\bvoid\s+strcat\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
+        (r'(\bvoid\s+strcpy\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
+        (r'(\bs32\s+strlen\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */')
+    ])
+
+    # Patch core1/mem.h
+    apply_regex_patch(os.path.join(workspace_root, "include", "core1", "mem.h"), [
+        (r'(\bvoid\s+memcpy\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
+        (r'(\bvoid\s+memmove\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */')
+    ])
+
+    # Patch functions.h
+    apply_regex_patch(os.path.join(workspace_root, "include", "functions.h"), [
+        (r'(\bvoid\s*\*\s*malloc\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */'),
+        (r'(\bvoid\s*\*\s*realloc\s*\([^)]*\)\s*;)', r'/* \1 disabled for NDK */')
+    ])
+
 def run_harmonizer(workspace_root):
     print(f"Starting AArch64 Source Harmonization in: {workspace_root}")
 
-    # 1. Fix LP64 Data Model Mismatches in ultratypes.h
+    # 1. Fix LP64 Data Model Mismatches
     apply_regex_patch(os.path.join(workspace_root, "include", "2.0L", "PR", "ultratypes.h"), [
         (r'typedef\s+unsigned\s+long\s+u32\s*;', 'typedef unsigned int u32;'),
         (r'typedef\s+long\s+s32\s*;', 'typedef signed int s32;')
     ])
 
-    # 2. Fix broken include path in vla.h
+    # 2. Fix broken include path
     apply_regex_patch(os.path.join(workspace_root, "include", "core2", "vla.h"), [
         (r'#include\s*<ultratypes\.h>', '#include <PR/ultratypes.h>')
     ])
 
-    # 3. Resolve Acmd union vs u64 collision in abi.h
+    # 3. Resolve Acmd union vs u64 collision
     apply_regex_patch(os.path.join(workspace_root, "include", "2.0L", "PR", "abi.h"), [
         (r'\}\s*Acmd\s*;', '} orig_Acmd;\ntypedef u64 Acmd;')
     ])
 
-    # 4. Resolve alGlobals pointer type collision in libaudio.h
+    # 4. Resolve alGlobals pointer type collision
     apply_regex_patch(os.path.join(workspace_root, "include", "2.0L", "PR", "libaudio.h"), [
         (r'extern\s+(struct\s+ALGlobals_s|ALGlobals)\s*\*\s*alGlobals\s*;', '/* alGlobals extern deferred to n64_types.h */')
     ])
 
-    # 5. Fix ALGlobals pointer instantiation in stubs.cpp
+    # 5. Fix ALGlobals pointer instantiation
     apply_regex_patch(os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "emulator", "stubs.cpp"), [
         (r'ALGlobals\s*\*\s*alGlobals\s*=\s*nullptr\s*;', 'struct ALGlobals_s* alGlobals = nullptr;')
     ])
 
-    # 6. Fix ALGlobals extern casting and missing string includes in NativeBridge.cpp
+    # 6. Fix ALGlobals extern casting and missing string includes
     apply_regex_patch(os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "NativeBridge.cpp"), [
         (r'extern\s+ALGlobals\s*\*\s*alGlobals\s*;', 'extern struct ALGlobals_s* alGlobals;'),
         (r'\(\s*ALGlobals\s*\*\s*\)', '(struct ALGlobals_s*)'),
         (r'\bmemset\b', '__builtin_memset')
     ])
 
-    # 7. Replace memcpy with builtin in otr_builder.cpp to bypass standard library include drops
+    # 7. Replace memcpy with builtin in otr_builder.cpp
     apply_regex_patch(os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "otr_builder.cpp"), [
         (r'\bmemcpy\b', '__builtin_memcpy')
     ])
@@ -138,6 +186,10 @@ def run_harmonizer(workspace_root):
 
     # 9. Isolate custom headers from NDK standard library includes
     fix_string_shadowing(workspace_root)
+    fix_time_shadowing(workspace_root)
+
+    # 10. Disable conflicting prototype definitions overlapping with NDK headers
+    patch_stdlib_conflicts(workspace_root)
 
     print("Source harmonization complete.")
 
