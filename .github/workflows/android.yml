@@ -63,9 +63,21 @@ jobs:
       - name: 🔍 Validate Generated Header
         run: |
           echo "Checking header integrity..."
-          test -f Android/app/src/main/cpp/ultra/n64_types.h
-          grep -q "typedef unsigned char u8;" Android/app/src/main/cpp/ultra/n64_types.h
-          grep -q "ALGlobals" Android/app/src/main/cpp/ultra/n64_types.h
+
+          HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
+
+          # File must exist
+          test -f "$HEADER"
+
+          # Flexible typedef check (spacing-safe)
+          grep -Eq "typedef[[:space:]]+unsigned[[:space:]]+char[[:space:]]+u8;" "$HEADER"
+
+          # Core structures must exist
+          grep -q "ALGlobals" "$HEADER"
+          grep -q "ALFilter" "$HEADER"
+          grep -q "ALEvent" "$HEADER"
+
+          echo "✅ Header validation passed"
 
       # =========================
       # PHASE 2: SANITIZATION
