@@ -60,6 +60,9 @@ jobs:
       - name: 🖊️🖊️ driver and envelope structures
         run: python3 scripts/patch_naudio_pull_funcs.py
 
+      - name: 🖊️🖊️ driver and envelope structures
+        run: python3 scripts/endif-fixer.py
+
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
