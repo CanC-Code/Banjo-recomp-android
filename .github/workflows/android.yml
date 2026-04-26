@@ -57,7 +57,7 @@ jobs:
       - name: ✏️ Patch OSPri & M_PI
         run: python3 scripts/patch_ospri.py
 
-      - name: 🌍 Patch Missing Graphics Macros
+      - name: 🎮 Patch Missing Graphics Macros
         run: python3 scripts/fix_missing_macros.py
 
       - name: 🔍 Validate Generated Header
@@ -155,9 +155,19 @@ jobs:
       # DIAGNOSTICS
       # =========================
 
-      - name: 🛠️ Export Header for Diagnostics
+      - name: 🚑 Capture Header State on Failure
         if: failure()
-        run: cp Android/app/src/main/cpp/ultra/n64_types.h ./failed_n64_types.h
+        run: |
+          HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
+          echo "================================================================================"
+          echo "📂 FINAL HEADER STATE: $HEADER"
+          echo "================================================================================"
+          if [ -f "$HEADER" ]; then
+            cat "$HEADER"
+          else
+            echo "FAILED: Header file not found at $HEADER"
+          fi
+          echo "================================================================================"
 
       - name: 🔍 Run Failure Analyzer
         if: failure()
@@ -171,4 +181,4 @@ jobs:
           path: |
             build.log
             build_failure_summary.txt
-            failed_n64_types.h
+            Android/app/src/main/cpp/ultra/n64_types.h
