@@ -6,7 +6,7 @@ import sys
 
 def apply_regex_patch(filepath, patches):
     """
-    Applies regex substitutions to a file. 
+    Applies regex substitutions to a file safely.
     Handles whitespace variability and multi-line patching robustly.
     """
     if not os.path.exists(filepath):
@@ -29,23 +29,6 @@ def apply_regex_patch(filepath, patches):
         print(f"[=] No changes required (or patterns already patched) in: {filepath}")
         return False
 
-def ensure_include(filepath, include_stmt):
-    """
-    Safely injects an include statement at the top of the file if it is missing.
-    """
-    if not os.path.exists(filepath):
-        print(f"[-] Warning: Target file not found: {filepath}")
-        return
-
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    if include_stmt not in content:
-        content = include_stmt + "\n" + content
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
-        print(f"[+] Added {include_stmt} to {filepath}")
-
 def run_harmonizer(workspace_root):
     print(f"Starting AArch64 Source Harmonization in: {workspace_root}")
 
@@ -61,10 +44,10 @@ def run_harmonizer(workspace_root):
     ])
 
     # 3. Resolve Acmd union vs u64 collision in abi.h
-    # Removes the SDK's typedef so n64_types.h can safely assert u64 Acmd
+    # Safely maps the union to orig_Acmd and defines Acmd as u64 immediately 
+    # so libaudio.h succeeds prior to n64_types.h repeating the typedef.
     apply_regex_patch(os.path.join(workspace_root, "include", "2.0L", "PR", "abi.h"), [
-        (r'\}\s*Acmd\s*;', '} orig_Acmd;'),
-        (r'typedef\s+orig_Acmd\s+Acmd\s*;', '/* typedef orig_Acmd Acmd; removed for n64_types.h compatibility */')
+        (r'\}\s*Acmd\s*;', '} orig_Acmd;\ntypedef u64 Acmd;')
     ])
 
     # 4. Resolve alGlobals pointer type collision in libaudio.h
@@ -78,16 +61,18 @@ def run_harmonizer(workspace_root):
         (r'ALGlobals\s*\*\s*alGlobals\s*=\s*nullptr\s*;', 'struct ALGlobals_s* alGlobals = nullptr;')
     ])
 
-    # 6. Fix ALGlobals extern and casting in NativeBridge.cpp
-    native_bridge_path = os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "NativeBridge.cpp")
-    apply_regex_patch(native_bridge_path, [
+    # 6. Fix ALGlobals extern casting and missing string includes in NativeBridge.cpp
+    # Utilizing compiler intrinsics guarantees execution regardless of missing string headers.
+    apply_regex_patch(os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "NativeBridge.cpp"), [
         (r'extern\s+ALGlobals\s*\*\s*alGlobals\s*;', 'extern struct ALGlobals_s* alGlobals;'),
-        (r'\(\s*ALGlobals\s*\*\s*\)', '(struct ALGlobals_s*)')
+        (r'\(\s*ALGlobals\s*\*\s*\)', '(struct ALGlobals_s*)'),
+        (r'\bmemset\b', '__builtin_memset')
     ])
-    ensure_include(native_bridge_path, "#include <string.h>")
 
-    # 7. Inject missing standard library references for memcpy
-    ensure_include(os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "otr_builder.cpp"), "#include <string.h>")
+    # 7. Replace memcpy with builtin in otr_builder.cpp to bypass standard library include drops
+    apply_regex_patch(os.path.join(workspace_root, "Android", "app", "src", "main", "cpp", "ultra", "otr_builder.cpp"), [
+        (r'\bmemcpy\b', '__builtin_memcpy')
+    ])
 
     print("Source harmonization complete.")
 
