@@ -2,78 +2,123 @@ import os
 
 def fix_n64_types():
     """
-    Generates a minimal, safe, deterministic n64_types.h.
-    This version is:
-    - Syntax safe for Python
-    - Idempotent
-    - Compatible with your Banjo structural patch layer
+    Generates a master n64_types.h that harmonizes Android custom types
+    with the original N64 SDK headers via preprocessor interception.
     """
-
     types_path = "Android/app/src/main/cpp/ultra/n64_types.h"
 
     content = """#ifndef BKA_ANDROID_N64_TYPES_H
 #define BKA_ANDROID_N64_TYPES_H
 
 /*
- * CLEAN, SAFE, ORDERED N64 TYPE FOUNDATION
- * - Idempotent
- * - Forward-declaration safe
- * - No macro poisoning
+ * CLEAN, HARMONIZED N64 TYPE FOUNDATION
+ * - Protects against libaudio/gu struct collisions
+ * - Delegates Banjo-specific structs (ALSynth/ALGlobals) to sister scripts
  */
-
-/* =========================
-   FUNDAMENTAL TYPES
-   ========================= */
-typedef unsigned char      u8;
-typedef signed char        s8;
-typedef unsigned short     u16;
-typedef signed short       s16;
-typedef unsigned int       u32;
-typedef signed int         s32;
-typedef unsigned long long u64;
-typedef signed long long   s64;
-typedef float              f32;
-typedef double             f64;
 
 #include <stdint.h>
 #include <stddef.h>
 
 /* =========================
-   FORWARD DECLARATIONS
+   FUNDAMENTAL TYPES
    ========================= */
-struct N_ALVoice_s;
-struct ALVoiceState_s;
+typedef uint8_t  u8;
+typedef int8_t   s8;
+typedef uint16_t u16;
+typedef int16_t  s16;
+typedef uint32_t u32;
+typedef int32_t  s32;
+typedef uint64_t u64;
+typedef int64_t  s64;
+typedef float    f32;
+typedef double   f64;
 
 /* =========================
-   CORE AUDIO PRIMITIVES
+   PREPROCESSOR SDK INTERCEPTION
+   Temporarily rename original N64 SDK structs while we parse the headers.
+   This prevents them from triggering 'redefinition' errors against our
+   custom Android-specific implementations.
    ========================= */
+#define ALLink_s             __orig_ALLink_s
+#define ALLink               __orig_ALLink
+#define ALVoice_s            __orig_ALVoice_s
+#define ALVoice              __orig_ALVoice
+#define N_ALVoice_s          __orig_N_ALVoice_s
+#define N_ALVoice            __orig_N_ALVoice
+#define ALSynth              __orig_ALSynth
+#define ALSyn                __orig_ALSyn
+#define ALGlobals            __orig_ALGlobals
+#define ALGlobals_s          __orig_ALGlobals_s
+#define ALEvent              __orig_ALEvent
+#define ALEvent_s            __orig_ALEvent_s
+#define ALEventListItem      __orig_ALEventListItem
+#define ALEventListItem_s    __orig_ALEventListItem_s
+#define ALVoiceState_s       __orig_ALVoiceState_s
+#define ALVoiceState         __orig_ALVoiceState
+#define ALSeqMarker          __orig_ALSeqMarker
+#define ALCSeqMarker         __orig_ALCSeqMarker
+#define ADPCM_STATE          __orig_ADPCM_STATE
 
-/* Safe Acmd definition */
+/* Intercept macro enums that sister scripts inject as #defines */
+#define AL_SEQP_LOOP_EVT     __orig_AL_SEQP_LOOP_EVT
+#define AL_MIDI_FX_CTRL_0    __orig_AL_MIDI_FX_CTRL_0
+#define AL_MIDI_FX_CTRL_1    __orig_AL_MIDI_FX_CTRL_1
+#define AL_MIDI_FX_CTRL_2    __orig_AL_MIDI_FX_CTRL_2
+#define AL_MIDI_FX_CTRL_3    __orig_AL_MIDI_FX_CTRL_3
+
+/* * Force include the N64 SDK headers NOW.
+ * Because they are guarded by standard N64 #ifndef tags, they will 
+ * cache safely using the __orig_ names and cleanly skip re-parsing 
+ * later in the actual .cpp source files.
+ */
+#include "PR/ultratypes.h"
+#include "PR/os.h"
+#include "PR/gbi.h"
+#include "PR/gu.h"
+#include "PR/libaudio.h"
+
+/* =========================
+   RESTORE NAMESPACE
+   ========================= */
+#undef ALLink_s
+#undef ALLink
+#undef ALVoice_s
+#undef ALVoice
+#undef N_ALVoice_s
+#undef N_ALVoice
+#undef ALSynth
+#undef ALSyn
+#undef ALGlobals
+#undef ALGlobals_s
+#undef ALEvent
+#undef ALEvent_s
+#undef ALEventListItem
+#undef ALEventListItem_s
+#undef ALVoiceState_s
+#undef ALVoiceState
+#undef ALSeqMarker
+#undef ALCSeqMarker
+#undef ADPCM_STATE
+
+#undef AL_SEQP_LOOP_EVT
+#undef AL_MIDI_FX_CTRL_0
+#undef AL_MIDI_FX_CTRL_1
+#undef AL_MIDI_FX_CTRL_2
+#undef AL_MIDI_FX_CTRL_3
+
+/* =========================
+   CUSTOM ANDROID/BANJO PRIMITIVES
+   ========================= */
 typedef u64 Acmd;
 
-/* Minimal safe ALLink */
 typedef struct ALLink_s {
     struct ALLink_s *next;
     struct ALLink_s *prev;
 } ALLink;
 
-/* =========================
-   EVENT SYSTEM (FIXED ORDER)
-   ========================= */
-
 typedef s32 ALMicroTime;
 
-typedef struct ALEvent_s ALEvent;
-
-typedef struct ALEventListItem_s {
-    ALLink      node;
-    ALMicroTime delta;
-    ALEvent     *evt;
-} ALEventListItem;
-
-/* =========================
-   VOICE (SAFE FORWARD USE)
-   ========================= */
+struct N_ALVoice_s;
 
 typedef struct ALPVoice_s {
     ALLink node;
@@ -82,21 +127,6 @@ typedef struct ALPVoice_s {
 
 typedef ALPVoice PVoice;
 typedef ALPVoice N_PVoice;
-
-/* =========================
-   PARAM SYSTEM
-   ========================= */
-
-typedef struct ALParam_s {
-    struct ALParam_s *next;
-    s32 delta;
-    s32 type;
-    union { f32 f; s32 i; } data;
-} ALParam;
-
-/* =========================
-   EVENT STRUCT
-   ========================= */
 
 struct ALEvent_s {
     s32 type;
@@ -108,12 +138,14 @@ struct ALEvent_s {
         u8 raw[32];
     } msg;
 };
-
+typedef struct ALEvent_s ALEvent;
 typedef ALEvent N_ALEvent;
 
-/* =========================
-   VOICE TYPES (DEFINED AFTER USE)
-   ========================= */
+typedef struct ALEventListItem_s {
+    ALLink      node;
+    ALMicroTime delta;
+    ALEvent     *evt;
+} ALEventListItem;
 
 typedef struct N_ALVoice_s {
     struct N_ALVoice_s *next;
@@ -124,22 +156,13 @@ typedef struct N_ALVoice_s {
 
 typedef N_ALVoice ALVoice;
 
-/* =========================
-   VOICE STATE
-   ========================= */
-
 typedef struct ALVoiceState_s {
     struct ALVoiceState_s *next;
     ALVoice *voice;
     f32 pitch;
     u8 state;
 } ALVoiceState;
-
 typedef ALVoiceState N_ALVoiceState;
-
-/* =========================
-   BASIC FILTER SYSTEM (MINIMAL SAFE)
-   ========================= */
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
@@ -150,35 +173,20 @@ typedef struct ALFilter_s {
     s32 type;
 } ALFilter;
 
-/* =========================
-   SYNTH SAFE WRAPPER
-   ========================= */
-
-typedef struct {
-    ALFilter filter;
-    s32 paramSamples;
-    s32 outputRate;
-} ALSyn;
-
-typedef ALSyn ALSynth;
-
-/* =========================
-   GLOBALS (SAFE STUB)
-   ========================= */
-
-typedef struct {
-    ALSyn *drvr;
-} ALGlobals;
-
-/* =========================
-   REQUIRED EXTERNS
-   ========================= */
+/*
+ * DELEGATION NOTICE:
+ * ALSynth and ALGlobals stubs have been REMOVED from this core file.
+ * This prevents internal struct redefinitions when downstream scripts
+ * (e.g. banjo_structural_patch.py) append their implementations.
+ */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-extern ALGlobals *alGlobals;
+/* Safely forward declare the global pointer */
+struct ALGlobals_s;
+extern struct ALGlobals_s *alGlobals;
 
 #ifdef __cplusplus
 }
@@ -192,7 +200,7 @@ extern ALGlobals *alGlobals;
     with open(types_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    print("✅ n64_types.h generated (clean minimal safe version)")
+    print("✅ n64_types.h generated (harmonized SDK version)")
 
 if __name__ == "__main__":
     fix_n64_types()
