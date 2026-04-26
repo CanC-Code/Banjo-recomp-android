@@ -3,7 +3,7 @@ import os
 def patch_sanitizer_definitions():
     """
     Injects definitions for sanitized tokens (n64_bool, n64_malloc, etc.)
-    into the master n64_types.h header.
+    into the master n64_types.h header, ensuring standard libraries are loaded.
     """
     header_path = 'Android/app/src/main/cpp/ultra/n64_types.h'
 
@@ -24,6 +24,12 @@ def patch_sanitizer_definitions():
 #define BKA_SANITIZER_SUPPORT_DEFINED
 
 /* BKA SANITIZER SUPPORT */
+/* Inject required standard headers so expanded macros don't cause 'undeclared identifier' errors in C++17 */
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+
 typedef s32 n64_bool;
 
 #ifndef n64_malloc
@@ -47,7 +53,7 @@ typedef s32 n64_bool;
 
     # Find the final #endif of the include guard to keep the file valid
     last_endif_idx = content.rfind('#endif')
-    
+
     if last_endif_idx != -1:
         new_content = content[:last_endif_idx] + sanitizer_block + "\n" + content[last_endif_idx:]
     else:
@@ -57,7 +63,7 @@ typedef s32 n64_bool;
     with open(header_path, 'w', encoding='utf-8') as f:
         f.write(new_content)
 
-    print("✅ Successfully injected sanitizer support definitions into n64_types.h")
+    print("✅ Successfully injected sanitizer support definitions and stdlib headers into n64_types.h")
 
 if __name__ == '__main__':
     patch_sanitizer_definitions()
