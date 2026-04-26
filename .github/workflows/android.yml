@@ -40,8 +40,7 @@ steps:
   # =========================
 
   - name: 🧹 Clean Previous Generated Headers
-    run: |
-      rm -f Android/app/src/main/cpp/ultra/n64_types.h
+    run: rm -f Android/app/src/main/cpp/ultra/n64_types.h
 
   - name: 🛠️ Generate Master Header
     run: python3 scripts/fix_n64_types.py
@@ -61,7 +60,6 @@ steps:
   - name: 🎮 Patch Missing Graphics Macros
     run: python3 scripts/fix_missing_macros.py
 
-  # ✅ VALIDATION CHECKPOINT
   - name: 🔍 Validate Generated Header
     run: |
       echo "Checking header integrity..."
