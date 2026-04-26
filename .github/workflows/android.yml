@@ -48,6 +48,9 @@ jobs:
       - name: 🛠️ Auto-Fix All N64 Types (Global)
         run: python3 scripts/fix_n64_types.py
 
+      - name: 🛠️ Auto-Fix All N64 Types (Global)
+        run: python3 scripts/fix_n64_types.py
+
       - name: 🖊️ Auto-Fix Missing Graphics Macros
         run: python3 scripts/patch_naudio_pull_funcs.py
 
