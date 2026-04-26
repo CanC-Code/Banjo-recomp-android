@@ -8,60 +8,50 @@ validate:
 runs-on: ubuntu-latest
 
 steps:
-  # --- CHECKOUT ---
   - name: 📥 Checkout Code
     uses: actions/checkout@v4
     with:
       submodules: recursive
 
-  # --- JAVA ---
-  - name: ☕ Set up JDK 17
-    uses: actions/setup-java@v4
-    with:
-      java-version: '17'
-      distribution: 'temurin'
-
-  # --- PYTHON (GLOBAL FIX) ---
-  - name: 🐍 Set up Python
+  # --- Python Setup (CRITICAL) ---
+  - name: 🐍 Setup Python
     uses: actions/setup-python@v5
     with:
-      python-version: '3.11'
+      python-version: "3.11"
 
   - name: 📦 Install Python Dependencies
     run: |
       python -m pip install --upgrade pip
       pip install pyyaml
 
-  # --- ANDROID ---
+  # --- Java / Android ---
+  - name: ☕ Set up JDK 17
+    uses: actions/setup-java@v4
+    with:
+      java-version: '17'
+      distribution: 'temurin'
+
   - name: 🛠️ Set up Android SDK
     uses: android-actions/setup-android@v3
 
-  # --- GRADLE CACHE ---
-  - name: 🐘 Setup Gradle
+  - name: 🐘 Setup Gradle Cache
     uses: gradle/actions/setup-gradle@v4
-    with:
-      gradle-version: 8.2
 
-  # --- ICONS ---
+  # --- Assets ---
   - name: 🖼️ Generate Android Icons
     run: |
       sudo apt-get update
       sudo apt-get install -y imagemagick
-
       if [ ! -f "icon_master.png" ]; then
         convert -size 512x512 xc:blue icon_master.png
       fi
-
       python scripts/generate_icons.py icon_master.png
 
-  # =========================
-  # PHASE 1: HEADER FOUNDATION
-  # =========================
-
+  # --- PHASE 1: HEADER FOUNDATION ---
   - name: 🛠️ Master Header Generation
     run: python scripts/fix_n64_types.py
 
-  - name: 🧬 Banjo Compatibility Layer
+  - name: 🧬 Repair Audio Structures
     run: python scripts/banjo_structural_patch.py
 
   - name: 🧪 Inject Sanitizer Definitions
@@ -76,55 +66,38 @@ steps:
   - name: 🎮 Patch Missing Graphics Macros
     run: python scripts/fix_missing_macros.py
 
-  # =========================
-  # PHASE 2: CODE SANITIZATION
-  # =========================
-
+  # --- PHASE 2: SANITIZATION ---
   - name: 🧹 Codebase Sanitization
     run: python scripts/sanitize_codebase.py .
 
-  # =========================
-  # PHASE 3: SAFE CLEANUP
-  # =========================
-
-  - name: 🩹 Fix NULL Floats
+  # --- PHASE 3: CLEANUP ---
+  - name: 🩹 Auto-Fix N64 NULL Floats
     run: python scripts/fix_null_floats.py
 
-  - name: 🏗️ Fix Function Pointers
+  - name: 🏗️ Auto-Hoist Function Pointers
     run: python scripts/fix_function_pointers.py
 
-  - name: 📐 Fix Struct Ordering
+  - name: 📐 Auto-Fix Struct Ordering
     run: python scripts/fix_struct_ordering.py
 
-  - name: 🖊️ Validate Include Guards
+  - name: 🖊️ Final Include Guard Validation
     run: python scripts/endif-fixer.py
 
-  # =========================
-  # BUILD PREP
-  # =========================
-
+  # --- MANIFEST ---
   - name: 🗺️ Generate Asset Manifests
     run: python scripts/generate_manifest.py
 
-  # =========================
-  # BUILD
-  # =========================
-
+  # --- BUILD ---
   - name: 🐘 Build Full Game APK
     run: |
       cd Android
-      chmod +x gradlew
-      set -o pipefail
-
+      set -e
+      chmod +x ./gradlew
       ./gradlew clean assembleDebug \
         -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
-        --info \
-        --stacktrace 2>&1 | tee ../build.log
+        --stacktrace --info 2>&1 | tee ../build.log
 
-  # =========================
-  # ARTIFACTS
-  # =========================
-
+  # --- SUCCESS OUTPUT ---
   - name: 📦 Upload APK
     if: success()
     uses: actions/upload-artifact@v4
@@ -132,13 +105,15 @@ steps:
       name: bka-full-game-apk
       path: Android/app/build/outputs/apk/debug/*.apk
 
-  # =========================
-  # FAILURE HANDLING
-  # =========================
-
-  - name: 🔍 Analyze Build Failure
-    if: failure()
-    run: python scripts/analyze_build_log.py build.log
+  # --- FAILURE HANDLING ---
+  - name: 🔍 Run Failure Analyzer
+    if: failure() && always()
+    run: |
+      if [ -f build.log ]; then
+        python scripts/analyze_build_log.py build.log
+      else
+        echo "No build.log found"
+      fi
 
   - name: 🚑 Upload Failure Logs
     if: failure()
