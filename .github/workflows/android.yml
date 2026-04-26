@@ -34,45 +34,49 @@ jobs:
           fi
           python3 scripts/generate_icons.py icon_master.png
 
-      - name: 🧹 Pre-Patching (Sanitizer)
+      # --- PHASE 1: THE FOUNDATION (HEADER GENERATION) ---
+      # We build the master header and apply all cooperative patches first.
+      
+      - name: 🛠️ Master Header Generation
+        run: python3 scripts/fix_n64_types.py
+
+      - name: 🧪 Inject Sanitizer Definitions
+        run: python3 scripts/patch_sanitizer_defs.py
+
+      - name: 🌍 Patch ALGlobals
+        run: python3 scripts/patch_alglobals.py
+
+      - name: ✏️ Patch OSPri & M_PI
+        run: python3 scripts/patch_ospri.py
+
+      - name: 🖊️ Patch Audio Pull Functions
+        run: python3 scripts/patch_naudio_pull_funcs.py
+
+      - name: 🎮 Patch Missing Graphics Macros
+        run: python3 scripts/fix_missing_macros.py
+
+      # --- PHASE 2: THE SANITIZATION (TOKEN REPLACEMENT) ---
+      # Now that n64_bool and n64_malloc are defined, we can safely replace them.
+
+      - name: 🧹 Codebase Sanitization
         run: python3 scripts/sanitize_codebase.py .
+
+      # --- PHASE 3: THE CODE CLEANUP (DECOMPILER FIXES) ---
+      # These scripts now "look" at the Master Header to avoid redefinition errors.
 
       - name: 🩹 Auto-Fix N64 NULL Floats
         run: python3 scripts/fix_null_floats.py
 
-      - name: 📐 Auto-Fix Struct Ordering
-        run: python3 scripts/fix_struct_ordering.py
-
-      # --- CONSOLIDATED TYPE FIXER ---
-      # This replaces the old fix_vu32 and fix_n64_bool steps
-      - name: 🛠️ Auto-Fix All N64 Types (Global)
-        run: python3 scripts/fix_n64_types.py
-
-      - name: 🛠️ Auto-Fix All N64 Types (Global)
-        run: python3 scripts/fix_n64_types.py
-
-      - name: 🖊️ Auto-Fix Missing Graphics Macros
-        run: python3 scripts/patch_naudio_pull_funcs.py
-
-      - name: 🎮 Auto-Fix Missing Graphics Macros
-        run: python3 scripts/fix_missing_macros.py
-
       - name: 🏗️ Auto-Hoist Function Pointers
         run: python3 scripts/fix_function_pointers.py
 
-      - name: 🌍 fix alglobals
-        run: python3 scripts/patch_alglobals.py
+      - name: 📐 Auto-Fix Struct Ordering
+        run: python3 scripts/fix_struct_ordering.py
 
-
-      - name: ✏️ fix alglobals
-        run: python3 scripts/patch_ospri.py
-
-
-
-
-
-      - name: 🖊️🖊️ fix endifs
+      - name: 🖊️ Final Include Guard Validation
         run: python3 scripts/endif-fixer.py
+
+      # --- BUILD & DEPLOY ---
 
       - name: 🗺️ Generate Asset Manifests
         run: |
@@ -95,12 +99,11 @@ jobs:
           name: bka-full-game-apk
           path: Android/app/build/outputs/apk/debug/*.apk
 
-      # --- DIAGNOSTIC STEPS ---
-      
+      # --- DIAGNOSTICS ---
+
       - name: 🔍 Run Failure Analyzer
         if: failure()
-        run: |
-          python3 scripts/analyze_build_log.py build.log
+        run: python3 scripts/analyze_build_log.py build.log
 
       - name: 🚑 Upload Failure Logs
         if: failure()
