@@ -80,7 +80,7 @@ def run_phase2_harmonizer(workspace_root):
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
             rf'(typedef\s+struct\s+{re.escape(struct_tag)}\s*\{{)'
-            rf'([^}]*?)'  # Non-greedy match for the struct body
+            r'([^}]*?)'  # Non-greedy match for the struct body
             rf'(\}}\s*\w+\s*;)'
         )
         m = re.search(pattern, src, re.DOTALL)
