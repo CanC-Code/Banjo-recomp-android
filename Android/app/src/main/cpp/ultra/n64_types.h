@@ -79,27 +79,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Force the real NDK string.h in now, before any project header can
-   shadow it. The NDK sysroot header sets _STRING_H_ internally.
-   After this, define all other known variants to block the project copy. */
-#include <string.h>
-
-/* All known include guard variants for project-local include/string.h.
-   The NDK's own string.h uses _STRING_H_; defining the others blocks
-   any project stub that might use a different guard name. */
-#define _STRING_H          1
-#define __STRING_H         1
-#define __STRING_H_        1
-#define _INC_STRING        1
-#define _STRING_INCLUDED   1
-#define INCLUDE_STRING_H   1
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <math.h>
-
 /* =============================================
    STANDARD N64 TYPES
+   Defined before any other includes (like string.h) to ensure
+   that if a project header gets pulled in early, it already has 
+   access to s32, u32, etc.
    ============================================= */
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -123,6 +107,25 @@ typedef volatile int64_t  vs64;
 
 typedef float  f32;
 typedef double f64;
+
+/* Force the real NDK string.h in now, before any project header can
+   shadow it. The NDK sysroot header sets _STRING_H_ internally.
+   After this, define all other known variants to block the project copy. */
+#include <string.h>
+
+/* All known include guard variants for project-local include/string.h.
+   The NDK's own string.h uses _STRING_H_; defining the others blocks
+   any project stub that might use a different guard name. */
+#define _STRING_H          1
+#define __STRING_H         1
+#define __STRING_H_        1
+#define _INC_STRING        1
+#define _STRING_INCLUDED   1
+#define INCLUDE_STRING_H   1
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
 
 /* =============================================
    OS TYPE DEFINITIONS
