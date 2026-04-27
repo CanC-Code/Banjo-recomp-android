@@ -36,75 +36,23 @@ jobs:
           python3 scripts/generate_icons.py icon_master.png
 
       # =========================
-      # PHASE 1: HEADER FOUNDATION
+      # HEADER VALIDATION (replaces all patch scripts)
       # =========================
-
-      - name: 🧹 Clean Previous Generated Headers
-        run: rm -f Android/app/src/main/cpp/ultra/n64_types.h
-
-      - name: 🛠️ Generate Master Header
-        run: python3 scripts/fix_n64_types.py
-
-      - name: 🧬 Apply Banjo Compatibility Layer
-        run: python3 scripts/banjo_structural_patch.py
-
-      - name: 🧪 Inject Sanitizer Definitions
-        run: python3 scripts/patch_sanitizer_defs.py
-
-      - name: 🌍 Patch ALGlobals
-        run: python3 scripts/patch_alglobals.py
-
-      - name: ✏️ Patch OSPri & M_PI
-        run: python3 scripts/patch_ospri.py
-
-      - name: 🎮 Patch Missing Graphics Macros
-        run: python3 scripts/fix_missing_macros.py
-
-      - name: 🔍 Validate Generated Header
+      - name: 🔍 Validate n64_types.h
         run: |
-          echo "Checking header integrity..."
           HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
-
           if [ ! -f "$HEADER" ]; then
-            echo "❌ Header not generated"
+            echo "❌ Header missing"
             exit 1
           fi
-
-          grep -Eq "typedef[[:space:]]+unsigned[[:space:]]+char[[:space:]]+u8;" "$HEADER" \
-            || { echo "❌ Missing or malformed u8 typedef"; exit 1; }
-
-          grep -q "ALGlobals" "$HEADER" \
-            || { echo "❌ Missing ALGlobals definition"; exit 1; }
-
+          grep -q "typedef struct BKA_Acmd_Neutralized" "$HEADER" || { echo "❌ Missing Acmd struct"; exit 1; }
+          grep -q "typedef struct BKA_Acmd_Neutralized \*(\*ALCmdHandler)" "$HEADER" || { echo "❌ Missing ALCmdHandler"; exit 1; }
+          grep -q "#define Acmd BKA_Acmd_Neutralized" "$HEADER" || { echo "❌ Missing Acmd macro"; exit 1; }
           echo "✅ Header validation passed"
-
-      # =========================
-      # PHASE 2: SANITIZATION
-      # =========================
-
-      - name: 🧹 Codebase Sanitization
-        run: python3 scripts/sanitize_codebase.py .
-
-      # =========================
-      # PHASE 3: DECOMPILER FIXES
-      # =========================
-
-      - name: 🩹 Auto-Fix N64 NULL Floats
-        run: python3 scripts/fix_null_floats.py
-
-      - name: 🏗️ Auto-Hoist Function Pointers
-        run: python3 scripts/fix_function_pointers.py
-
-      - name: 📐 Auto-Fix Struct Ordering
-        run: python3 scripts/fix_struct_ordering.py
-
-      - name: 🖊️ Final Include Guard Validation
-        run: python3 scripts/endif-fixer.py
 
       # =========================
       # BUILD PREP
       # =========================
-
       - name: 🐘 Ensure Gradle Wrapper Exists
         working-directory: Android
         run: |
@@ -117,25 +65,12 @@ jobs:
       # =========================
       # BUILD
       # =========================
-
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
           python3 scripts/generate_manifest.py
 
-      - name: Harmonize AArch64 Headers
-        working-directory: ${{ github.workspace }}
-        run: |
-          chmod +x scripts/harmonize_aarch64_headers.py
-          python3 scripts/harmonize_aarch64_headers.py --root .
-
-      - name: Harmonize_2
-        working-directory: ${{ github.workspace }}
-        run: |
-          chmod +x scripts/harmonizer_2.py
-          python3 scripts/harmonizer_2.py --root .
-
-      - name: 🐘 Build Full Game APK
+      - name: 🏗️ Build Full Game APK
         working-directory: Android
         run: |
           set -o pipefail
@@ -154,7 +89,6 @@ jobs:
       # =========================
       # DIAGNOSTICS
       # =========================
-
       - name: 🔍 Merge Header State into Build Log
         if: failure()
         run: |
@@ -179,4 +113,3 @@ jobs:
           path: |
             build.log
             build_failure_summary.txt
-            Android/app/src/main/cpp/ultra/n64_types.h
