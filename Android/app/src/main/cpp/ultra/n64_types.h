@@ -6,8 +6,16 @@
    Neutralize ALL conflicting SDK definitions BEFORE includes
    ============================================= */
 
-/* 1. Neutralize ultratypes.h */
-#define _ULTRA64_TYPES_H_ 1
+/* 1. Neutralize ultratypes.h
+      The file PR/ultratypes.h uses _ULTRATYPES_H_ as its own include guard
+      (not _ULTRA64_TYPES_H_). We define every known variant to be safe.
+      This also prevents the bare #include<ultratypes.h> in core2/vla.h
+      from re-opening the file via a different search-path hit. */
+#define _ULTRA64_TYPES_H_  1
+#define _ULTRATYPES_H_     1
+#define _PR_ULTRATYPES_H_  1
+#define ULTRATYPES_H       1
+
 #define _LANGUAGE_C 1
 #define _LANGUAGE_C_PLUS_PLUS 1
 #define F3DEX_GBI_2 1
