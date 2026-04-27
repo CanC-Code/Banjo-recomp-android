@@ -3,39 +3,53 @@
 
 /* =============================================
    PREPROCESSOR INTERCEPTION
-   Neutralize ALL conflicting SDK definitions BEFORE any includes.
-   This file is force-included via -include, so these defines fire
-   before every TU in the build.
+   Force-included via -include before every TU.
+   All blocking defines must fire before any #include below.
    ============================================= */
 
-/* 1. Block ultratypes.h via every known guard variant */
+/* --- Block ultratypes.h (all known guard variants) --- */
 #define _ULTRA64_TYPES_H_  1
 #define _ULTRATYPES_H_     1
 #define _PR_ULTRATYPES_H_  1
 #define ULTRATYPES_H       1
 
-/* 2. Block include/core2/vla.h pre-emptively.
-      Some source files explicitly #include <string.h> (the project-local
-      wrapper) which chains: string.h -> structs.h -> core2/vla.h ->
-      #include<ultratypes.h> which fails (file not found).
-      Defining vla.h's own include guard here stops it from opening at all. */
+/* --- Block core2/vla.h (all known guard variants) ---
+   Some TUs reach this via:
+     <cstring> -> include/string.h -> structs.h -> core2/vla.h
+   vla.h does a bare #include<ultratypes.h> with no guard on the include
+   itself, so we must prevent the file from opening at all. */
 #define _VLA_H_            1
 #define VLA_H              1
 #define _CORE2_VLA_H_      1
+#define CORE2_VLA_H        1
+#define _BKA_VLA_GUARD_    1
 
-/* 3. Language / GBI flags */
-#define _LANGUAGE_C 1
-#define _LANGUAGE_C_PLUS_PLUS 1
-#define F3DEX_GBI_2 1
+/* --- Block os_message.h and os_pi.h ---
+   We previously forward-declared OSMesg/OSMesgQueue/OSIoMesg/OSPiHandle
+   as structs, but the real SDK headers define:
+     os_message.h: typedef void* OSMesg  (NOT a struct)
+   This caused hard type-mismatch redefinitions. The cleanest fix is to
+   block os_message.h and os_pi.h entirely and provide our own compatible
+   minimal definitions below (matching the SDK's actual types). */
+#define _OS_MESSAGE_H_     1
+#define _OS_PI_H_          1
+#define _PR_OS_MESSAGE_H_  1
+#define _PR_OS_PI_H_       1
 
-/* 4. Neutralize PR/abi.h's Acmd */
+/* --- Language / GBI flags --- */
+#define _LANGUAGE_C            1
+#define _LANGUAGE_C_PLUS_PLUS  1
+#define F3DEX_GBI_2            1
+
+/* --- Block PR/abi.h's Acmd --- */
 #define Acmd BKA_Acmd_Compat
 
-/* 5. Intercept conflicting AL types — these redirect the SDK's definitions
-      to mangled names so our canonical definitions below win.
-      NOTE: do NOT use these mangled names in any typedef in this file;
-      the real structs aren't defined until the AL headers are pulled in
-      by individual source files. */
+/* --- Intercept conflicting AL types ---
+   These redirect the SDK's struct/typedef definitions to mangled names.
+   IMPORTANT: Only redirect types that are purely SDK-internal and never
+   used as a bare type name in project source files. Types used directly
+   in source (like ALGlobals) must NOT be redirected here — those TUs
+   need the real definition from the AL headers they include themselves. */
 #define ALLink_s             __orig_ALLink_s
 #define ALLink               __orig_ALLink
 #define ALVoice_s            __orig_ALVoice_s
@@ -44,81 +58,67 @@
 #define N_ALVoice            __orig_N_ALVoice
 #define ALSynth              __orig_ALSynth
 #define ALSyn                __orig_ALSyn
-#define ALGlobals            __orig_ALGlobals
-#define ALGlobals_s          __orig_ALGlobals_s
 #define ALEvent              __orig_ALEvent
 #define ALEvent_s            __orig_ALEvent_s
 #define ALEventListItem      __orig_ALEventListItem
 #define ALEventListItem_s    __orig_ALEventListItem_s
 #define ALVoiceState_s       __orig_ALVoiceState_s
 #define ALVoiceState         __orig_ALVoiceState
+/* ALGlobals and ALGlobals_s intentionally NOT redirected:
+   emulator/stubs.cpp uses ALGlobals* as a real type. */
 
 /* =============================================
    STANDARD N64 TYPES
-   Map modern stdint types to legacy N64 names.
    ============================================= */
 #include <stdint.h>
 #include <stddef.h>
 
-/* Unsigned */
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-/* Signed */
 typedef int8_t   s8;
 typedef int16_t  s16;
 typedef int32_t  s32;
 typedef int64_t  s64;
 
-/* Volatile Unsigned */
 typedef volatile uint8_t  vu8;
 typedef volatile uint16_t vu16;
 typedef volatile uint32_t vu32;
 typedef volatile uint64_t vu64;
 
-/* Volatile Signed */
 typedef volatile int8_t   vs8;
 typedef volatile int16_t  vs16;
 typedef volatile int32_t  vs32;
 typedef volatile int64_t  vs64;
 
-/* Floating point */
 typedef float  f32;
 typedef double f64;
 
 /* =============================================
-   OS PI / MESSAGE QUEUE FORWARD DECLARATIONS
-   Some emulator files (pi_hle.cpp etc.) use these types directly.
-   They are normally provided by ultra64.h / os_pi.h but those headers
-   are blocked/unavailable on Android NDK. Forward-declare the structs
-   and provide the typedefs so TUs that don't pull in ultra64.h still
-   compile.
-   ============================================= */
-#ifndef __OS_TYPES_DECLARED
-#define __OS_TYPES_DECLARED
+   OS TYPE DEFINITIONS
+   Provided here because os_message.h and os_pi.h are blocked above.
+   These MUST exactly match the SDK's own definitions to avoid
+   redefinition errors if the blocking guards ever miss a path.
 
-typedef struct OSMesg_s {
-    void *data;
-} OSMesg;
+   os_message.h:52: typedef void* OSMesg          (NOT a struct)
+   os_message.h:57: typedef struct OSMesgQueue_s   { s32 validCount; s32 first; s32 msgCount; void* msg; }
+   os_pi.h:80:      typedef struct OSPiHandle_s    { ... }
+   os_pi.h:116:     typedef struct OSIoMesg_s { ... } OSIoMesg
+   ============================================= */
+#ifndef __BKA_OS_TYPES_DEFINED
+#define __BKA_OS_TYPES_DEFINED
+
+/* OSMesg: the SDK defines this as void*, not a struct. Match exactly. */
+typedef void *OSMesg;
 
 typedef struct OSMesgQueue_s {
-    /* opaque on Android — real fields not needed by port stubs */
     s32      validCount;
     s32      first;
     s32      msgCount;
     OSMesg  *msg;
 } OSMesgQueue;
-
-typedef struct OSIoMesg_s {
-    /* PI DMA message */
-    OSMesgQueue *hdr;
-    void        *dramAddr;
-    u32          devAddr;
-    u32          size;
-    u32          piHandle;
-} OSIoMesg;
 
 typedef struct OSPiHandle_s {
     struct OSPiHandle_s *next;
@@ -130,11 +130,20 @@ typedef struct OSPiHandle_s {
     u8   domain;
     u32  baseAddress;
     u32  speed;
-    /* pad to match SDK struct size */
     u32  _pad[3];
 } OSPiHandle;
 
-#endif /* __OS_TYPES_DECLARED */
+/* OSIoMesg: the SDK struct tag is plain 'OSIoMesg' (anonymous tag),
+   not 'OSIoMesg_s'. Match to avoid tag-mismatch redefinition. */
+typedef struct {
+    OSMesgQueue *hdr;
+    void        *dramAddr;
+    u32          devAddr;
+    u32          size;
+    u32          piHandle;
+} OSIoMesg;
+
+#endif /* __BKA_OS_TYPES_DEFINED */
 
 /* =============================================
    BOOLEAN / STANDARD MACROS
@@ -153,11 +162,11 @@ typedef struct OSPiHandle_s {
 
 /* =============================================
    STANDARD LIBS
-   Do NOT include the project-local include/string.h here —
-   that wrapper chains into core2/vla.h -> ultratypes.h (missing).
-   The system <string.h> is already covered by <stdlib.h> below,
-   and vla.h is pre-empted by its guard defines above for any TU
-   that pulls it in directly.
+   Do NOT include the project-local include/string.h — it chains into
+   structs.h -> core2/vla.h -> #include<ultratypes.h> (missing file).
+   core2/vla.h is also pre-empted by its guard defines above for any TU
+   that pulls it in via C++ stdlib headers (cstring -> string.h -> ...).
+   System <string.h> is already provided by <stdlib.h> below.
    ============================================= */
 #ifndef BKA_SANITIZER_SUPPORT_DEFINED
 #define BKA_SANITIZER_SUPPORT_DEFINED
@@ -198,14 +207,5 @@ typedef s32 n64_bool;
 #ifndef G_QUAD
 #define G_QUAD 0xb5
 #endif
-
-/* =============================================
-   BANJO COMPAT LAYER
-   N_ALEventListItem typedef is intentionally removed from here.
-   ALEventListItem is macro-redirected to __orig_ALEventListItem above,
-   so typedef-ing it here produces "unknown type name '__orig_ALEventListItem'"
-   because the real struct definition hasn't been seen yet at forced-include
-   time. The typedef must live in a file that includes the AL headers first.
-   ============================================= */
 
 #endif /* BKA_ANDROID_N64_TYPES_H */
