@@ -44,7 +44,7 @@ typedef double             f64;
 """
 
     # =============================================
-    # FIX 2: Add Acmd struct override and aClearBuffer macro
+    # FIX 2: Add Acmd struct override and neutralize PR/abi.h
     # =============================================
     acmd_override = """
 /* =========================
@@ -52,11 +52,10 @@ typedef double             f64;
    ========================= */
 #ifndef BKA_ACMD_OVERRIDE
 #define BKA_ACMD_OVERRIDE
-/* Define Acmd as a struct to match PR/abi.h macros (aClearBuffer, etc.) */
-typedef struct {
-    u32 w0;
-    u32 w1;
-} Acmd;
+/* Neutralize PR/abi.h's Acmd typedef to avoid conflict */
+#define Acmd BKA_Acmd_Neutralized
+typedef struct { u32 w0; u32 w1; } Acmd;
+#undef Acmd
 
 /* Redefine aClearBuffer to work with Acmd as a struct */
 #undef aClearBuffer
@@ -103,7 +102,7 @@ typedef struct {
         body = m.group(2)
         close_tok = m.group(3)
 
-        # Use void* temporarily to avoid forward declaration issues
+        # Patch handler and setParam to use the correct types
         body = re.sub(r'void\s+\*handler\s*;', 'Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
         body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
 
@@ -160,7 +159,7 @@ typedef struct {
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V15_APPLIED --- */
+/* --- HARMONIZER_V16_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -212,7 +211,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V15 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V16 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
