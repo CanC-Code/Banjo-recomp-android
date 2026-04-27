@@ -13,11 +13,22 @@
 #define _PR_ULTRATYPES_H_  1
 #define ULTRATYPES_H       1
 
-/* --- Block core2/vla.h (all known guard variants) ---
-   Some TUs reach this via:
-     <cstring> -> include/string.h -> structs.h -> core2/vla.h
-   vla.h does a bare #include<ultratypes.h> with no guard on the include
-   itself, so we must prevent the file from opening at all. */
+/* --- Block include/structs.h ---
+   structs.h is the root of the vla.h problem. Its include chain is:
+     structs.h:4  -> include/2.0L/ultra64.h  (conflicts with our types)
+     structs.h:6  -> include/core2/vla.h     -> #include<ultratypes.h> MISSING
+   Every failing TU reaches vla.h via:
+     <source>.cpp -> include/string.h:4 -> structs.h:6 -> vla.h
+   or:
+     <source>.cpp -> <cstring>:60 -> include/string.h:4 -> structs.h:6 -> vla.h
+   By blocking structs.h here we stop both lines 4 and 6 firing.
+   Files that legitimately need structs.h content include it after the
+   AL/ultra64 headers are already resolved, so they won't be affected. */
+#define _STRUCTS_H_        1
+#define STRUCTS_H          1
+#define _BKA_STRUCTS_H_    1
+
+/* --- Block core2/vla.h directly as well (belt and braces) --- */
 #define _VLA_H_            1
 #define VLA_H              1
 #define _CORE2_VLA_H_      1
@@ -25,12 +36,9 @@
 #define _BKA_VLA_GUARD_    1
 
 /* --- Block os_message.h and os_pi.h ---
-   We previously forward-declared OSMesg/OSMesgQueue/OSIoMesg/OSPiHandle
-   as structs, but the real SDK headers define:
-     os_message.h: typedef void* OSMesg  (NOT a struct)
-   This caused hard type-mismatch redefinitions. The cleanest fix is to
-   block os_message.h and os_pi.h entirely and provide our own compatible
-   minimal definitions below (matching the SDK's actual types). */
+   We define these types ourselves below to match the SDK exactly.
+   Blocking prevents redefinition conflicts when ultra64.h is pulled in
+   by TUs that include it directly (not via structs.h). */
 #define _OS_MESSAGE_H_     1
 #define _OS_PI_H_          1
 #define _PR_OS_MESSAGE_H_  1
@@ -45,11 +53,10 @@
 #define Acmd BKA_Acmd_Compat
 
 /* --- Intercept conflicting AL types ---
-   These redirect the SDK's struct/typedef definitions to mangled names.
-   IMPORTANT: Only redirect types that are purely SDK-internal and never
-   used as a bare type name in project source files. Types used directly
-   in source (like ALGlobals) must NOT be redirected here — those TUs
-   need the real definition from the AL headers they include themselves. */
+   Redirect SDK AL struct/typedef definitions to mangled names so our
+   definitions or forward declarations below take precedence.
+   ALGlobals / ALGlobals_s are NOT redirected — stubs.cpp uses ALGlobals*
+   as a bare type and we provide a forward declaration below instead. */
 #define ALLink_s             __orig_ALLink_s
 #define ALLink               __orig_ALLink
 #define ALVoice_s            __orig_ALVoice_s
@@ -64,8 +71,6 @@
 #define ALEventListItem_s    __orig_ALEventListItem_s
 #define ALVoiceState_s       __orig_ALVoiceState_s
 #define ALVoiceState         __orig_ALVoiceState
-/* ALGlobals and ALGlobals_s intentionally NOT redirected:
-   emulator/stubs.cpp uses ALGlobals* as a real type. */
 
 /* =============================================
    STANDARD N64 TYPES
@@ -98,19 +103,12 @@ typedef double f64;
 
 /* =============================================
    OS TYPE DEFINITIONS
-   Provided here because os_message.h and os_pi.h are blocked above.
-   These MUST exactly match the SDK's own definitions to avoid
-   redefinition errors if the blocking guards ever miss a path.
-
-   os_message.h:52: typedef void* OSMesg          (NOT a struct)
-   os_message.h:57: typedef struct OSMesgQueue_s   { s32 validCount; s32 first; s32 msgCount; void* msg; }
-   os_pi.h:80:      typedef struct OSPiHandle_s    { ... }
-   os_pi.h:116:     typedef struct OSIoMesg_s { ... } OSIoMesg
+   os_message.h and os_pi.h are blocked above; provide matching types.
+   OSMesg: SDK defines as typedef void* — NOT a struct.
    ============================================= */
 #ifndef __BKA_OS_TYPES_DEFINED
 #define __BKA_OS_TYPES_DEFINED
 
-/* OSMesg: the SDK defines this as void*, not a struct. Match exactly. */
 typedef void *OSMesg;
 
 typedef struct OSMesgQueue_s {
@@ -133,8 +131,7 @@ typedef struct OSPiHandle_s {
     u32  _pad[3];
 } OSPiHandle;
 
-/* OSIoMesg: the SDK struct tag is plain 'OSIoMesg' (anonymous tag),
-   not 'OSIoMesg_s'. Match to avoid tag-mismatch redefinition. */
+/* OSIoMesg: SDK uses anonymous struct tag — match exactly. */
 typedef struct {
     OSMesgQueue *hdr;
     void        *dramAddr;
@@ -144,6 +141,19 @@ typedef struct {
 } OSIoMesg;
 
 #endif /* __BKA_OS_TYPES_DEFINED */
+
+/* =============================================
+   AL FORWARD DECLARATIONS
+   stubs.cpp uses ALGlobals* without including any AL headers.
+   Provide a forward-declared struct so the pointer type is valid.
+   The full definition is provided by the AL SDK headers in TUs
+   that include them directly.
+   ============================================= */
+#ifndef __BKA_AL_FWD_DEFINED
+#define __BKA_AL_FWD_DEFINED
+struct ALGlobals_s;
+typedef struct ALGlobals_s ALGlobals;
+#endif
 
 /* =============================================
    BOOLEAN / STANDARD MACROS
@@ -162,11 +172,9 @@ typedef struct {
 
 /* =============================================
    STANDARD LIBS
-   Do NOT include the project-local include/string.h — it chains into
-   structs.h -> core2/vla.h -> #include<ultratypes.h> (missing file).
-   core2/vla.h is also pre-empted by its guard defines above for any TU
-   that pulls it in via C++ stdlib headers (cstring -> string.h -> ...).
-   System <string.h> is already provided by <stdlib.h> below.
+   Do NOT include the project-local include/string.h.
+   structs.h is blocked above so the vla.h chain is severed globally.
+   System <string.h> is provided transitively by <stdlib.h>.
    ============================================= */
 #ifndef BKA_SANITIZER_SUPPORT_DEFINED
 #define BKA_SANITIZER_SUPPORT_DEFINED
