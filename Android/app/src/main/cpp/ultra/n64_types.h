@@ -4,7 +4,7 @@
 /* =============================================
    PREPROCESSOR INTERCEPTION
    Force-included via -include before every TU (both C and C++).
-   All blocking defines fire before any #include below.
+   Order matters: all blocking #defines must precede all #includes.
    ============================================= */
 
 /* --- Block ultratypes.h (all known guard variants) --- */
@@ -13,21 +13,9 @@
 #define _PR_ULTRATYPES_H_  1
 #define ULTRATYPES_H       1
 
-/* --- Block project-local include/string.h ---
-   The project's include/string.h declares a minimal, non-standard subset
-   of string functions (strcpy, strcat, strcpy only — no memcpy, memmove,
-   strcmp etc.). When C++ stdlib <cstring> tries "using ::memcpy" etc., the
-   symbols are missing because the real system string.h was never included.
-   Blocking the project-local string.h forces TUs that include <cstring>
-   or <string.h> to get the real NDK sysroot version instead.
-   Guard name matches what the project-local include/string.h uses. */
-#define _STRING_H_         1
-#define _BKA_STRING_H_     1
-
 /* --- Block include/structs.h ---
-   structs.h:4  -> include/2.0L/ultra64.h  (conflicts with our types)
-   structs.h:6  -> include/core2/vla.h     -> #include<ultratypes.h> MISSING
-   Blocking structs.h severs both problem include lines at their root. */
+   structs.h chains into ultra64.h and core2/vla.h -> ultratypes.h (missing).
+   Must be defined before any include that might reach structs.h. */
 #define _STRUCTS_H_        1
 #define STRUCTS_H          1
 #define _BKA_STRUCTS_H_    1
@@ -40,7 +28,7 @@
 #define _BKA_VLA_GUARD_    1
 
 /* --- Block os_message.h and os_pi.h ---
-   We define matching types ourselves below. */
+   We define these types ourselves below. */
 #define _OS_MESSAGE_H_     1
 #define _OS_PI_H_          1
 #define _PR_OS_MESSAGE_H_  1
@@ -48,9 +36,7 @@
 
 /* --- Language / GBI flags ---
    _LANGUAGE_C_PLUS_PLUS must only be defined for C++ TUs.
-   Defining it unconditionally causes `extern "C"` to appear inside
-   the PR/os_*.h headers, which is a syntax error in plain C TUs
-   (e.g. bigalligator.c compiled with clang, not clang++). --- */
+   Plain C files (e.g. bigalligator.c) get extern "C" syntax errors otherwise. */
 #define _LANGUAGE_C 1
 #ifdef __cplusplus
 #define _LANGUAGE_C_PLUS_PLUS 1
@@ -61,12 +47,12 @@
 #define Acmd BKA_Acmd_Compat
 
 /* --- Intercept conflicting AL types ---
-   These redirect the SDK's definitions to mangled names.
-   ALGlobals / ALGlobals_s are NOT redirected here.
-   The SDK defines ALGlobals with an anonymous struct tag (} ALGlobals;)
-   in libaudio.h. Our forward declaration `typedef struct ALGlobals_s`
-   conflicts with that anonymous tag. Instead we let the SDK define it
-   naturally — TUs that need sizeof(ALGlobals) include libaudio.h themselves. */
+   ALGlobals / ALGlobals_s intentionally NOT touched here.
+   - stubs.cpp: uses ALGlobals* (pointer only) — passes fine already.
+   - NativeBridge.cpp: uses sizeof(ALGlobals) — needs the full definition
+     from libaudio.h. Any forward-decl or typedef we add here conflicts
+     with libaudio.h's anonymous-struct typedef and breaks NativeBridge.
+     Solution: define nothing for ALGlobals; let libaudio.h own it fully. */
 #define ALLink_s             __orig_ALLink_s
 #define ALLink               __orig_ALLink
 #define ALVoice_s            __orig_ALVoice_s
@@ -83,11 +69,38 @@
 #define ALVoiceState         __orig_ALVoiceState
 
 /* =============================================
-   STANDARD N64 TYPES
+   PULL IN REAL SYSTEM HEADERS FIRST
+   This must happen before any project-local header can be opened.
+   The NDK sysroot string.h sets its own internal include guard.
+   After this include fires, if the project-local include/string.h
+   uses the same guard (_STRING_H_ or similar), it will be skipped.
+   We also define every known string.h guard variant as insurance.
    ============================================= */
 #include <stdint.h>
 #include <stddef.h>
 
+/* Force the real NDK string.h in now, before any project header can
+   shadow it. The NDK sysroot header sets _STRING_H_ internally.
+   After this, define all other known variants to block the project copy. */
+#include <string.h>
+
+/* All known include guard variants for project-local include/string.h.
+   The NDK's own string.h uses _STRING_H_; defining the others blocks
+   any project stub that might use a different guard name. */
+#define _STRING_H          1
+#define __STRING_H         1
+#define __STRING_H_        1
+#define _INC_STRING        1
+#define _STRING_INCLUDED   1
+#define INCLUDE_STRING_H   1
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+
+/* =============================================
+   STANDARD N64 TYPES
+   ============================================= */
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -114,7 +127,7 @@ typedef double f64;
 /* =============================================
    OS TYPE DEFINITIONS
    os_message.h and os_pi.h are blocked above.
-   OSMesg: SDK defines as typedef void* — NOT a struct. Match exactly.
+   OSMesg: SDK defines as typedef void* — NOT a struct.
    ============================================= */
 #ifndef __BKA_OS_TYPES_DEFINED
 #define __BKA_OS_TYPES_DEFINED
@@ -153,24 +166,6 @@ typedef struct {
 #endif /* __BKA_OS_TYPES_DEFINED */
 
 /* =============================================
-   AL FORWARD DECLARATIONS
-   stubs.cpp uses ALGlobals* as a pointer only (no sizeof).
-   NativeBridge.cpp uses sizeof(ALGlobals) so needs the full definition —
-   it includes libaudio.h itself which provides the real struct.
-   We do NOT typedef ALGlobals_s here because libaudio.h defines ALGlobals
-   with an anonymous struct tag, which would conflict.
-   Instead we provide just enough for pointer use in stubs.cpp via a
-   plain struct forward declaration that matches the anonymous tag pattern
-   by using the same name the SDK's typedef resolves to.
-   ============================================= */
-#ifndef __BKA_AL_FWD_DEFINED
-#define __BKA_AL_FWD_DEFINED
-/* Forward declaration only — sufficient for ALGlobals* pointer in stubs.cpp.
-   NativeBridge.cpp gets the full definition from libaudio.h via its own includes. */
-typedef struct ALGlobals ALGlobals;
-#endif
-
-/* =============================================
    BOOLEAN / STANDARD MACROS
    ============================================= */
 #ifndef TRUE
@@ -186,16 +181,10 @@ typedef struct ALGlobals ALGlobals;
 #endif
 
 /* =============================================
-   STANDARD LIBS
-   Use system headers only — project-local string.h and structs.h blocked above.
-   System <string.h> is provided by the NDK sysroot via <stdlib.h>.
+   n64_bool and n64_* convenience macros
    ============================================= */
 #ifndef BKA_SANITIZER_SUPPORT_DEFINED
 #define BKA_SANITIZER_SUPPORT_DEFINED
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
 
 typedef s32 n64_bool;
 
