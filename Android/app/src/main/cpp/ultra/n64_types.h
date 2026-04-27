@@ -27,7 +27,8 @@
 #define CORE2_VLA_H        1
 #define _BKA_VLA_GUARD_    1
 
-/* --- Block os_message.h and os_pi.h ---\n   We define these types ourselves below. */
+/* --- Block os_message.h and os_pi.h ---
+   We define these types ourselves below. */
 #define _OS_MESSAGE_H_     1
 #define _OS_PI_H_          1
 #define _PR_OS_MESSAGE_H_  1
@@ -67,14 +68,6 @@
 #define ALVoiceState_s       __orig_ALVoiceState_s
 #define ALVoiceState         __orig_ALVoiceState
 
-/* =============================================
-   PULL IN REAL SYSTEM HEADERS FIRST
-   This must happen before any project-local header can be opened.
-   The NDK sysroot string.h sets its own internal include guard.
-   After this include fires, if the project-local include/string.h
-   uses the same guard (_STRING_H_ or similar), it will be skipped.
-   We also define every known string.h guard variant as insurance.
-   ============================================= */
 #include <stdint.h>
 #include <stddef.h>
 
@@ -107,20 +100,47 @@ typedef volatile int64_t  vs64;
 typedef float  f32;
 typedef double f64;
 
-/* Force the real NDK string.h in now, before any project header can
-   shadow it. The NDK sysroot header sets _STRING_H_ internally.
-   After this, define all other known variants to block the project copy. */
-#include <string.h>
+/* =============================================
+   C++ <cstring> SHADOWING FIX
+   The project has an `include/string.h` which shadows the NDK `<string.h>`.
+   When C++ standard library includes <cstring>, it expects all standard 
+   C string functions to be declared so it can import them to std::. 
+   Because the project's string.h lacks functions like strncat, <cstring> fails.
+   We forward declare them here in extern "C" to satisfy libc++.
+   ============================================= */
+#ifdef __cplusplus
+extern "C" {
+    void* memchr(const void*, int, size_t);
+    int memcmp(const void*, const void*, size_t);
+    void* memcpy(void*, const void*, size_t);
+    void* memmove(void*, const void*, size_t);
+    void* memset(void*, int, size_t);
+    char* strcat(char*, const char*);
+    char* strchr(const char*, int);
+    int strcmp(const char*, const char*);
+    int strcoll(const char*, const char*);
+    char* strcpy(char*, const char*);
+    size_t strcspn(const char*, const char*);
+    char* strerror(int);
+    size_t strlen(const char*);
+    char* strncat(char*, const char*, size_t);
+    int strncmp(const char*, const char*, size_t);
+    char* strncpy(char*, const char*, size_t);
+    char* strpbrk(const char*, const char*);
+    char* strrchr(const char*, int);
+    size_t strspn(const char*, const char*);
+    char* strstr(const char*, const char*);
+    char* strtok(char*, const char*);
+    size_t strxfrm(char*, const char*, size_t);
 
-/* All known include guard variants for project-local include/string.h.
-   The NDK's own string.h uses _STRING_H_; defining the others blocks
-   any project stub that might use a different guard name. */
-#define _STRING_H          1
-#define __STRING_H         1
-#define __STRING_H_        1
-#define _INC_STRING        1
-#define _STRING_INCLUDED   1
-#define INCLUDE_STRING_H   1
+    /* cwchar functions sometimes needed by string headers */
+    wchar_t* wmemchr(const wchar_t*, wchar_t, size_t);
+    int wmemcmp(const wchar_t*, const wchar_t*, size_t);
+    wchar_t* wmemcpy(wchar_t*, const wchar_t*, size_t);
+    wchar_t* wmemmove(wchar_t*, const wchar_t*, size_t);
+    wchar_t* wmemset(wchar_t*, wchar_t, size_t);
+}
+#endif
 
 #include <stdlib.h>
 #include <stdio.h>
