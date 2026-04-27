@@ -24,29 +24,83 @@ def run_phase2_harmonizer(workspace_root):
         content = content.split("/* --- HARMONIZER_")[0]
 
     # =============================================
-    # FIX 1: Add Acmd struct override at the TOP of the file
+    # FIX 1: Move fundamental types to the TOP of the file
     # =============================================
-    acmd_override = """#ifndef BKA_ACMD_OVERRIDE
+    # Extract the fundamental types section
+    fundamental_types_pattern = (
+        r'/\* =========================\s*\n'
+        r'\s*FUNDAMENTAL TYPES\s*\n'
+        r'\s*=========================\s*\n'
+        r'.*?'
+        r'/\* =========================\s*\n'
+        r'\s*PREPROCESSOR SDK INTERCEPTION\s*\n'
+        r'\s*=========================\s*\n'
+    )
+    fundamental_types_match = re.search(fundamental_types_pattern, content, re.DOTALL)
+    if fundamental_types_match:
+        fundamental_types = fundamental_types_match.group(0)
+        content = content.replace(fundamental_types, "")
+        print("[+] Extracted fundamental types section.")
+    else:
+        print("[!] WARNING: Could not find fundamental types section.")
+        fundamental_types = """
+/* =========================
+   FUNDAMENTAL TYPES
+   ========================= */
+typedef unsigned char      u8;
+typedef signed char        s8;
+typedef unsigned short     u16;
+typedef signed short       s16;
+typedef unsigned int       u32;
+typedef signed int         s32;
+typedef unsigned long long u64;
+typedef signed long long   s64;
+typedef float              f32;
+typedef double             f64;
+
+"""
+
+    # =============================================
+    # FIX 2: Add Acmd struct override AFTER fundamental types
+    # =============================================
+    acmd_override = """
+/* =========================
+   ACMD OVERRIDE (for PR/abi.h compatibility)
+   ========================= */
+#ifndef BKA_ACMD_OVERRIDE
 #define BKA_ACMD_OVERRIDE
-/* Override Acmd as a struct to match PR/abi.h macros (aClearBuffer, etc.) */
+/* Neutralize PR/abi.h's Acmd typedef to avoid conflict */
+#define Acmd BKA_Acmd_Dummy
 typedef struct {
     u32 w0;
     u32 w1;
 } Acmd;
+#undef Acmd
 #endif
 
 """
-    # Insert the override at the very beginning (after the header guard)
-    header_guard_pattern = r'(#ifndef BKA_ANDROID_N64_TYPES_H\s*\n#define BKA_ANDROID_N64_TYPES_H\s*\n)'
-    if re.search(header_guard_pattern, content):
-        content = re.sub(header_guard_pattern, r'\1' + acmd_override, content)
-        print("[+] Added `Acmd` struct override at the top of the file.")
-    else:
-        print("[!] WARNING: Could not find header guard — prepending `Acmd` override.")
-        content = acmd_override + content
 
     # =============================================
-    # FIX 2: Patch ALFilter to use ALCmdHandler/ALSetParam
+    # Rebuild the file with the correct order:
+    # 1. Header guard
+    # 2. Fundamental types
+    # 3. Acmd override
+    # 4. Rest of the file
+    # =============================================
+    header_guard_pattern = r'(#ifndef BKA_ANDROID_N64_TYPES_H\s*\n#define BKA_ANDROID_N64_TYPES_H\s*\n)'
+    if re.search(header_guard_pattern, content):
+        header_guard = re.search(header_guard_pattern, content).group(0)
+        content = content.replace(header_guard, "")
+        new_content = header_guard + fundamental_types + acmd_override + content
+        print("[+] Reordered file: header guard -> fundamental types -> Acmd override -> rest.")
+    else:
+        print("[!] WARNING: Could not find header guard — prepending all fixes.")
+        new_content = fundamental_types + acmd_override + content
+
+    content = new_content
+
+    # =============================================
+    # FIX 3: Patch ALFilter to use ALCmdHandler/ALSetParam
     # =============================================
     def patch_alfilter(src):
         pattern = (
@@ -71,7 +125,7 @@ typedef struct {
     content = patch_alfilter(content)
 
     # =============================================
-    # FIX 3: Remove `typedef ALPVoice N_PVoice` (conflict)
+    # FIX 4: Remove `typedef ALPVoice N_PVoice` (conflict)
     # =============================================
     before = len(content)
     content = re.sub(r'[ \t]*typedef\s+ALPVoice\s+N_PVoice\s*;\s*\n', '', content)
@@ -81,7 +135,7 @@ typedef struct {
         print("[!] WARNING: `typedef ALPVoice N_PVoice` not found — may already be absent.")
 
     # =============================================
-    # FIX 4: Patch ALPVoice_s to add `offset` field
+    # FIX 5: Patch ALPVoice_s to add `offset` field
     # =============================================
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
@@ -119,7 +173,7 @@ typedef struct {
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V13_APPLIED --- */
+/* --- HARMONIZER_V14_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -193,7 +247,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V13 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V14 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
