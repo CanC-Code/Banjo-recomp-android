@@ -24,22 +24,24 @@ def run_phase2_harmonizer(workspace_root):
         content = content.split("/* --- HARMONIZER_")[0]
 
     # =============================================
-    # FIX 1: Remove duplicate fundamental types
+    # FIX 1: Move fundamental types to the TOP of the file
     # =============================================
-    # Find and remove the second occurrence of FUNDAMENTAL TYPES
-    fundamental_types_pattern = (
-        r'/\* =========================\s*\n'
-        r'\s*FUNDAMENTAL TYPES\s*\n'
-        r'\s*=========================\s*\n'
-        r'.*?'
-        r'/\* =========================\s*\n'
-    )
-    matches = list(re.finditer(fundamental_types_pattern, content, re.DOTALL))
-    if len(matches) > 1:
-        # Keep the first occurrence, remove the rest
-        first_match = matches[0]
-        content = content[:first_match.end()] + content[matches[-1].end():]
-        print(f"[+] Removed {len(matches) - 1} duplicate FUNDAMENTAL TYPES sections.")
+    fundamental_types = """
+/* =========================
+   FUNDAMENTAL TYPES
+   ========================= */
+typedef unsigned char      u8;
+typedef signed char        s8;
+typedef unsigned short     u16;
+typedef signed short       s16;
+typedef unsigned int       u32;
+typedef signed int         s32;
+typedef unsigned long long u64;
+typedef signed long long   s64;
+typedef float              f32;
+typedef double             f64;
+
+"""
 
     # =============================================
     # FIX 2: Add Acmd struct override and neutralize PR/abi.h
@@ -51,10 +53,13 @@ def run_phase2_harmonizer(workspace_root):
 #ifndef BKA_ACMD_OVERRIDE
 #define BKA_ACMD_OVERRIDE
 
-/* Define Acmd as a struct FIRST */
-typedef struct { u32 w0; u32 w1; } Acmd;
+/* Define Acmd as a named struct FIRST */
+typedef struct Acmd {
+    u32 w0;
+    u32 w1;
+} Acmd;
 
-/* Neutralize PR/abi.h's typedef by defining Acmd as a macro */
+/* Neutralize PR/abi.h's typedef to avoid conflict */
 #define Acmd BKA_Acmd_Neutralized
 
 /* Redefine aClearBuffer to work with Acmd as a struct */
@@ -65,8 +70,6 @@ typedef struct { u32 w0; u32 w1; } Acmd;
 
 /* Restore Acmd to the struct definition */
 #undef Acmd
-#define Acmd struct { u32 w0; u32 w1; }
-
 #endif
 
 """
@@ -74,7 +77,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
     # =============================================
     # Rebuild the file with the correct order:
     # 1. Header guard
-    # 2. Fundamental types (already present)
+    # 2. Fundamental types
     # 3. Acmd override and macro neutralization
     # 4. Rest of the file
     # =============================================
@@ -82,27 +85,16 @@ typedef struct { u32 w0; u32 w1; } Acmd;
     if re.search(header_guard_pattern, content):
         header_guard = re.search(header_guard_pattern, content).group(0)
         content = content.replace(header_guard, "")
-        new_content = header_guard + acmd_override + content
-        print("[+] Reordered file: header guard -> Acmd override -> rest.")
+        new_content = header_guard + fundamental_types + acmd_override + content
+        print("[+] Reordered file: header guard -> fundamental types -> Acmd override -> rest.")
     else:
         print("[!] WARNING: Could not find header guard — prepending all fixes.")
-        new_content = acmd_override + content
+        new_content = fundamental_types + acmd_override + content
 
     content = new_content
 
     # =============================================
-    # FIX 3: Add include guard for PR/abi.h
-    # =============================================
-    # Replace #include "PR/libaudio.h" with a guarded version
-    content = re.sub(
-        r'#include\s+"PR/libaudio\.h"',
-        '#ifndef PR_ABI_H_INCLUDED\n#define PR_ABI_H_INCLUDED\n#include "PR/libaudio.h"\n#endif',
-        content
-    )
-    print("[+] Added include guard for PR/libaudio.h.")
-
-    # =============================================
-    # FIX 4: Patch ALFilter to use ALCmdHandler/ALSetParam
+    # FIX 3: Patch ALFilter to use ALCmdHandler/ALSetParam
     # =============================================
     def patch_alfilter(src):
         pattern = (
@@ -119,7 +111,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
         close_tok = m.group(3)
 
         # Patch handler and setParam to use the correct types
-        body = re.sub(r'void\s+\*handler\s*;', 'Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
+        body = re.sub(r'void\s+\*handler\s*;', 'struct Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
         body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
 
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
@@ -127,7 +119,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
     content = patch_alfilter(content)
 
     # =============================================
-    # FIX 5: Remove `typedef ALPVoice N_PVoice` (conflict)
+    # FIX 4: Remove `typedef ALPVoice N_PVoice` (conflict)
     # =============================================
     before = len(content)
     content = re.sub(r'[ \t]*typedef\s+ALPVoice\s+N_PVoice\s*;\s*\n', '', content)
@@ -137,7 +129,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
         print("[!] WARNING: `typedef ALPVoice N_PVoice` not found — may already be absent.")
 
     # =============================================
-    # FIX 6: Patch ALPVoice_s to add `offset` field
+    # FIX 5: Patch ALPVoice_s to add `offset` field
     # =============================================
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
@@ -169,13 +161,13 @@ typedef struct { u32 w0; u32 w1; } Acmd;
     # Place this RIGHT AFTER the includes and BEFORE any structs
     # =============================================
     # Find the end of the includes section (after #include "PR/libaudio.h")
-    include_end_pattern = r'(#endif\s*\n)'  # Matches the end of the PR/libaudio.h include guard
+    include_end_pattern = r'(#include\s+"PR/libaudio\.h"\s*\n)'
     m = re.search(include_end_pattern, content)
     if m:
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V17_APPLIED --- */
+/* --- HARMONIZER_V18_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -210,7 +202,7 @@ typedef ALParam ALStartParamAlt;
  */
 #ifndef BKA_ALHANDLERS_DEFINED
 #define BKA_ALHANDLERS_DEFINED
-typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
+typedef struct Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
 typedef s32  (*ALSetParam)(void *, s32, void *);
 #endif /* BKA_ALHANDLERS_DEFINED */
 
@@ -220,13 +212,13 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
         content = content[:include_end_pos] + injection + content[include_end_pos:]
         print("[+] Injected harmonizer types after includes.")
     else:
-        print("[!] WARNING: Could not find end of includes — injecting at top of file.")
+        print("[!] WARNING: Could not find #include \"PR/libaudio.h\" — injecting at top of file.")
         content = injection + "\n" + content
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V17 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V18 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
