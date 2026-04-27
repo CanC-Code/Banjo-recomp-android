@@ -45,7 +45,7 @@ typedef double             f64;
 
     # =============================================
     # FIX 2: Add Acmd struct override and neutralize PR/abi.h
-    # =========================
+    # =============================================
     acmd_override = """
 /* =========================
    ACMD OVERRIDE (for PR/abi.h compatibility)
@@ -57,7 +57,10 @@ typedef double             f64;
 #define Acmd BKA_Acmd_Neutralized
 
 /* Define Acmd as a struct */
-typedef struct { u32 w0; u32 w1; } Acmd;
+typedef struct Acmd {
+    u32 w0;
+    u32 w1;
+} Acmd;
 
 /* Undefine the macro to restore Acmd as the struct */
 #undef Acmd
@@ -102,7 +105,23 @@ typedef struct { u32 w0; u32 w1; } Acmd;
     print("[+] Added include guard for PR/libaudio.h.")
 
     # =============================================
-    # FIX 4: Patch ALFilter to use ALCmdHandler/ALSetParam
+    # FIX 4: Remove any existing ALCmdHandler/ALSetParam typedefs
+    # (they will be re-injected in the correct location)
+    # =============================================
+    content = re.sub(
+        r'typedef\s+Acmd\s*\*\s*\(\s*\*ALCmdHandler\s*\)\s*\([^;]+\);',
+        '',
+        content
+    )
+    content = re.sub(
+        r'typedef\s+s32\s+\(\s*\*ALSetParam\s*\)\s*\([^;]+\);',
+        '',
+        content
+    )
+    print("[+] Removed existing ALCmdHandler/ALSetParam typedefs.")
+
+    # =============================================
+    # FIX 5: Patch ALFilter to use ALCmdHandler/ALSetParam
     # =============================================
     def patch_alfilter(src):
         pattern = (
@@ -119,7 +138,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
         close_tok = m.group(3)
 
         # Patch handler and setParam to use the correct types
-        body = re.sub(r'void\s+\*handler\s*;', 'Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
+        body = re.sub(r'void\s+\*handler\s*;', 'struct Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
         body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
 
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
@@ -127,7 +146,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
     content = patch_alfilter(content)
 
     # =============================================
-    # FIX 5: Remove `typedef ALPVoice N_PVoice` (conflict)
+    # FIX 6: Remove `typedef ALPVoice N_PVoice` (conflict)
     # =============================================
     before = len(content)
     content = re.sub(r'[ \t]*typedef\s+ALPVoice\s+N_PVoice\s*;\s*\n', '', content)
@@ -137,7 +156,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
         print("[!] WARNING: `typedef ALPVoice N_PVoice` not found — may already be absent.")
 
     # =============================================
-    # FIX 6: Patch ALPVoice_s to add `offset` field
+    # FIX 7: Patch ALPVoice_s to add `offset` field
     # =============================================
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
@@ -175,7 +194,7 @@ typedef struct { u32 w0; u32 w1; } Acmd;
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V19_APPLIED --- */
+/* --- HARMONIZER_V20_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -210,7 +229,7 @@ typedef ALParam ALStartParamAlt;
  */
 #ifndef BKA_ALHANDLERS_DEFINED
 #define BKA_ALHANDLERS_DEFINED
-typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
+typedef struct Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
 typedef s32  (*ALSetParam)(void *, s32, void *);
 #endif /* BKA_ALHANDLERS_DEFINED */
 
@@ -226,7 +245,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V19 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V20 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
