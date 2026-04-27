@@ -6,11 +6,14 @@
    Neutralize ALL conflicting SDK definitions BEFORE includes
    ============================================= */
 
-/* 1. Neutralize ultratypes.h
-      The file PR/ultratypes.h uses _ULTRATYPES_H_ as its own include guard
-      (not _ULTRA64_TYPES_H_). We define every known variant to be safe.
-      This also prevents the bare #include<ultratypes.h> in core2/vla.h
-      from re-opening the file via a different search-path hit. */
+/* 1. Neutralize ultratypes.h - all known guard variants.
+      NOTE: These defines prevent the *contents* of ultratypes.h from
+      being processed if found, but do NOT prevent the #include itself
+      from failing if the file is missing. The real fix is to not pull
+      in include/string.h (project-local) which chains:
+        include/string.h -> include/structs.h -> include/core2/vla.h
+        -> #include<ultratypes.h>   <-- file not found
+      The standard <string.h> is already covered by <stdlib.h> below. */
 #define _ULTRA64_TYPES_H_  1
 #define _ULTRATYPES_H_     1
 #define _PR_ULTRATYPES_H_  1
@@ -91,12 +94,15 @@ typedef double f64;
 
 /* =============================================
    SANITIZER & STANDARD LIBS
+   Do NOT include the project-local include/string.h here.
+   That file chains: structs.h -> core2/vla.h -> #include<ultratypes.h>
+   which fails because ultratypes.h is not on any system include path.
+   The system <string.h> is already transitively included via <stdlib.h>.
    ============================================= */
 #ifndef BKA_SANITIZER_SUPPORT_DEFINED
 #define BKA_SANITIZER_SUPPORT_DEFINED
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 #include <math.h>
 
 typedef s32 n64_bool;
