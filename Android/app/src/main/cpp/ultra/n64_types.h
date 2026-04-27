@@ -2,45 +2,6 @@
 #define BKA_ANDROID_N64_TYPES_H
 
 /* =========================
-   FUNDAMENTAL TYPES
-   ========================= */
-typedef unsigned char      u8;
-typedef signed char        s8;
-typedef unsigned short     u16;
-typedef signed short       s16;
-typedef unsigned int       u32;
-typedef signed int         s32;
-typedef unsigned long long u64;
-typedef signed long long   s64;
-typedef float              f32;
-typedef double             f64;
-
-/* =========================
-   ACMD OVERRIDE (for PR/abi.h compatibility)
-   ========================= */
-#ifndef BKA_ACMD_OVERRIDE
-#define BKA_ACMD_OVERRIDE
-
-/* Neutralize PR/abi.h's typedef by defining Acmd as a macro */
-#define Acmd BKA_Acmd_Neutralized
-
-/* Define Acmd as a struct */
-typedef struct BKA_Acmd_Neutralized {
-    u32 w0;
-    u32 w1;
-} BKA_Acmd_Neutralized;
-
-/* Redefine aClearBuffer to work with Acmd as a struct */
-#undef aClearBuffer
-#define aClearBuffer(_a, _d, _c) \
-    (_a)->w0 = _SHIFTL(A_CLEARBUFF, 24, 8) | _SHIFTL((_d), 0, 24), \
-    (_a)->w1 = (unsigned int)(_c)
-
-/* Define Acmd as the struct for our code */
-#define Acmd BKA_Acmd_Neutralized
-#endif
-
-/* =========================
    PREPROCESSOR SDK INTERCEPTION
    ========================= */
 #define ALLink_s             __orig_ALLink_s
@@ -63,7 +24,7 @@ typedef struct BKA_Acmd_Neutralized {
 #define ALCSeqMarker         __orig_ALCSeqMarker
 #define ADPCM_STATE          __orig_ADPCM_STATE
 
-/* Intercept macro enums that sister scripts inject as #defines */
+/* Intercept macro enums */
 #define AL_SEQP_LOOP_EVT     __orig_AL_SEQP_LOOP_EVT
 #define AL_MIDI_FX_CTRL_0    __orig_AL_MIDI_FX_CTRL_0
 #define AL_MIDI_FX_CTRL_1    __orig_AL_MIDI_FX_CTRL_1
@@ -77,13 +38,35 @@ typedef struct BKA_Acmd_Neutralized {
 #define F3DEX_GBI_2 1
 
 /* Force include the N64 SDK headers NOW. */
-#include "PR/ultratypes.h"
+#include "PR/ultratypes.h"  // Provides u8, s8, u16, s16, u32, s32, u64, s64, f32, f64
 #include "PR/os.h"
 #include "PR/gbi.h"
 #include "PR/gu.h"
 #ifndef PR_ABI_H_INCLUDED
 #define PR_ABI_H_INCLUDED
-#include "PR/libaudio.h"
+#include "PR/libaudio.h"    // Provides Acmd (as a union), ALGlobals, etc.
+#endif
+
+/* =========================
+   ACMD COMPATIBILITY LAYER
+   ========================= */
+#ifndef BKA_ACMD_OVERRIDE
+#define BKA_ACMD_OVERRIDE
+
+/* PR/abi.h defines Acmd as a union. We'll use the same definition. */
+typedef union {
+    u32 w0;
+    u32 w1;
+} BKA_Acmd_Neutralized;
+
+/* Define Acmd as the union for our code */
+#define Acmd BKA_Acmd_Neutralized
+
+/* Redefine aClearBuffer to work with Acmd as a union */
+#undef aClearBuffer
+#define aClearBuffer(_a, _d, _c) \
+    (_a)->w0 = _SHIFTL(A_CLEARBUFF, 24, 8) | _SHIFTL((_d), 0, 24), \
+    (_a)->w1 = (unsigned int)(_c)
 #endif
 
 /* =========================
@@ -172,7 +155,7 @@ typedef ALVoiceState N_ALVoiceState;
 
 typedef struct ALFilter_s {
     struct ALFilter_s *source;
-    struct BKA_Acmd_Neutralized *(*handler)(void *, s16 *, s32, s32, void *);
+    Acmd *(*handler)(void *, s16 *, s32, s32, void *);
     s32 (*setParam)(void *, s32, void *);
     s32 inp;
     s32 outp;
@@ -204,7 +187,7 @@ typedef ALParam ALStartParam;
 typedef ALParam ALStartParamAlt;
 
 /* ALCmdHandler and ALSetParam typedefs */
-typedef struct BKA_Acmd_Neutralized *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);
+typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 
 #endif /* BKA_HARMONIZER_INJECT */
@@ -224,15 +207,6 @@ typedef struct ALGlobals_s {
     ALSynth drvr;
     u8 pad[2048];
 } ALGlobals;
-#endif
-
-/* Forward declare alGlobals to match PR/libaudio.h */
-#ifdef __cplusplus
-extern "C" {
-#endif
-extern ALGlobals *alGlobals;
-#ifdef __cplusplus
-}
 #endif
 
 /* =========================
@@ -281,5 +255,33 @@ typedef s32 n64_bool;
 #ifndef G_QUAD
 #define G_QUAD 0xb5
 #endif
+
+/* =========================
+   BKA BANJO COMPAT LAYER
+   ========================= */
+#ifndef BKA_BANJO_LAYER
+#define BKA_BANJO_LAYER
+
+/* Safe typedef aliases */
+typedef ALEventListItem N_ALEventListItem;
+
+/* SAFE forward-only prototypes (no signature conflicts) */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern Acmd *n_alAdpcmPull(void *, s16 *, s32, Acmd *);
+extern Acmd *n_alResamplePull(void *, s16 *, Acmd *);
+extern Acmd *n_alEnvmixerPull(void *, s32, Acmd *);
+extern Acmd *n_alSavePull(s32, Acmd *);
+extern Acmd *n_alAuxBusPull(void);
+extern Acmd *n_alFxPull(void);
+extern Acmd *n_alMainBusPull(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BKA_BANJO_LAYER */
 
 #endif /* BKA_ANDROID_N64_TYPES_H */
