@@ -22,10 +22,37 @@ jobs:
       - name: 🛠️ Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      # =============================================
+      # GRADLE SETUP (critical fixes)
+      # =============================================
       - name: 🐘 Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.2
+
+      - name: 🐾 Generate Gradle Wrapper if Missing
+        working-directory: Android
+        run: |
+          if [ ! -f "gradlew" ] || [ ! -x "gradlew" ]; then
+            echo "⚠️ Gradle wrapper missing or not executable - generating..."
+            gradle wrapper --gradle-version 8.2
+            chmod +x gradlew
+          else
+            echo "✅ Gradle wrapper exists and is executable"
+          fi
+
+      - name: Verify Gradle Wrapper
+        working-directory: Android
+        run: |
+          if [ ! -f "gradlew" ]; then
+            echo "❌ FAILED: Gradle wrapper still missing after generation"
+            exit 1
+          fi
+          if [ ! -x "gradlew" ]; then
+            echo "❌ FAILED: Gradle wrapper is not executable"
+            exit 1
+          fi
+          echo "✅ Gradle wrapper verified"
 
       - name: 🖼️ Generate Android Icons
         run: |
@@ -40,14 +67,17 @@ jobs:
           pip3 install pyyaml
           python3 scripts/generate_manifest.py
 
-      - name: 🏗️ Build with Full Diagnostics
+      # =============================================
+      # BUILD
+      # =============================================
+      - name: 🏗️ Build Full Game APK
         working-directory: Android
         run: |
           set -o pipefail
           ./gradlew clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
-            --debug \
-            --stacktrace 2>&1 | tee ../build_full.log || true
+            --info \
+            --stacktrace 2>&1 | tee ../build.log || true
 
       - name: 📦 Upload APK
         if: success()
@@ -56,12 +86,11 @@ jobs:
           name: bka-apk
           path: Android/app/build/outputs/apk/debug/*.apk
 
-      - name: 🚑 Upload Complete Build Logs
+      - name: 🚑 Upload Build Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-build-diagnostics
+          name: bka-build-logs
           path: |
-            build_full.log
+            build.log
             Android/app/src/main/cpp/ultra/n64_types.h
-            Android/app/build/reports/
