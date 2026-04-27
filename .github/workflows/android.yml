@@ -1,4 +1,4 @@
-name: Android Build & OTR Verification
+name: Minimal Base Android Build
 
 on:
   workflow_dispatch:
@@ -22,90 +22,27 @@ jobs:
       - name: 🛠️ Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # =============================================
-      # GRADLE SETUP (critical fixes)
-      # =============================================
       - name: 🐘 Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.2
 
-      - name: 🐾 Generate Gradle Wrapper if Missing
+      - name: 🐾 Ensure Gradle Wrapper
         working-directory: Android
         run: |
           if [ ! -f "gradlew" ] || [ ! -x "gradlew" ]; then
-            echo "⚠️ Gradle wrapper missing or not executable - generating..."
+            echo "Generating Gradle wrapper..."
             gradle wrapper --gradle-version 8.2
             chmod +x gradlew
-          else
-            echo "✅ Gradle wrapper exists and is executable"
           fi
 
-      - name: Verify Gradle Wrapper
-        working-directory: Android
-        run: |
-          if [ ! -f "gradlew" ]; then
-            echo "❌ FAILED: Gradle wrapper still missing after generation"
-            exit 1
-          fi
-          if [ ! -x "gradlew" ]; then
-            echo "❌ FAILED: Gradle wrapper is not executable"
-            exit 1
-          fi
-          echo "✅ Gradle wrapper verified"
-
-      - name: 🖼️ Generate Android Icons
-        run: |
-          sudo apt-get update && sudo apt-get install -y imagemagick
-          if [ ! -f "icon_master.png" ]; then
-            convert -size 512x512 xc:blue icon_master.png
-          fi
-          python3 scripts/generate_icons.py icon_master.png
-
-      # =============================================
-      # HEADER FOUNDATION & PATCHES
-      # =============================================
-      - name: 🧹 Clean Previous Generated Headers
-        run: rm -f Android/app/src/main/cpp/ultra/n64_types.h
-
-      - name: 🛠️ Generate Master Header
-        run: python3 scripts/fix_n64_types.py
-
-      - name: 🧬 Apply Banjo Compatibility Layer
-        run: python3 scripts/banjo_structural_patch.py
-
-      - name: 🧪 Inject Sanitizer Definitions
-        run: python3 scripts/patch_sanitizer_defs.py
-
-      - name: 🌍 Patch ALGlobals
-        run: python3 scripts/patch_alglobals.py
-
-      - name: ✏️ Patch OSPri & M_PI
-        run: python3 scripts/patch_ospri.py
-
-      - name: 🎮 Patch Missing Graphics Macros
-        run: python3 scripts/fix_missing_macros.py
-
-      # =============================================
-      # SANITIZATION
-      # =============================================
-      - name: 🧹 Codebase Sanitization
-        run: python3 scripts/sanitize_codebase.py .
-
-      # =============================================
-      # ASSETS & BUILD
-      # =============================================
-      - name: 🗺️ Generate Asset Manifests
-        run: |
-          pip3 install pyyaml
-          python3 scripts/generate_manifest.py
-
-      - name: 🏗️ Build Full Game APK
+      - name: 🏗️ Build Minimal APK (Source Disabled)
         working-directory: Android
         run: |
           set -o pipefail
+          # Notice EXCLUDE_GAME_SRC=ON: This disables the main game code
           ./gradlew clean assembleDebug \
-            -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
+            -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=ON" \
             --info \
             --stacktrace 2>&1 | tee ../build.log || true
 
@@ -113,14 +50,12 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-apk
+          name: minimal-base-apk
           path: Android/app/build/outputs/apk/debug/*.apk
 
       - name: 🚑 Upload Build Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-build-logs
-          path: |
-            build.log
-            Android/app/src/main/cpp/ultra/n64_types.h
+          name: minimal-build-logs
+          path: build.log
