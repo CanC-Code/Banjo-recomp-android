@@ -41,9 +41,10 @@ def run_phase2_harmonizer(workspace_root):
     # FIX 2: Patch ALFilter to use ALCmdHandler/ALSetParam
     # =============================================
     def patch_alfilter(src):
+        # Match the entire ALFilter_s struct definition
         pattern = (
-            r'(typedef\s+struct\s+ALFilter_s\s*\{}'
-            r'(.*?)'
+            r'(typedef\s+struct\s+ALFilter_s\s*\{)'
+            r'([^}]*?)'  # Non-greedy match for the struct body
             r'(\}\s*ALFilter\s*;)'
         )
         m = re.search(pattern, src, re.DOTALL)
@@ -79,7 +80,7 @@ def run_phase2_harmonizer(workspace_root):
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
             rf'(typedef\s+struct\s+{re.escape(struct_tag)}\s*\{{)'
-            rf'(.*?)'
+            rf'([^}]*?)'  # Non-greedy match for the struct body
             rf'(\}}\s*\w+\s*;)'
         )
         m = re.search(pattern, src, re.DOTALL)
