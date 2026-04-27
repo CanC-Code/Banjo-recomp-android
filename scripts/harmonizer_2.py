@@ -3,7 +3,6 @@ import os
 import re
 import sys
 
-
 def run_phase2_harmonizer(workspace_root):
     print(f"[+] Starting Phase 2 Audio Subsystem Harmonization in: {workspace_root}")
 
@@ -19,17 +18,54 @@ def run_phase2_harmonizer(workspace_root):
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # -------------------------------------------------------------------------
-    # Strip any prior harmonizer injection to prevent stacking across CI runs
-    # -------------------------------------------------------------------------
+    # Strip any prior harmonizer injection to prevent stacking
     if "/* --- HARMONIZER_" in content:
         print("[!] Found previous harmonizer injection. Stripping to apply fresh...")
         content = content.split("/* --- HARMONIZER_")[0]
 
-    # -------------------------------------------------------------------------
-    # FIX 1: Remove `typedef ALPVoice N_PVoice` — confirmed across all runs,
-    # n_synth.h owns this name as a different struct type.
-    # -------------------------------------------------------------------------
+    # =============================================
+    # FIX 1: Replace scalar `Acmd` with struct `Acmd`
+    # =============================================
+    before = len(content)
+    content = re.sub(
+        r'typedef\s+u64\s+Acmd\s*;',
+        'typedef struct { u32 w0; u32 w1; } Acmd;',
+        content
+    )
+    if len(content) < before:
+        print("[+] Replaced scalar `Acmd` with struct `Acmd`.")
+    else:
+        print("[!] WARNING: Scalar `Acmd` not found — may already be a struct.")
+
+    # =============================================
+    # FIX 2: Patch ALFilter to use ALCmdHandler/ALSetParam
+    # =============================================
+    def patch_alfilter(src):
+        pattern = (
+            r'(typedef\s+struct\s+ALFilter_s\s*\{}'
+            r'(.*?)'
+            r'(\}\s*ALFilter\s*;)'
+        )
+        m = re.search(pattern, src, re.DOTALL)
+        if not m:
+            print("[!] WARNING: struct ALFilter_s not found — skipping patch.")
+            return src
+        open_tok = m.group(1)
+        body = m.group(2)
+        close_tok = m.group(3)
+
+        # Replace void *handler with ALCmdHandler
+        body = re.sub(r'void\s+\*handler\s*;', 'ALCmdHandler handler;', body)
+        # Replace void *setParam with ALSetParam
+        body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
+
+        return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
+
+    content = patch_alfilter(content)
+
+    # =============================================
+    # FIX 3: Remove `typedef ALPVoice N_PVoice` (conflict)
+    # =============================================
     before = len(content)
     content = re.sub(r'[ \t]*typedef\s+ALPVoice\s+N_PVoice\s*;\s*\n', '', content)
     if len(content) < before:
@@ -37,9 +73,9 @@ def run_phase2_harmonizer(workspace_root):
     else:
         print("[!] WARNING: `typedef ALPVoice N_PVoice` not found — may already be absent.")
 
-    # -------------------------------------------------------------------------
-    # FIX 2: Patch ALPVoice_s in-place to add `offset` field.
-    # -------------------------------------------------------------------------
+    # =============================================
+    # FIX 4: Patch ALPVoice_s to add `offset` field
+    # =============================================
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
             rf'(typedef\s+struct\s+{re.escape(struct_tag)}\s*\{{)'
@@ -50,47 +86,31 @@ def run_phase2_harmonizer(workspace_root):
         if not m:
             print(f"[!] WARNING: struct {struct_tag} not found — skipping patch.")
             return src
-        open_tok  = m.group(1)
-        body      = m.group(2)
+        open_tok = m.group(1)
+        body = m.group(2)
         close_tok = m.group(3)
         for decl, field_name in fields_to_add:
             if re.search(rf'\b{re.escape(field_name)}\b', body):
                 print(f"    [=] {struct_tag}.{field_name} already present.")
             else:
                 print(f"    [+] Injecting {struct_tag}.{field_name}")
-                body = body.rstrip() + f"\n    {decl}\n"
+                body = body.rstrip() + f"\n    {decl}"
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
 
     content = patch_struct_body(content, 'ALPVoice_s', [
         ('s32                 offset;       /* sample offset into wave */', 'offset'),
     ])
 
-    # -------------------------------------------------------------------------
-    # Injection block — complete verified picture after 10 runs:
-    #
-    # CONFIRMED NEEDED (bare names):
-    #   ALParam        — struct, used by synthInternals.h:124,125,207,208
-    #                    and n_synth.h:71,72,116,117,155,156  [fixed in V9]
-    #   ALStartParam   — alias of ALParam, used by n_synstartvoice.c:25,29
-    #   ALStartParamAlt— alias of ALParam, used by n_synstartvoiceparam.c:10,18
-    #   ALCmdHandler   — fn ptr, used by synthInternals.h:92  [fixed in V9]
-    #   ALSetParam     — fn ptr, used by synthInternals.h:92 AND n_synth.h:130
-    #                    NOT defined by synthInternals.h itself (unlike ALSetFXParam)
-    #                    THIS is the sole remaining error in V10.
-    #
-    # CONFIRMED NOT NEEDED / MUST NOT EMIT:
-    #   ALSetFXParam   — synthInternals.h:154 defines it
-    #   N_PVoice       — n_synth.h owns it (removed above)
-    #   WRAPPER_*      — already defined in header body
-    # -------------------------------------------------------------------------
-    injection = """/* --- HARMONIZER_V10_APPLIED --- */
+    # =============================================
+    # Injection Block: Define ALParam, ALCmdHandler, ALSetParam
+    # =============================================
+    injection = """/* --- HARMONIZER_V11_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
 /*
  * ALParam — full sequencer parameter struct.
- * Required by synthInternals.h:124,125,207,208 and n_synth.h:71,72,116,117,155,156
- * and by the C audio source files directly.
+ * Required by synthInternals.h and n_synth.h.
  */
 #ifndef BKA_ALPARAM_DEFINED
 #define BKA_ALPARAM_DEFINED
@@ -115,9 +135,6 @@ typedef ALParam ALStartParamAlt;
 /*
  * ALCmdHandler — required by synthInternals.h:92.
  * ALSetParam   — required by synthInternals.h:92 and n_synth.h:130.
- *                synthInternals.h defines ALSetFXParam (different type) but
- *                NOT ALSetParam — we must provide it.
- * Both must be bare names (no WRAPPER_ prefix).
  */
 #ifndef BKA_ALHANDLERS_DEFINED
 #define BKA_ALHANDLERS_DEFINED
@@ -134,9 +151,8 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(new_content)
 
-    print(f"[+] Successfully applied V10 patch. Wrote {len(new_content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V11 patch. Wrote {len(new_content)} bytes to {filepath}")
     return True
-
 
 if __name__ == "__main__":
     import argparse
@@ -145,5 +161,4 @@ if __name__ == "__main__":
     )
     parser.add_argument("--root", type=str, default=".", help="Root directory of the repository")
     args = parser.parse_args()
-
     run_phase2_harmonizer(args.root)
