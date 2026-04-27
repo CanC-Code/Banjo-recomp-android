@@ -40,32 +40,28 @@ jobs:
           pip3 install pyyaml
           python3 scripts/generate_manifest.py
 
-      - name: 🏗️ Build Full Game APK
+      - name: 🏗️ Build with Full Diagnostics
         working-directory: Android
         run: |
           set -o pipefail
           ./gradlew clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
-            --info \
-            --stacktrace 2>&1 | tee ../build.log || true
+            --debug \
+            --stacktrace 2>&1 | tee ../build_full.log || true
 
       - name: 📦 Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-full-game-apk
+          name: bka-apk
           path: Android/app/build/outputs/apk/debug/*.apk
 
-      - name: 🔍 Run Failure Analyzer
-        if: always()
-        run: python3 scripts/analyze_build_log.py build.log || true
-
-      - name: 🚑 Upload All Logs
+      - name: 🚑 Upload Complete Build Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-build-logs
+          name: bka-build-diagnostics
           path: |
-            build.log
-            build_failure_summary.txt
+            build_full.log
             Android/app/src/main/cpp/ultra/n64_types.h
+            Android/app/build/reports/
