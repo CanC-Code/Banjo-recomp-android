@@ -34,10 +34,11 @@
 #define ALVoiceState         __orig_ALVoiceState
 
 /* =============================================
-   STANDARD N64 TYPES REPLACEMENT (ADDED FIX)
+   STANDARD N64 TYPES REPLACEMENT
    Map modern standard integer types to legacy N64 types.
    ============================================= */
 #include <stdint.h>
+#include <stddef.h>
 
 /* Unsigned types */
 typedef uint8_t  u8;
@@ -67,6 +68,19 @@ typedef volatile int64_t  vs64;
 typedef float  f32;
 typedef double f64;
 
+/* Booleans and Standard Macros */
+#ifndef TRUE
+#define TRUE 1
+#endif
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+
+#ifndef NULL
+#define NULL 0
+#endif
+
 /* =============================================
    SANITIZER & STANDARD LIBS
    ============================================= */
@@ -77,7 +91,6 @@ typedef double f64;
 #include <string.h>
 #include <math.h>
 
-/* Using the newly defined s32 type! */
 typedef s32 n64_bool;
 
 #ifndef n64_malloc
@@ -118,7 +131,8 @@ typedef s32 n64_bool;
 #ifndef BKA_BANJO_LAYER
 #define BKA_BANJO_LAYER
 
-typedef struct __orig_ALEventListItem N_ALEventListItem;
+/* Fixed: Restored original typedef to prevent incomplete struct type errors */
+typedef ALEventListItem N_ALEventListItem;
 
 #ifdef __cplusplus
 extern "C" {
