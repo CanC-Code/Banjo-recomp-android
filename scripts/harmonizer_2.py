@@ -24,22 +24,29 @@ def run_phase2_harmonizer(workspace_root):
         content = content.split("/* --- HARMONIZER_")[0]
 
     # =============================================
-    # FIX 1: Remove the conflicting `Acmd` struct redefinition
+    # FIX 1: Add Acmd struct override at the TOP of the file
     # =============================================
-    before = len(content)
-    content = re.sub(
-        r'typedef\s+struct\s*\{\s*u32\s+w0\s*;\s*u32\s+w1\s*;\s*\}\s+Acmd\s*;',
-        '',
-        content
-    )
-    if len(content) < before:
-        print("[+] Removed conflicting `typedef struct { u32 w0; u32 w1; } Acmd;`.")
+    acmd_override = """#ifndef BKA_ACMD_OVERRIDE
+#define BKA_ACMD_OVERRIDE
+/* Override Acmd as a struct to match PR/abi.h macros (aClearBuffer, etc.) */
+typedef struct {
+    u32 w0;
+    u32 w1;
+} Acmd;
+#endif
+
+"""
+    # Insert the override at the very beginning (after the header guard)
+    header_guard_pattern = r'(#ifndef BKA_ANDROID_N64_TYPES_H\s*\n#define BKA_ANDROID_N64_TYPES_H\s*\n)'
+    if re.search(header_guard_pattern, content):
+        content = re.sub(header_guard_pattern, r'\1' + acmd_override, content)
+        print("[+] Added `Acmd` struct override at the top of the file.")
     else:
-        print("[!] WARNING: Conflicting `Acmd` struct not found — may already be absent.")
+        print("[!] WARNING: Could not find header guard — prepending `Acmd` override.")
+        content = acmd_override + content
 
     # =============================================
-    # FIX 2: Patch ALFilter to use void* for handler/setParam (temporary)
-    #         We will redefine these later in the injection block.
+    # FIX 2: Patch ALFilter to use ALCmdHandler/ALSetParam
     # =============================================
     def patch_alfilter(src):
         pattern = (
@@ -55,9 +62,9 @@ def run_phase2_harmonizer(workspace_root):
         body = m.group(2)
         close_tok = m.group(3)
 
-        # Temporarily use void* to avoid forward declaration issues
-        body = re.sub(r'ALCmdHandler\s+handler\s*;', 'void *handler;', body)
-        body = re.sub(r'ALSetParam\s+setParam\s*;', 'void *setParam;', body)
+        # Use void* temporarily to avoid forward declaration issues
+        body = re.sub(r'void\s+\*handler\s*;', 'void *handler;', body)
+        body = re.sub(r'void\s+\*setParam\s*;', 'void *setParam;', body)
 
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
 
@@ -112,7 +119,7 @@ def run_phase2_harmonizer(workspace_root):
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V12_APPLIED --- */
+/* --- HARMONIZER_V13_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -142,11 +149,12 @@ typedef ALParam ALStartParamAlt;
 
 /*
  * ALCmdHandler — required by synthInternals.h:92.
+ * Updated to take 5 arguments to match auxbus.c usage.
  * ALSetParam   — required by synthInternals.h:92 and n_synth.h:130.
  */
 #ifndef BKA_ALHANDLERS_DEFINED
 #define BKA_ALHANDLERS_DEFINED
-typedef void (*ALCmdHandler)(void *, s16 *, s32, s32 *);
+typedef void (*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Updated to 5 args
 typedef s32  (*ALSetParam)(void *, s32, void *);
 #endif /* BKA_ALHANDLERS_DEFINED */
 
@@ -185,7 +193,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V12 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V13 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
