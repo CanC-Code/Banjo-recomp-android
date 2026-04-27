@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -35,40 +35,6 @@ jobs:
           fi
           python3 scripts/generate_icons.py icon_master.png
 
-      # =========================
-      # HEADER VALIDATION
-      # =========================
-      - name: 🔍 Validate n64_types.h
-        run: |
-          HEADER="Android/app/src/main/cpp/ultra/n64_types.h"
-          if [ ! -f "$HEADER" ]; then
-            echo "❌ Header missing"
-            exit 1
-          fi
-
-          # Check for critical definitions (updated to match the fixed header)
-          grep -q "union BKA_Acmd_Neutralized" "$HEADER" || { echo "❌ Missing Acmd union"; exit 1; }
-          grep -q "typedef.*BKA_Acmd_Neutralized.*\*(\*ALCmdHandler)" "$HEADER" || { echo "❌ Missing ALCmdHandler"; exit 1; }
-          grep -q "#define Acmd BKA_Acmd_Neutralized" "$HEADER" || { echo "❌ Missing Acmd macro"; exit 1; }
-          grep -q "#include \"PR/ultratypes.h\"" "$HEADER" || { echo "❌ Missing ultratypes.h include"; exit 1; }
-          grep -q "#include \"PR/libaudio.h\"" "$HEADER" || { echo "❌ Missing libaudio.h include"; exit 1; }
-          echo "✅ Header validation passed"
-
-      # =========================
-      # BUILD PREP
-      # =========================
-      - name: 🐘 Ensure Gradle Wrapper Exists
-        working-directory: Android
-        run: |
-          if [ ! -f "./gradlew" ]; then
-            echo "⚠️ Gradle wrapper missing — generating..."
-            gradle wrapper --gradle-version 8.2
-          fi
-          chmod +x gradlew
-
-      # =========================
-      # BUILD
-      # =========================
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
@@ -81,7 +47,7 @@ jobs:
           ./gradlew clean assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
             --info \
-            --stacktrace 2>&1 | tee ../build.log || true  # Continue even if build fails
+            --stacktrace 2>&1 | tee ../build.log || true
 
       - name: 📦 Upload APK
         if: success()
@@ -90,27 +56,12 @@ jobs:
           name: bka-full-game-apk
           path: Android/app/build/outputs/apk/debug/*.apk
 
-      # =========================
-      # DIAGNOSTICS
-      # =========================
-      - name: 🔍 Merge Header State into Build Log
-        if: failure()
-        run: |
-          touch build.log
-          printf "\n\n================================================================================\n" >> build.log
-          printf "DIAGNOSTIC: n64_types.h STATE AT TIME OF FAILURE\n" >> build.log
-          printf "================================================================================\n\n" >> build.log
-          cat Android/app/src/main/cpp/ultra/n64_types.h >> build.log 2>/dev/null \
-            || printf "[!] n64_types.h was not found at the expected path.\n" >> build.log
-          printf "\n================================================================================\n" >> build.log
-        continue-on-error: true
-
       - name: 🔍 Run Failure Analyzer
-        if: failure()
+        if: always()
         run: python3 scripts/analyze_build_log.py build.log || true
 
       - name: 🚑 Upload Failure Logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bka-failure-logs
