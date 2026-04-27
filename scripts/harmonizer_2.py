@@ -24,27 +24,27 @@ def run_phase2_harmonizer(workspace_root):
         content = content.split("/* --- HARMONIZER_")[0]
 
     # =============================================
-    # FIX 1: Replace scalar `Acmd` with struct `Acmd`
+    # FIX 1: Remove the conflicting `Acmd` struct redefinition
     # =============================================
     before = len(content)
     content = re.sub(
-        r'typedef\s+u64\s+Acmd\s*;',
-        'typedef struct { u32 w0; u32 w1; } Acmd;',
+        r'typedef\s+struct\s*\{\s*u32\s+w0\s*;\s*u32\s+w1\s*;\s*\}\s+Acmd\s*;',
+        '',
         content
     )
     if len(content) < before:
-        print("[+] Replaced scalar `Acmd` with struct `Acmd`.")
+        print("[+] Removed conflicting `typedef struct { u32 w0; u32 w1; } Acmd;`.")
     else:
-        print("[!] WARNING: Scalar `Acmd` not found — may already be a struct.")
+        print("[!] WARNING: Conflicting `Acmd` struct not found — may already be absent.")
 
     # =============================================
-    # FIX 2: Patch ALFilter to use ALCmdHandler/ALSetParam
+    # FIX 2: Patch ALFilter to use void* for handler/setParam (temporary)
+    #         We will redefine these later in the injection block.
     # =============================================
     def patch_alfilter(src):
-        # Match the entire ALFilter_s struct definition
         pattern = (
             r'(typedef\s+struct\s+ALFilter_s\s*\{)'
-            r'([^}]*?)'  # Non-greedy match for the struct body
+            r'([^}]*?)'
             r'(\}\s*ALFilter\s*;)'
         )
         m = re.search(pattern, src, re.DOTALL)
@@ -55,10 +55,9 @@ def run_phase2_harmonizer(workspace_root):
         body = m.group(2)
         close_tok = m.group(3)
 
-        # Replace void *handler with ALCmdHandler
-        body = re.sub(r'void\s+\*handler\s*;', 'ALCmdHandler handler;', body)
-        # Replace void *setParam with ALSetParam
-        body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
+        # Temporarily use void* to avoid forward declaration issues
+        body = re.sub(r'ALCmdHandler\s+handler\s*;', 'void *handler;', body)
+        body = re.sub(r'ALSetParam\s+setParam\s*;', 'void *setParam;', body)
 
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
 
@@ -80,7 +79,7 @@ def run_phase2_harmonizer(workspace_root):
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
             rf'(typedef\s+struct\s+{re.escape(struct_tag)}\s*\{{)'
-            r'([^}]*?)'  # Non-greedy match for the struct body
+            r'([^}]*?)'
             rf'(\}}\s*\w+\s*;)'
         )
         m = re.search(pattern, src, re.DOTALL)
@@ -104,8 +103,16 @@ def run_phase2_harmonizer(workspace_root):
 
     # =============================================
     # Injection Block: Define ALParam, ALCmdHandler, ALSetParam
+    # Place this RIGHT AFTER the includes and BEFORE any structs
     # =============================================
-    injection = """/* --- HARMONIZER_V11_APPLIED --- */
+    # Find the end of the includes section (after #include "PR/libaudio.h")
+    include_end_pattern = r'(#include\s+"PR/libaudio\.h"\s*\n)'
+    m = re.search(include_end_pattern, content)
+    if m:
+        include_end_pos = m.end()
+        injection = """
+
+/* --- HARMONIZER_V12_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -147,12 +154,38 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
 /* ----------------------------- */
 """
 
-    new_content = content.rstrip() + "\n\n" + injection
+        content = content[:include_end_pos] + injection + content[include_end_pos:]
+        print("[+] Injected harmonizer types after includes.")
+    else:
+        print("[!] WARNING: Could not find #include \"PR/libaudio.h\" — injecting at top of file.")
+        content = injection + "\n" + content
+
+    # Now patch ALFilter to use the correct types
+    def patch_alfilter_final(src):
+        pattern = (
+            r'(typedef\s+struct\s+ALFilter_s\s*\{)'
+            r'([^}]*?)'
+            r'(\}\s*ALFilter\s*;)'
+        )
+        m = re.search(pattern, src, re.DOTALL)
+        if not m:
+            print("[!] WARNING: struct ALFilter_s not found — skipping final patch.")
+            return src
+        open_tok = m.group(1)
+        body = m.group(2)
+        close_tok = m.group(3)
+
+        body = re.sub(r'void\s+\*handler\s*;', 'ALCmdHandler handler;', body)
+        body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
+
+        return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
+
+    content = patch_alfilter_final(content)
 
     with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(new_content)
+        f.write(content)
 
-    print(f"[+] Successfully applied V11 patch. Wrote {len(new_content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V12 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
