@@ -23,41 +23,24 @@ def run_phase2_harmonizer(workspace_root):
     # Strip any prior harmonizer injection to prevent stacking across CI runs
     # -------------------------------------------------------------------------
     if "/* --- HARMONIZER_" in content:
-        print("[!] Found previous harmonizer injection. Stripping it to apply fresh...")
+        print("[!] Found previous harmonizer injection. Stripping to apply fresh...")
         content = content.split("/* --- HARMONIZER_")[0]
 
     # -------------------------------------------------------------------------
-    # FIX 1: n64_types.h:122 defines `typedef ALPVoice N_PVoice` but
-    # n_synth.h defines `struct N_PVoice_s { ... } N_PVoice` — these are
-    # different types and cause a redefinition error.
-    #
-    # The existing line reads:
-    #   typedef ALPVoice WRAPPER_N_PVoice;   (line 121)
-    #   typedef ALPVoice N_PVoice;           (line 122)
-    #
-    # We must remove the `typedef ALPVoice N_PVoice;` line entirely so that
-    # n_synth.h owns the canonical N_PVoice definition.
-    # We keep WRAPPER_N_PVoice since it is used elsewhere in the header.
+    # FIX 1: Remove `typedef ALPVoice N_PVoice` — n_synth.h defines
+    # `struct N_PVoice_s { ... } N_PVoice` as a different struct and must
+    # own that name. Confirmed by redefinition error across all prior runs.
     # -------------------------------------------------------------------------
     before = len(content)
     content = re.sub(r'[ \t]*typedef\s+ALPVoice\s+N_PVoice\s*;\s*\n', '', content)
     if len(content) < before:
         print("[+] Removed conflicting `typedef ALPVoice N_PVoice` line.")
     else:
-        print("[!] WARNING: `typedef ALPVoice N_PVoice` line not found — may already be absent.")
+        print("[!] WARNING: `typedef ALPVoice N_PVoice` not found — may already be absent.")
 
     # -------------------------------------------------------------------------
-    # FIX 2: synthInternals.h uses bare `ALCmdHandler` and `ALSetParam` names.
-    # Our injection must provide these as bare names, not WRAPPER_ prefixed.
-    # We also need `ALSetParam` specifically — note synthInternals.h already
-    # defines `ALSetFXParam` itself (confirmed by the note in the error), so
-    # we must NOT redefine that.
-    # -------------------------------------------------------------------------
-
-    # -------------------------------------------------------------------------
-    # FIX 3: Patch ALPVoice_s in-place to add `offset` field needed by
-    # n_synstartvoice.c and n_synstartvoiceparam.c.
-    # The current struct body only has {ALLink node; struct N_ALVoice_s *vvoice;}
+    # FIX 2: Patch ALPVoice_s in-place to add `offset` field.
+    # Required by n_synstartvoice.c:38 and n_synstartvoiceparam.c:27.
     # -------------------------------------------------------------------------
     def patch_struct_body(src, struct_tag, fields_to_add):
         pattern = (
@@ -85,27 +68,67 @@ def run_phase2_harmonizer(workspace_root):
     ])
 
     # -------------------------------------------------------------------------
-    # Injection block.
+    # Injection block — complete set of what the C audio files need:
     #
-    # Emit ONLY what is genuinely absent and needed:
-    #   - ALCmdHandler    (bare name — required by synthInternals.h:92)
-    #   - ALSetParam      (bare name — required by synthInternals.h:92 and n_synth.h:130)
+    # MUST provide (bare names, no WRAPPER_ prefix):
+    #   - ALParam struct    used by synthInternals.h:124,125,207,208
+    #                       and n_synth.h:71,72,116,117,155,156
+    #   - ALStartParam      used by n_synstartvoice.c:25,29
+    #   - ALStartParamAlt   used by n_synstartvoiceparam.c:10,18
+    #   - ALCmdHandler      used by synthInternals.h:92
     #
-    # Do NOT emit:
-    #   - ALSetFXParam    (synthInternals.h already defines it at line 154)
-    #   - WRAPPER_ALFilter / WRAPPER_N_PVoice / WRAPPER_N_ALVoice
-    #                     (already defined in the header body)
-    #   - N_PVoice        (owned by n_synth.h — we removed it above)
+    # MUST NOT provide:
+    #   - ALSetParam as a function pointer — synthInternals.h defines it at
+    #     line 154 as `typedef s32 (*ALSetParam)(void*, s32, void*)` and
+    #     n_synth.h:130 uses it as a field type. We must not shadow it.
+    #   - ALSetFXParam      synthInternals.h:154 owns this
+    #   - N_PVoice          n_synth.h owns this (removed above)
+    #   - WRAPPER_* structs already defined in header body
+    #
+    # ORDER MATTERS: ALParam struct must appear before ALCmdHandler typedef
+    # because synthInternals.h processes top-to-bottom.
     # -------------------------------------------------------------------------
-    injection = """/* --- HARMONIZER_V8_APPLIED --- */
+    injection = """/* --- HARMONIZER_V9_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
-/* These bare-name typedefs are required by include/synthInternals.h and
- * include/n_synth.h which use the undecorated names and cannot be modified.
- * ALSetFXParam is intentionally omitted — synthInternals.h defines it itself. */
+/*
+ * ALParam — full sequencer parameter struct.
+ * Required by include/synthInternals.h (lines 124,125,207,208)
+ *        and include/n_synth.h         (lines 71,72,116,117,155,156)
+ *        and src/core1/audio/n_synstartvoice.c
+ *        and src/core1/audio/n_synstartvoiceparam.c
+ * Must be defined BEFORE synthInternals.h is included by those C files.
+ * ALSetParam (function pointer) is intentionally omitted here —
+ * synthInternals.h:154 defines it and n_synth.h:130 uses it.
+ */
+#ifndef BKA_ALPARAM_DEFINED
+#define BKA_ALPARAM_DEFINED
+typedef struct ALParam_s {
+    struct ALParam_s   *next;
+    s32                 delta;
+    s16                 type;
+    s32                 samples;
+    f32                 pitch;
+    s16                 unity;
+    u8                  pan;
+    u8                  volume;
+    u8                  fxMix;
+    void               *wave;
+    union { f32 f; s32 i; } data;
+} ALParam;
+
+/* Aliases used directly by the C source files */
+typedef ALParam ALStartParam;
+typedef ALParam ALStartParamAlt;
+#endif /* BKA_ALPARAM_DEFINED */
+
+/* ALCmdHandler — required by synthInternals.h:92
+ * Must be a bare name (no WRAPPER_ prefix). */
+#ifndef BKA_ALCMDHANDLER_DEFINED
+#define BKA_ALCMDHANDLER_DEFINED
 typedef void (*ALCmdHandler)(void *, s16 *, s32, s32 *);
-typedef s32  (*ALSetParam)(void *, s32, void *);
+#endif /* BKA_ALCMDHANDLER_DEFINED */
 
 #endif /* BKA_HARMONIZER_INJECT */
 /* ----------------------------- */
@@ -116,7 +139,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(new_content)
 
-    print(f"[+] Successfully applied V8 patch. Wrote {len(new_content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V9 patch. Wrote {len(new_content)} bytes to {filepath}")
     return True
 
 
