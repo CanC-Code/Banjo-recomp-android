@@ -26,24 +26,7 @@ def run_phase2_harmonizer(workspace_root):
     # =============================================
     # FIX 1: Move fundamental types to the TOP of the file
     # =============================================
-    # Extract the fundamental types section
-    fundamental_types_pattern = (
-        r'/\* =========================\s*\n'
-        r'\s*FUNDAMENTAL TYPES\s*\n'
-        r'\s*=========================\s*\n'
-        r'.*?'
-        r'/\* =========================\s*\n'
-        r'\s*PREPROCESSOR SDK INTERCEPTION\s*\n'
-        r'\s*=========================\s*\n'
-    )
-    fundamental_types_match = re.search(fundamental_types_pattern, content, re.DOTALL)
-    if fundamental_types_match:
-        fundamental_types = fundamental_types_match.group(0)
-        content = content.replace(fundamental_types, "")
-        print("[+] Extracted fundamental types section.")
-    else:
-        print("[!] WARNING: Could not find fundamental types section.")
-        fundamental_types = """
+    fundamental_types = """
 /* =========================
    FUNDAMENTAL TYPES
    ========================= */
@@ -61,7 +44,7 @@ typedef double             f64;
 """
 
     # =============================================
-    # FIX 2: Add Acmd struct override AFTER fundamental types
+    # FIX 2: Add Acmd struct override and aClearBuffer macro
     # =============================================
     acmd_override = """
 /* =========================
@@ -69,13 +52,17 @@ typedef double             f64;
    ========================= */
 #ifndef BKA_ACMD_OVERRIDE
 #define BKA_ACMD_OVERRIDE
-/* Neutralize PR/abi.h's Acmd typedef to avoid conflict */
-#define Acmd BKA_Acmd_Dummy
+/* Define Acmd as a struct to match PR/abi.h macros (aClearBuffer, etc.) */
 typedef struct {
     u32 w0;
     u32 w1;
 } Acmd;
-#undef Acmd
+
+/* Redefine aClearBuffer to work with Acmd as a struct */
+#undef aClearBuffer
+#define aClearBuffer(_a, _d, _c) \\
+    (_a)->w0 = _SHIFTL(A_CLEARBUFF, 24, 8) | _SHIFTL((_d), 0, 24), \\
+    (_a)->w1 = (unsigned int)(_c)
 #endif
 
 """
@@ -84,7 +71,7 @@ typedef struct {
     # Rebuild the file with the correct order:
     # 1. Header guard
     # 2. Fundamental types
-    # 3. Acmd override
+    # 3. Acmd override and macro redefinition
     # 4. Rest of the file
     # =============================================
     header_guard_pattern = r'(#ifndef BKA_ANDROID_N64_TYPES_H\s*\n#define BKA_ANDROID_N64_TYPES_H\s*\n)'
@@ -117,8 +104,8 @@ typedef struct {
         close_tok = m.group(3)
 
         # Use void* temporarily to avoid forward declaration issues
-        body = re.sub(r'void\s+\*handler\s*;', 'void *handler;', body)
-        body = re.sub(r'void\s+\*setParam\s*;', 'void *setParam;', body)
+        body = re.sub(r'void\s+\*handler\s*;', 'Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
+        body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
 
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
 
@@ -173,7 +160,7 @@ typedef struct {
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V14_APPLIED --- */
+/* --- HARMONIZER_V15_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -203,12 +190,12 @@ typedef ALParam ALStartParamAlt;
 
 /*
  * ALCmdHandler — required by synthInternals.h:92.
- * Updated to take 5 arguments to match auxbus.c usage.
+ * Updated to return Acmd* and take 5 arguments to match auxbus.c usage.
  * ALSetParam   — required by synthInternals.h:92 and n_synth.h:130.
  */
 #ifndef BKA_ALHANDLERS_DEFINED
 #define BKA_ALHANDLERS_DEFINED
-typedef void (*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Updated to 5 args
+typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
 typedef s32  (*ALSetParam)(void *, s32, void *);
 #endif /* BKA_ALHANDLERS_DEFINED */
 
@@ -222,32 +209,10 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
         print("[!] WARNING: Could not find #include \"PR/libaudio.h\" — injecting at top of file.")
         content = injection + "\n" + content
 
-    # Now patch ALFilter to use the correct types
-    def patch_alfilter_final(src):
-        pattern = (
-            r'(typedef\s+struct\s+ALFilter_s\s*\{)'
-            r'([^}]*?)'
-            r'(\}\s*ALFilter\s*;)'
-        )
-        m = re.search(pattern, src, re.DOTALL)
-        if not m:
-            print("[!] WARNING: struct ALFilter_s not found — skipping final patch.")
-            return src
-        open_tok = m.group(1)
-        body = m.group(2)
-        close_tok = m.group(3)
-
-        body = re.sub(r'void\s+\*handler\s*;', 'ALCmdHandler handler;', body)
-        body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
-
-        return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
-
-    content = patch_alfilter_final(content)
-
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V14 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V15 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
