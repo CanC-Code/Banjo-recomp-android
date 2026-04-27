@@ -2,20 +2,20 @@
 #define BKA_ANDROID_N64_TYPES_H
 
 /* =============================================
-   PREPROCESSOR SDK INTERCEPTION
-   Neutralize all conflicting SDK definitions BEFORE including headers
+   PREPROCESSOR INTERCEPTION
+   Neutralize ALL conflicting definitions BEFORE including SDK headers
    ============================================= */
 
-/* Neutralize PR/ultratypes.h */
+// 1. Neutralize PR/ultratypes.h
 #define _ULTRA64_TYPES_H_ 1
 #define _LANGUAGE_C 1
 #define _LANGUAGE_C_PLUS_PLUS 1
 #define F3DEX_GBI_2 1
 
-/* Neutralize PR/abi.h's Acmd definition */
+// 2. Neutralize PR/abi.h's Acmd
 #define Acmd BKA_Acmd_Neutralized
 
-/* Intercept all SDK types that might conflict */
+// 3. Intercept all potentially conflicting types
 #define ALLink_s             __orig_ALLink_s
 #define ALLink               __orig_ALLink
 #define ALVoice_s            __orig_ALVoice_s
@@ -36,7 +36,7 @@
 #define ALCSeqMarker         __orig_ALCSeqMarker
 #define ADPCM_STATE          __orig_ADPCM_STATE
 
-/* Intercept macro enums */
+// 4. Intercept macro enums
 #define AL_SEQP_LOOP_EVT     __orig_AL_SEQP_LOOP_EVT
 #define AL_MIDI_FX_CTRL_0    __orig_AL_MIDI_FX_CTRL_0
 #define AL_MIDI_FX_CTRL_1    __orig_AL_MIDI_FX_CTRL_1
@@ -46,39 +46,39 @@
 /* =============================================
    INCLUDE SDK HEADERS
    ============================================= */
-#include "PR/ultratypes.h"  // Provides fundamental types
+#include "PR/ultratypes.h"  // Fundamental types
 #include "PR/os.h"
 #include "PR/gbi.h"
 #include "PR/gu.h"
 #ifndef PR_ABI_H_INCLUDED
 #define PR_ABI_H_INCLUDED
-#include "PR/libaudio.h"    // Provides original Acmd (as union)
+#include "PR/libaudio.h"    // Original Acmd (as union)
 #endif
 
 /* =============================================
-   ACMD COMPATIBILITY LAYER
-   Define our Acmd type to match what PR/abi.h expects
+   ACMD COMPATIBILITY
+   Define our Acmd to match PR/abi.h's union
    ============================================= */
-#ifndef BKA_ACMD_OVERRIDE
-#define BKA_ACMD_OVERRIDE
+#ifndef BKA_ACMD_COMPAT
+#define BKA_ACMD_COMPAT
 
-/* Define our Acmd type as a union to match PR/abi.h */
+// Define our Acmd type as a union to match PR/abi.h
 typedef union {
     u32 w0;
     u32 w1;
 } BKA_Acmd_Neutralized;
 
-/* Make Acmd point to our type */
+// Make Acmd point to our type
 #undef Acmd
 #define Acmd BKA_Acmd_Neutralized
 
-/* Redefine aClearBuffer to work with our Acmd type */
+// Redefine aClearBuffer for our Acmd type
 #undef aClearBuffer
 #define aClearBuffer(_a, _d, _c) \
     (_a)->w0 = _SHIFTL(A_CLEARBUFF, 24, 8) | _SHIFTL((_d), 0, 24), \
     (_a)->w1 = (unsigned int)(_c)
 
-#endif /* BKA_ACMD_OVERRIDE */
+#endif /* BKA_ACMD_COMPAT */
 
 /* =============================================
    RESTORE ORIGINAL NAMESPACE
@@ -110,7 +110,7 @@ typedef union {
 #undef AL_MIDI_FX_CTRL_3
 
 /* =============================================
-   CUSTOM TYPES (non-conflicting with SDK)
+   CUSTOM TYPES (non-conflicting)
    ============================================= */
 typedef struct ALLink_s {
     struct ALLink_s *next;
@@ -124,7 +124,7 @@ struct N_ALVoice_s;
 typedef struct ALPVoice_s {
     ALLink node;
     struct N_ALVoice_s *vvoice;
-    s32 offset; /* sample offset into wave */
+    s32 offset;
 } ALPVoice;
 
 typedef ALPVoice PVoice;
@@ -179,7 +179,6 @@ typedef struct ALFilter_s {
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
-/* ALParam - sequencer parameter struct */
 typedef struct ALParam_s {
     struct ALParam_s *next;
     s32 delta;
@@ -197,7 +196,6 @@ typedef struct ALParam_s {
 typedef ALParam ALStartParam;
 typedef ALParam ALStartParamAlt;
 
-/* Handler types */
 typedef Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);
 typedef s32 (*ALSetParam)(void *, s32, void *);
 
@@ -247,7 +245,7 @@ typedef s32 n64_bool;
 #define n64_sin     sin
 #define n64_cos     cos
 #endif
-#endif /* BKA_SANITIZER_SUPPORT_DEFINED */
+#endif
 
 /* =============================================
    CONSTANTS
@@ -278,16 +276,4 @@ extern "C" {
 
 extern Acmd *n_alAdpcmPull(void *, s16 *, s32, Acmd *);
 extern Acmd *n_alResamplePull(void *, s16 *, Acmd *);
-extern Acmd *n_alEnvmixerPull(void *, s32, Acmd *);
-extern Acmd *n_alSavePull(s32, Acmd *);
-extern Acmd *n_alAuxBusPull(void);
-extern Acmd *n_alFxPull(void);
-extern Acmd *n_alMainBusPull(void);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* BKA_BANJO_LAYER */
-
-#endif /* BKA_ANDROID_N64_TYPES_H */
+extern
