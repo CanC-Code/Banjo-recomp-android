@@ -45,6 +45,7 @@ typedef double             f64;
 
     # =============================================
     # FIX 2: Add Acmd struct override and neutralize PR/abi.h
+    # DO NOT undefine the macro - this is critical!
     # =============================================
     acmd_override = """
 /* =========================
@@ -57,19 +58,19 @@ typedef double             f64;
 #define Acmd BKA_Acmd_Neutralized
 
 /* Define Acmd as a struct */
-typedef struct Acmd {
+typedef struct BKA_Acmd_Neutralized {
     u32 w0;
     u32 w1;
-} Acmd;
-
-/* Undefine the macro to restore Acmd as the struct */
-#undef Acmd
+} BKA_Acmd_Neutralized;
 
 /* Redefine aClearBuffer to work with Acmd as a struct */
 #undef aClearBuffer
 #define aClearBuffer(_a, _d, _c) \\
     (_a)->w0 = _SHIFTL(A_CLEARBUFF, 24, 8) | _SHIFTL((_d), 0, 24), \\
     (_a)->w1 = (unsigned int)(_c)
+
+/* Define Acmd as the struct for our code */
+#define Acmd BKA_Acmd_Neutralized
 #endif
 
 """
@@ -121,7 +122,7 @@ typedef struct Acmd {
     print("[+] Removed existing ALCmdHandler/ALSetParam typedefs.")
 
     # =============================================
-    # FIX 5: Patch ALFilter to use ALCmdHandler/ALSetParam
+    # FIX 5: Patch ALFilter to use struct Acmd
     # =============================================
     def patch_alfilter(src):
         pattern = (
@@ -138,7 +139,7 @@ typedef struct Acmd {
         close_tok = m.group(3)
 
         # Patch handler and setParam to use the correct types
-        body = re.sub(r'void\s+\*handler\s*;', 'struct Acmd *(*handler)(void *, s16 *, s32, s32, void *);', body)
+        body = re.sub(r'void\s+\*handler\s*;', 'struct BKA_Acmd_Neutralized *(*handler)(void *, s16 *, s32, s32, void *);', body)
         body = re.sub(r'void\s+\*setParam\s*;', 'ALSetParam setParam;', body)
 
         return src[:m.start()] + open_tok + body + close_tok + src[m.end():]
@@ -194,7 +195,7 @@ typedef struct Acmd {
         include_end_pos = m.end()
         injection = """
 
-/* --- HARMONIZER_V20_APPLIED --- */
+/* --- HARMONIZER_V21_APPLIED --- */
 #ifndef BKA_HARMONIZER_INJECT
 #define BKA_HARMONIZER_INJECT
 
@@ -229,7 +230,7 @@ typedef ALParam ALStartParamAlt;
  */
 #ifndef BKA_ALHANDLERS_DEFINED
 #define BKA_ALHANDLERS_DEFINED
-typedef struct Acmd *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
+typedef struct BKA_Acmd_Neutralized *(*ALCmdHandler)(void *, s16 *, s32, s32, void *);  // Returns Acmd* and takes 5 args
 typedef s32  (*ALSetParam)(void *, s32, void *);
 #endif /* BKA_ALHANDLERS_DEFINED */
 
@@ -245,7 +246,7 @@ typedef s32  (*ALSetParam)(void *, s32, void *);
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    print(f"[+] Successfully applied V20 patch. Wrote {len(content)} bytes to {filepath}")
+    print(f"[+] Successfully applied V21 patch. Wrote {len(content)} bytes to {filepath}")
     return True
 
 if __name__ == "__main__":
