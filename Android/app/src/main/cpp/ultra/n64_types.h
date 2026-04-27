@@ -27,8 +27,7 @@
 #define CORE2_VLA_H        1
 #define _BKA_VLA_GUARD_    1
 
-/* --- Block os_message.h and os_pi.h ---
-   We define these types ourselves below. */
+/* --- Block os_message.h and os_pi.h ---\n   We define these types ourselves below. */
 #define _OS_MESSAGE_H_     1
 #define _OS_PI_H_          1
 #define _PR_OS_MESSAGE_H_  1
@@ -221,6 +220,21 @@ typedef s32 n64_bool;
 
 #ifndef G_QUAD
 #define G_QUAD 0xb5
+#endif
+
+/* =============================================
+   ALGlobals COMPILER FIX
+   otr_builder.cpp fails because it casts a pointer to ALGlobals*
+   without including libaudio.h. Since ALGlobals is an anonymous 
+   struct typedef in the SDK, we cannot safely forward-declare it 
+   in C++ without causing redefinition conflicts in NativeBridge.cpp.
+   Instead, we eager-load the header here so the definition is 
+   globally available.
+   ============================================= */
+#if __has_include(<PR/libaudio.h>)
+#include <PR/libaudio.h>
+#elif __has_include(<libaudio.h>)
+#include <libaudio.h>
 #endif
 
 #endif /* BKA_ANDROID_N64_TYPES_H */
