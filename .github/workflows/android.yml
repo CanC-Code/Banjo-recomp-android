@@ -60,11 +60,11 @@ jobs:
         if: always()
         run: python3 scripts/analyze_build_log.py build.log || true
 
-      - name: 🚑 Upload Failure Logs
+      - name: 🚑 Upload All Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bka-failure-logs
+          name: bka-build-logs
           path: |
             build.log
             build_failure_summary.txt
