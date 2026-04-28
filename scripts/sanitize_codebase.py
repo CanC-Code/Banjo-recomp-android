@@ -29,13 +29,27 @@ SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double
 
 def redirect_legacy_includes(content):
     """
-    Redirects legacy N64 SDK headers to modern Android-compatible headers.
-    Processed before safe token replacement to avoid string-protection conflicts.
+    Redirects legacy N64 SDK headers to modern Android-compatible headers and
+    fixes missing directory prefixes for SDK headers.
     """
+    # Redirect ultratypes to our master types file
     content = re.sub(r'#include\s*<ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*"ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*<PR/ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*"PR/ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
+
+    # Fix missing PR/ prefix for lazy N64 SDK headers (common in core audio/os files)
+    sdk_headers = [
+        'libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
+        'mbi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
+        'os_message.h', 'os_libc.h', 'os_thread.h'
+    ]
+    
+    for header in sdk_headers:
+        # Avoid double-prefixing if PR/ is already there
+        content = re.sub(rf'#include\s*<(?![pP][rR]/){header}>', f'#include <PR/{header}>', content)
+        content = re.sub(rf'#include\s*"(?![pP][rR]/){header}"', f'#include "PR/{header}"', content)
+
     return content
 
 def safe_token_replacement(content):
@@ -90,12 +104,9 @@ def fix_decompiler_artifacts(content, filename):
         src = src.strip()
         final_name = f"buffer_{name}" if dtype == name else name
 
-        # ENHANCEMENT: C++ Compiler Compatibility 
-        # If it's a literal initialization bracket { }, we keep it as standard C++ array initialization.
         if src.startswith('{') and src.endswith('}'):
             return f"{indent}{dtype} {final_name}[{size}] = {src};"
 
-        # Otherwise, if it's assigning an existing pointer to an array, we safely use n64_memcpy.
         return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
@@ -105,7 +116,6 @@ def fix_decompiler_artifacts(content, filename):
     is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
 
     if is_tmp_used and not is_tmp_declared:
-        # Changed to thread_local for better C++ standard compliance instead of GNU __thread
         tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\n#ifdef __cplusplus\nstatic thread_local u8 tmp[1024] = {0};\n#else\nstatic _Thread_local u8 tmp[1024] = {0};\n#endif\n"
         includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
         if includes:
@@ -140,16 +150,15 @@ def fix_linkage_conflicts(content):
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
-        
-        # INJECTION FIX: Find the first function body and inject declarations immediately before it, 
-        # allowing all file-level 'typedef struct' definitions to be read first.
+
+        # INJECTION FIX: Inject declarations before the first function body.
+        # This ensures typedefs and structs defined at the top of the file are parsed first.
         first_func_match = re.search(r"^(?:static\s+)?[\w\s\*]+\s+\w+\s*\([^)]*\)\s*\{", content, re.MULTILINE)
-        
+
         if first_func_match:
             pos = first_func_match.start()
             content = content[:pos] + header_block + "\n" + content[pos:]
         else:
-            # Fallback if no function body is found
             includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
             if includes:
                 pos = includes[-1].end()
@@ -166,7 +175,6 @@ def sanitize_codebase(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                # 🛡️ Process ONLY C/H files, SKIP C++ AND core headers
                 if not filename.endswith(('.c', '.h')): continue
                 if filename == "n64_types.h": continue
 
@@ -177,20 +185,20 @@ def sanitize_codebase(root_path):
                 except Exception: 
                     continue
 
-                # 0. Redirect legacy includes
+                # 0. Redirect legacy includes and fix PR/ paths
                 content = redirect_legacy_includes(original_content)
 
-                # 1. Safely replace tokens (ignores strings and comments)
+                # 1. Safely replace tokens
                 content = safe_token_replacement(content)
 
-                # 2. Fix array assignments and uninitialized tmp variables
+                # 2. Fix artifacts
                 content = fix_decompiler_artifacts(content, filename)
 
-                # 3. Fix static/non-static conflicts
+                # 3. Fix linkage
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
 
-                # 4. Wrap shadowed system headers
+                # 4. Wrap headers
                 content = wrap_shadow_headers(content, filename)
 
                 if content != original_content:
