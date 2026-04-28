@@ -59,7 +59,6 @@ def is_modern_wrapper(filepath, content):
     Detect if a file is an Android/JNI wrapper or C++ bridging code.
     These files must ONLY have their headers redirected, but NO token replacements.
     """
-    # Any C++ file is intrinsically modern wrapper/port code
     if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
         return True
         
@@ -83,13 +82,16 @@ def inject_types_include(content):
         return content[:pos] + N64_TYPES_PREAMBLE + content[pos:]
     return N64_TYPES_PREAMBLE + content
 
-def redirect_legacy_includes(content, headers_to_redirect):
+def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    for ch in headers_to_redirect:
-        escaped_ch = ch.replace('.', r'\.')
-        content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
+    # CRITICAL: Do NOT redirect standard system headers (like string.h) if this is a modern wrapper.
+    # Wrappers need the actual Android NDK system headers, not the game's renamed n64_ ones!
+    if not is_wrapper:
+        for ch in headers_to_redirect:
+            escaped_ch = ch.replace('.', r'\.')
+            content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
     sdk_headers = [
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h',
@@ -231,7 +233,6 @@ def sanitize_codebase(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                # Process all valid C/C++ extensions
                 if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
                 if filename == "n64_types.h": continue
 
@@ -243,19 +244,18 @@ def sanitize_codebase(root_path):
 
                 is_wrapper = is_modern_wrapper(filepath, original_content)
 
-                # CRITICAL: EVERY file (including wrappers) must have its headers redirected.
-                # If a wrapper isn't redirected, it will hit system headers instead of the renamed game headers!
-                content = redirect_legacy_includes(original_content, headers_to_redirect)
+                # Pass the is_wrapper flag to prevent standard system header renaming
+                content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper)
 
                 if is_wrapper:
                     if content != original_content:
                         with open(filepath, 'w', encoding='utf-8') as f:
                             f.write(content)
                         wrapper_count += 1
-                        print(f"  [Wrapper Aligned] {filepath} (Redirected headers only)")
+                        print(f"  [Wrapper Aligned] {filepath} (Redirected SDK headers only)")
                     continue
 
-                # --- Core Game Code Only (Wrappers skip this part entirely) ---
+                # --- Core Game Code Only ---
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
 
