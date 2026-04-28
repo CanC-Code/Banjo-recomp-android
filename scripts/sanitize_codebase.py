@@ -103,10 +103,8 @@ def inject_types_include(content):
 
 def inject_extern_c(content, filename):
     """
-    Wraps the entire header in extern "C", but reliably breaks OUT of C-linkage
-    for any `#include` directives. By entirely ignoring structural brace depth 
-    (which is often broken by `#ifdef`), we guarantee that standard Android NDK
-    includes are naturally excluded from C linkage, preventing C++ template crashes.
+    Surgically breaks OUT of C-linkage exclusively for `#include` directives. 
+    It prevents breaking C++ templates while gracefully collapsing empty blocks.
     """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
@@ -114,33 +112,9 @@ def inject_extern_c(content, filename):
 
     lines = content.split('\n')
     new_lines = []
-    in_block_comment = False
     
     for line in lines:
-        s = line
-        
-        # Fast comment tracking to ensure we don't break out on commented #includes
-        s_no_strings = re.sub(r'".*?"', '', s)
-        s_no_comments = re.sub(r'//.*', '', s_no_strings)
-        
-        if in_block_comment:
-            if '*/' in s_no_comments:
-                s_no_comments = s_no_comments[s_no_comments.find('*/') + 2:]
-                in_block_comment = False
-            else:
-                s_no_comments = ''
-                
-        if not in_block_comment and '/*' in s_no_comments:
-            if '*/' in s_no_comments:
-                s_no_comments = re.sub(r'/\*.*?\*/', '', s_no_comments)
-            else:
-                in_block_comment = True
-                s_no_comments = s_no_comments[:s_no_comments.find('/*')]
-                
-        s_strip = s_no_comments.strip()
-        
-        # Break out on ANY active #include directive
-        if not in_block_comment and re.match(r'^#[ \t]*include\b', s_strip):
+        if re.match(r'^[ \t]*#[ \t]*include\b', line):
             new_lines.append("#ifdef __cplusplus\n}\n#endif")
             new_lines.append(line)
             new_lines.append("#ifdef __cplusplus\nextern \"C\" {\n#endif")
@@ -149,9 +123,13 @@ def inject_extern_c(content, filename):
 
     result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
     
-    # Clean up any redundant consecutive extern "C" blocks created by clustered includes or top-of-file includes
-    cleanup_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
-    result = cleanup_pattern.sub('', result)
+    # 1. Clean up empty OPEN-CLOSE blocks completely (e.g. at the top of file above includes)
+    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
+    result = empty_block_pattern.sub('', result)
+    
+    # 2. Merge consecutive chunks correctly (e.g. CLOSE-OPEN redundancies)
+    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\s*#ifdef __cplusplus\nextern "C" \{\n#endif\s*', re.MULTILINE)
+    result = merge_pattern.sub('\n', result)
     
     return result.strip() + '\n'
 
@@ -265,14 +243,17 @@ def fix_linkage_conflicts(content):
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
-        last_include_pos = 0
-        for match in re.finditer(r'^#[ \t]*include.*$', content, re.MULTILINE):
-            last_include_pos = match.end()
-            
-        if last_include_pos > 0:
-            content = content[:last_include_pos] + "\n" + header_block + content[last_include_pos:]
+        
+        # FIX: Place prototypes safely before the first actual function, 
+        # completely avoiding mid-function data.inc #includes!
+        any_func_pattern = re.compile(r"^([a-zA-Z_][\w\s\*]*\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*)\{", re.MULTILINE)
+        first_func_match = any_func_pattern.search(content)
+
+        if first_func_match:
+            pos = first_func_match.start()
+            content = content[:pos] + header_block + content[pos:]
         else:
-            content = header_block + content
+            content = content + "\n" + header_block
 
     return content
 
