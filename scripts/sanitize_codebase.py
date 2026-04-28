@@ -28,43 +28,31 @@ COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
 def redirect_legacy_includes(content):
-    """
-    Redirects legacy N64 SDK headers to modern Android-compatible headers and
-    fixes missing directory prefixes for SDK headers.
-    """
-    # Redirect ultratypes to our master types file
-    content = re.sub(r'#include\s*<ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
-    content = re.sub(r'#include\s*"ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
-    content = re.sub(r'#include\s*<PR/ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
-    content = re.sub(r'#include\s*"PR/ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
+    """Fixes missing PR/ prefixes and redirects ultratypes."""
+    content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+    content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Fix missing PR/ prefix for legacy N64 SDK headers
-    # Expanded to include n_libaudio.h and other rcp/graphics headers
+    # Expanded SDK headers that MUST have PR/ prefix
     sdk_headers = [
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
         'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
         'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_vi.h',
-        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h'
+        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h',
+        'n_synth.h', 'n_synthInternals.h', 'n_libaudio_sn.h'
     ]
     
     for header in sdk_headers:
-        # Avoid double-prefixing if PR/ is already there
         content = re.sub(rf'#include\s*<(?![pP][rR]/){header}>', f'#include <PR/{header}>', content)
         content = re.sub(rf'#include\s*"(?![pP][rR]/){header}"', f'#include "PR/{header}"', content)
 
     return content
 
 def safe_token_replacement(content):
-    """
-    Safely replaces tokens in C/C++ code while ignoring comments and strings.
-    """
+    """Replaces tokens while avoiding strings and comments."""
     pattern = re.compile(
-        r'(?P<string>"(?:\\.|[^"\\])*")|'
-        r"(?P<char>'(?:\\.|[^'\\])*')|"
-        r'(?P<block_comment>/\*.*?\*/)|'
-        r'(?P<line_comment>//[^\n]*)|'
-        r'(?P<code>[^"\'/]+|/)', 
-        re.DOTALL
+        r'(?P<string>"(?:\\.|[^"\\])*")|(?P<char>\'(?:\\.|[^\'\\])*\')|'
+        r'(?P<block_comment>/\*.*?\*/)|(?P<line_comment>//[^\n]*)|'
+        r'(?P<code>[^"\'/]+|/)', re.DOTALL
     )
 
     def replacer(match):
@@ -77,15 +65,8 @@ def safe_token_replacement(content):
 
     return pattern.sub(replacer, content)
 
-def wrap_shadow_headers(content, filename):
-    shadow_headers = ['string.h', 'math.h', 'stdlib.h', 'stdio.h', 'stdarg.h', 'stddef.h', 'time.h', 'assert.h', 'stdint.h']
-    if filename in shadow_headers:
-        if '#include_next' not in content:
-            return f"#ifdef __cplusplus\n#include_next <{filename}>\n#else\n{content}\n#endif\n"
-    return content
-
 def fix_decompiler_artifacts(content, filename):
-    # 1. Fix shadowed variable names (e.g., u8 u8[10]; -> u8 buffer_u8[10];)
+    # Fix shadowed variable names (u8 u8[10] -> u8 buffer_u8[10])
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
@@ -93,47 +74,21 @@ def fix_decompiler_artifacts(content, filename):
         decl_line = rf'{indent}{type_name}\s+{var_name}\s*\['
         content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
         content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buffer_{var_name}[', content)
-        content = re.sub(rf'\b(memcpy|memset|memmove|n64_memcpy|n64_memset|n64_memmove)\s*\(\s*{var_name}\s*,', rf'\1(buffer_{var_name},', content)
 
-    # 2. Fix array assignments directly mapped from the decompiler
-    assign_pattern = re.compile(
-        rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([^;]+)\s*;',
-        re.MULTILINE
-    )
-
+    # Convert illegal array assignments to memcpy
+    assign_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([^;]+)\s*;', re.MULTILINE)
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
-        final_name = f"buffer_{name}" if dtype == name else name
-
-        if src.startswith('{') and src.endswith('}'):
-            return f"{indent}{dtype} {final_name}[{size}] = {src};"
-
-        return f"{indent}{dtype} {final_name}[{size}];\n{indent}n64_memcpy({final_name}, {src}, {size} * sizeof({dtype}));"
-
+        if src.startswith('{'): return match.group(0)
+        return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
+    
     content = assign_pattern.sub(array_to_memcpy, content)
-
-    # 3. Emergency tmp buffer injection (Thread-safe)
-    is_tmp_used = '[tmp]' in content or 'tmp[' in content
-    is_tmp_declared = bool(re.search(r'\b\w+\s+\**tmp\b\s*(?:\[|;|=)', content))
-
-    if is_tmp_used and not is_tmp_declared:
-        tmp_decl = "\n/* Emergency Decompiler Fix (Thread-Safe) */\n#ifdef __cplusplus\nstatic thread_local u8 tmp[1024] = {0};\n#else\nstatic _Thread_local u8 tmp[1024] = {0};\n#endif\n"
-        includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
-        if includes:
-            pos = includes[-1].end()
-            content = content[:pos] + tmp_decl + content[pos:]
-        else:
-            content = tmp_decl + content
-
-    # 4. Standard Math definition patches
-    if 'M_PI' in content and 'math.h' in content and '#define M_PI' not in content:
-        pi_fix = "\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n"
-        content = re.sub(r'^(#include <math\.h>)$', r'\1' + pi_fix, content, flags=re.MULTILINE)
-
     return content
 
 def fix_linkage_conflicts(content):
+    """Identifies missing forward declarations and inserts them safely."""
+    # Find all static function definitions
     static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
@@ -146,25 +101,17 @@ def fix_linkage_conflicts(content):
             signatures.append(decl)
             existing_decls.add(decl)
 
-    for _, func_name in matches:
-        mismatch_pattern = rf"^(?!\s)(?<!static\s)([\w\s\*]*?\b{func_name}\b\s*\([^)]*\)\s*;)"
-        content = re.sub(mismatch_pattern, r"static \1", content, flags=re.MULTILINE)
-
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
-
-        first_func_match = re.search(r"^(?:static\s+)?[\w\s\*]+\s+\w+\s*\([^)]*\)\s*\{", content, re.MULTILINE)
-
-        if first_func_match:
-            pos = first_func_match.start()
-            content = content[:pos] + header_block + "\n" + content[pos:]
+        
+        # Insert AFTER the last include to ensure we are in global scope
+        includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
+        if includes:
+            pos = includes[-1].end()
+            content = content[:pos] + "\n" + header_block + content[pos:]
         else:
-            includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
-            if includes:
-                pos = includes[-1].end()
-                content = content[:pos] + "\n" + header_block + content[pos:]
-            else:
-                content = header_block + "\n" + content
+            content = header_block + "\n" + content
+            
     return content
 
 def sanitize_codebase(root_path):
@@ -182,24 +129,14 @@ def sanitize_codebase(root_path):
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
-                except Exception: 
-                    continue
+                except Exception: continue
 
-                # 0. Redirect legacy includes and fix PR/ paths
                 content = redirect_legacy_includes(original_content)
-
-                # 1. Safely replace tokens
                 content = safe_token_replacement(content)
-
-                # 2. Fix artifacts
                 content = fix_decompiler_artifacts(content, filename)
-
-                # 3. Fix linkage
+                
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
-
-                # 4. Wrap headers
-                content = wrap_shadow_headers(content, filename)
 
                 if content != original_content:
                     with open(filepath, 'w', encoding='utf-8') as f:
@@ -210,5 +147,4 @@ def sanitize_codebase(root_path):
     print(f"✅ Sanitization Complete! {patch_count} files modified.")
 
 if __name__ == "__main__":
-    root_dir = sys.argv[1] if len(sys.argv) > 1 else "."
-    sanitize_codebase(root_dir)
+    sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
