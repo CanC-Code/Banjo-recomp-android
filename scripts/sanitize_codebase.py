@@ -102,7 +102,10 @@ def inject_extern_c(content, filename):
     new_lines = []
     
     for line in lines:
-        if re.match(r'^[ \t]*#[ \t]*include\b', line):
+        # ONLY break out of extern "C" for Standard C++ STL headers (which lack extensions like <vector>, <string>)
+        # Project-specific C headers (.h) MUST remain inside extern "C" to avoid C++ name mangling!
+        match = re.match(r'^[ \t]*#[ \t]*include[ \t]*<([^>]+)>', line)
+        if match and '.' not in match.group(1):
             new_lines.append("#ifdef __cplusplus\n}\n#endif")
             new_lines.append(line)
             new_lines.append("#ifdef __cplusplus\nextern \"C\" {\n#endif")
@@ -235,23 +238,23 @@ def fix_linkage_conflicts(content):
         if first_func_match:
             pos = first_func_match.start()
             
-            # Backtrack to the outermost active preprocessor macro to avoid hiding prototypes!
+            # Goldilocks Heuristic: Place prototypes after the final global #include/typedef/struct 
+            # but before the actual function. This resolves the "Unknown Type" errors perfectly.
             pre_text = content[:pos]
-            lines = pre_text.split('\n')
+            last_semi = pre_text.rfind(';')
             
-            active_ifs = []
-            for i, line in enumerate(lines):
-                s = line.strip()
-                if s.startswith('#if'):
-                    active_ifs.append(i)
-                elif s.startswith('#endif'):
-                    if active_ifs:
-                        active_ifs.pop()
+            last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', pre_text, re.MULTILINE))
+            last_inc = last_inc_match[-1].end() if last_inc_match else 0
             
-            insert_idx = active_ifs[0] if active_ifs else len(lines) - 1
-            if insert_idx < 0: insert_idx = 0
+            insert_idx = max(last_semi, last_inc)
             
-            content = '\n'.join(lines[:insert_idx]) + '\n' + header_block + '\n'.join(lines[insert_idx:]) + content[pos:]
+            if insert_idx > 0:
+                while insert_idx < pos and pre_text[insert_idx] in ' \t\r\n':
+                    insert_idx += 1
+            else:
+                insert_idx = 0
+                
+            content = content[:insert_idx] + header_block + content[insert_idx:]
         else:
             content = content + "\n" + header_block
 
