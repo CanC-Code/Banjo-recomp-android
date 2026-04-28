@@ -93,8 +93,7 @@ def fix_decompiler_artifacts(content, filename):
     return content
 
 def fix_linkage_conflicts(content):
-    """Identifies missing forward declarations and inserts them safely."""
-    # Find all static function definitions
+    """Identifies missing forward declarations and inserts them safely below typedefs."""
     static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
@@ -108,15 +107,18 @@ def fix_linkage_conflicts(content):
             existing_decls.add(decl)
 
     if signatures:
-        header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
+        header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        # Insert AFTER the last include to ensure we are in global scope
-        includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
-        if includes:
-            pos = includes[-1].end()
-            content = content[:pos] + "\n" + header_block + content[pos:]
+        # Locate the first actual function definition to safely insert declarations AFTER all structs/typedefs
+        any_func_pattern = re.compile(r"^([a-zA-Z_][\w\s\*]*\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*)\{", re.MULTILINE)
+        first_func_match = any_func_pattern.search(content)
+        
+        if first_func_match:
+            pos = first_func_match.start()
+            content = content[:pos] + header_block + content[pos:]
         else:
-            content = header_block + "\n" + content
+            # Fallback if no clean match is found
+            content = content + "\n" + header_block
             
     return content
 
