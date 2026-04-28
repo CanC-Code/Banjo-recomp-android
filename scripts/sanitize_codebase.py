@@ -82,11 +82,18 @@ def inject_types_include(content):
         return content[:pos] + N64_TYPES_PREAMBLE + content[pos:]
     return N64_TYPES_PREAMBLE + content
 
+def inject_extern_c(content, filename):
+    """Wrap C headers in extern "C" so the Android C++ bridge can link properly."""
+    if not filename.endswith('.h'): return content
+    if 'extern "C"' in content or '#ifdef __cplusplus' in content:
+        return content
+    
+    return "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + content + "\n\n#ifdef __cplusplus\n}\n#endif\n"
+
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Do not redirect standard library headers if this is a modern wrapper
     if not is_wrapper:
         for ch in headers_to_redirect:
             escaped_ch = ch.replace('.', r'\.')
@@ -151,7 +158,6 @@ def fix_decompiler_artifacts(content, filename):
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
-        # Protect valid C string literals or initializer lists from being broken!
         if src.startswith('{') or src.startswith('"') or src.startswith("'"): 
             return match.group(0)
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
@@ -235,7 +241,6 @@ def sanitize_codebase(root_path):
         for root, _, files in os.walk(dir_path):
             for filename in files:
                 if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
-                if filename == "n64_types.h": continue
 
                 filepath = os.path.join(root, filename)
                 try:
@@ -257,15 +262,23 @@ def sanitize_codebase(root_path):
                     continue
                     
                 # --- Core Game Code Only ---
-                content = safe_token_replacement(content)
+                
+                # Protect raw N64 typedefs from being corrupted
+                if filename != "ultratypes.h":
+                    content = safe_token_replacement(content)
+                
                 content = fix_decompiler_artifacts(content, filename)
 
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
                 
-                # Game engine .c and .h files get types prepended if needed
+                # Wrap all headers in extern "C" to allow Android wrapper linkage
+                if filename.endswith('.h'):
+                    content = inject_extern_c(content, filename)
+                
+                # Inject types include ONLY if it's not the types file itself
                 if filename.endswith(('.c', '.h')):
-                    if needs_types_injection(content):
+                    if filename != "n64_types.h" and needs_types_injection(content):
                         content = inject_types_include(content)
 
                 if content != original_content:
