@@ -57,7 +57,7 @@ N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
 def is_modern_wrapper(filepath, content):
     """
     Detect if a file is an Android/JNI wrapper or C++ bridging code.
-    These files must ONLY have their headers redirected, but NO token replacements.
+    These files must ONLY have their SDK headers redirected, NO token replacements.
     """
     if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
         return True
@@ -69,6 +69,17 @@ def is_modern_wrapper(filepath, content):
     if re.search(r'#include\s*[<"]jni\.h[">]', content):
         return True
     if re.search(r'#include\s*[<"]android/', content):
+        return True
+    return False
+
+def is_sdk_header(filepath):
+    """
+    SDK headers (like PR/os.h or ultratypes.h) define the core N64 types.
+    They must NEVER have token replacements applied, which would corrupt their typedefs!
+    """
+    path_lower = filepath.replace('\\', '/').lower()
+    parts = path_lower.split('/')
+    if 'pr' in parts or '2.0l' in parts or 'ultra64.h' in parts or 'ultratypes.h' in parts:
         return True
     return False
 
@@ -86,8 +97,7 @@ def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # CRITICAL: Do NOT redirect standard system headers (like string.h) if this is a modern wrapper.
-    # Wrappers need the actual Android NDK system headers, not the game's renamed n64_ ones!
+    # Do not redirect standard library headers if this is a modern wrapper
     if not is_wrapper:
         for ch in headers_to_redirect:
             escaped_ch = ch.replace('.', r'\.')
@@ -152,7 +162,9 @@ def fix_decompiler_artifacts(content, filename):
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
-        if src.startswith('{'): return match.group(0)
+        # Protect valid C string literals or initializer lists from being broken!
+        if src.startswith('{') or src.startswith('"') or src.startswith("'"): 
+            return match.group(0)
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
@@ -228,6 +240,7 @@ def sanitize_codebase(root_path):
 
     patch_count = 0
     wrapper_count = 0
+    sdk_count = 0
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
@@ -243,8 +256,9 @@ def sanitize_codebase(root_path):
                 except Exception: continue
 
                 is_wrapper = is_modern_wrapper(filepath, original_content)
+                is_sdk = is_sdk_header(filepath)
 
-                # Pass the is_wrapper flag to prevent standard system header renaming
+                # EVERY file (including wrappers and SDK) gets its legacy headers safely mapped
                 content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper)
 
                 if is_wrapper:
@@ -254,6 +268,14 @@ def sanitize_codebase(root_path):
                         wrapper_count += 1
                         print(f"  [Wrapper Aligned] {filepath} (Redirected SDK headers only)")
                     continue
+                    
+                if is_sdk:
+                    if content != original_content:
+                        with open(filepath, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        sdk_count += 1
+                        print(f"  [SDK Protected] {filepath} (Redirected includes only)")
+                    continue
 
                 # --- Core Game Code Only ---
                 content = safe_token_replacement(content)
@@ -261,6 +283,9 @@ def sanitize_codebase(root_path):
 
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
+                
+                # Game engine .c and .h files get types prepended if needed
+                if filename.endswith(('.c', '.h')):
                     if needs_types_injection(content):
                         content = inject_types_include(content)
 
@@ -270,7 +295,7 @@ def sanitize_codebase(root_path):
                     patch_count += 1
                     print(f"  [Sanitized] {filepath}")
 
-    print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrapper files aligned.")
+    print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers and {sdk_count} SDK headers aligned.")
 
 if __name__ == "__main__":
     sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
