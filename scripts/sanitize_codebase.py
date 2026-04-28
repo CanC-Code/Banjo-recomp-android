@@ -64,24 +64,12 @@ def needs_types_injection(content):
     return not bool(TYPES_INCLUDE_RE.search(content))
 
 def inject_types_include(content, is_c_file=False):
-    """
-    For .c files: inject AFTER the last #include line in the file so that
-    n64_types.h wins over any system header collisions pulled in transitively.
-    This prevents the force-include from being poisoned by system typedefs
-    that conflicting game headers drag in.
-
-    For .h files: inject near the top (after include guard) as before, since
-    headers must expose types to their consumers.
-    """
     if is_c_file:
-        # Strip existing n64_types.h so it can be cleanly moved to the end of the include block.
-        # This ensures idempotency while correctly repositioning it if previously injected at the top.
         content = re.sub(r'^[ \t]*#[ \t]*include[ \t]*[<"]n64_types\.h[">][ \t]*\n?', '', content, flags=re.MULTILINE)
 
     lines = content.split('\n')
 
     if is_c_file:
-        # Find the last #include line index
         last_include_idx = -1
         for i, line in enumerate(lines):
             s = line.strip()
@@ -89,14 +77,11 @@ def inject_types_include(content, is_c_file=False):
                 last_include_idx = i
 
         if last_include_idx >= 0:
-            # Insert immediately after the last include
             lines.insert(last_include_idx + 1, '#include <n64_types.h>')
         else:
-            # No includes at all — insert at top
             lines.insert(0, '#include <n64_types.h>')
         return '\n'.join(lines)
 
-    # .h file path: insert after include guard or pragma once
     insert_idx = 0
     for i, line in enumerate(lines):
         s = line.strip()
@@ -213,6 +198,14 @@ def fix_decompiler_artifacts(content, filename):
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
+
+    # Prevent struct members from shadowing global type names
+    for stype in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'f32', 'f64']:
+        content = re.sub(rf'\}\s*{stype}\s*;', f'}} {stype}_struct;', content)
+        content = re.sub(rf'\b{stype}\s+{stype}\s*;', f'{stype} {stype}_struct;', content)
+        content = re.sub(rf'\.{stype}\b', f'.{stype}_struct', content)
+        content = re.sub(rf'->{stype}\b', f'->{stype}_struct', content)
+
     return content
 
 def fix_linkage_conflicts(content):
@@ -348,8 +341,6 @@ def sanitize_codebase(root_path):
 
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
-                        # C files ALWAYS get n64_types.h appended at the end of their includes block 
-                        # to override system header poisoning, completely bypassing needs_types_injection.
                         if filename not in CORE_TYPE_HEADERS:
                             content = inject_types_include(content, is_c_file=True)
 
