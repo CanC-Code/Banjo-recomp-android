@@ -38,11 +38,13 @@ def redirect_legacy_includes(content):
     content = re.sub(r'#include\s*<PR/ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*"PR/ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Fix missing PR/ prefix for lazy N64 SDK headers (common in core audio/os files)
+    # Fix missing PR/ prefix for legacy N64 SDK headers
+    # Expanded to include n_libaudio.h and other rcp/graphics headers
     sdk_headers = [
-        'libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
-        'mbi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
-        'os_message.h', 'os_libc.h', 'os_thread.h'
+        'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
+        'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
+        'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_vi.h',
+        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h'
     ]
     
     for header in sdk_headers:
@@ -151,8 +153,6 @@ def fix_linkage_conflicts(content):
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
 
-        # INJECTION FIX: Inject declarations before the first function body.
-        # This ensures typedefs and structs defined at the top of the file are parsed first.
         first_func_match = re.search(r"^(?:static\s+)?[\w\s\*]+\s+\w+\s*\([^)]*\)\s*\{", content, re.MULTILINE)
 
         if first_func_match:
