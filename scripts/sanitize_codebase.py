@@ -87,20 +87,40 @@ def inject_types_include(content):
     return N64_TYPES_PREAMBLE + content
 
 def inject_extern_c(content, filename):
-    """Wrap C headers in extern "C" AFTER the include block to prevent C++ standard library conflicts."""
+    """
+    Intelligently wraps C headers in extern "C".
+    It wraps the whole file but temporarily breaks OUT of extern "C" for any #include directives,
+    preventing Android NDK C++ standard library conflicts.
+    """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
         return content
     
-    # Locate the final #include directive in the header
-    includes = list(re.finditer(r'^#include.*$', content, re.MULTILINE))
-    if includes:
-        pos = includes[-1].end()
-        # Inject the extern "C" guard safely beneath all system and local includes
-        return content[:pos] + "\n\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n" + content[pos:] + "\n\n#ifdef __cplusplus\n}\n#endif\n"
-    else:
-        # If no includes exist, safe to inject at the very top
-        return "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + content + "\n\n#ifdef __cplusplus\n}\n#endif\n"
+    # 1. Wrap the entire contents in extern "C"
+    guarded_content = (
+        "#ifdef __cplusplus\n"
+        "extern \"C\" {\n"
+        "#endif\n\n"
+        f"{content}\n\n"
+        "#ifdef __cplusplus\n"
+        "}\n"
+        "#endif\n"
+    )
+
+    # 2. Break out of extern "C" strictly for #include lines
+    break_out_block = (
+        "\n#ifdef __cplusplus\n"
+        "}\n"
+        "#endif\n"
+        r"\g<0>"
+        "\n#ifdef __cplusplus\n"
+        "extern \"C\" {\n"
+        "#endif\n"
+    )
+    
+    guarded_content = re.sub(r'^[ \t]*#include\s*[<"].*?[">].*$', break_out_block, guarded_content, flags=re.MULTILINE)
+    
+    return guarded_content
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
     # Fix: Prevent ALL root type headers from redirecting their own internal ultratypes.h inclusion
@@ -264,7 +284,6 @@ def sanitize_codebase(root_path):
 
                 is_wrapper = is_modern_wrapper(filepath, original_content)
 
-                # EVERY file (including wrappers and SDK) gets its legacy headers safely mapped
                 content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
 
                 if is_wrapper:
@@ -292,12 +311,10 @@ def sanitize_codebase(root_path):
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
                 
-                # IMPORTANT: Inject Types Header BEFORE parsing includes for extern "C"
                 if filename.endswith(('.c', '.h')):
                     if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
                         content = inject_types_include(content)
 
-                # IMPORTANT: Inject extern "C" AFTER the types header has settled
                 if filename.endswith('.h'):
                     content = inject_extern_c(content, filename)
 
