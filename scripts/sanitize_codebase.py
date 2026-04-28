@@ -198,14 +198,22 @@ def fix_decompiler_artifacts(content, filename):
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
+    return content
 
-    # Prevent struct members from shadowing global type names
-    for stype in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'f32', 'f64']:
-        content = re.sub(rf'\}\s*{stype}\s*;', f'}} {stype}_struct;', content)
-        content = re.sub(rf'\b{stype}\s+{stype}\s*;', f'{stype} {stype}_struct;', content)
-        content = re.sub(rf'\.{stype}\b', f'.{stype}_struct', content)
-        content = re.sub(rf'->{stype}\b', f'->{stype}_struct', content)
-
+def fix_struct_shadowing(content):
+    """
+    Fixes compiler shadowing issues where a struct/union member is explicitly named 
+    'u8', 's8', etc., hiding the actual global typedefs from Clang.
+    """
+    for shadow_type in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64']:
+        # Match pattern `} u8;` accommodating varied spacing
+        pat = re.compile(rf'\}\s*{shadow_type}\s*;')
+        if pat.search(content):
+            # Rename definition (e.g. `} u8;` -> `} u8_struct;`)
+            content = pat.sub(f'}} {shadow_type}_struct;', content)
+            # Rename accessors (e.g. `.u8.` -> `.u8_struct.`)
+            content = content.replace(f".{shadow_type}.", f".{shadow_type}_struct.")
+            content = content.replace(f"->{shadow_type}.", f"->{shadow_type}_struct.")
     return content
 
 def fix_linkage_conflicts(content):
@@ -338,6 +346,7 @@ def sanitize_codebase(root_path):
                         content = safe_token_replacement(content, COMPILED_TOKENS)
 
                     content = fix_decompiler_artifacts(content, filename)
+                    content = fix_struct_shadowing(content)
 
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
