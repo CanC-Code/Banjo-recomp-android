@@ -75,26 +75,18 @@ def needs_types_injection(content):
 
 def inject_types_include(content):
     """
-    Intelligently injects the types header safely inside the header guard to preserve 
-    compiler optimizations, rather than forcefully overriding the file top.
+    Safely injects the root types header at the very top of the file, preserving
+    any `#pragma once` optimizer hints without disrupting struct parsing.
     """
     lines = content.split('\n')
     insert_idx = 0
-    
     for i, line in enumerate(lines):
         s = line.strip()
-        if not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'): continue
-        if re.match(r'^#[ \t]*include\b', s): continue
-        if re.match(r'^#[ \t]*ifndef\b', s) or re.match(r'^#[ \t]*if[ \t]+!defined\b', s):
-            # Header guard found. Scan slightly ahead to place it beneath the #define
-            for j in range(i+1, min(i+5, len(lines))):
-                if re.match(r'^#[ \t]*define\b', lines[j].strip()):
-                    insert_idx = j + 1
-                    break
-            if insert_idx == 0:
-                insert_idx = i + 1
-        elif re.match(r'^#[ \t]*pragma[ \t]+once\b', s):
+        if re.match(r'^#[ \t]*pragma[ \t]+once\b', s):
             insert_idx = i + 1
+            break
+        elif not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'):
+            continue
         break
         
     lines.insert(insert_idx, '#include <n64_types.h>')
@@ -102,89 +94,55 @@ def inject_types_include(content):
 
 def inject_extern_c(content, filename):
     """
-    Safely injects extern "C" { strictly at file-level scope. 
-    It will locate the last file-scoped include and cleanly separate standard library imports 
-    from C linkage, without breaking internal #ifdef macro blocks.
+    Wraps the entire file in extern "C", but surgically breaks OUT of C-linkage
+    for any `#include` directives. By tracking block comments and structural braces, 
+    it strictly preserves Android NDK standard libraries while ensuring C declarations 
+    link correctly against the modern JNI wrappers.
     """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
         return content
-        
+
     lines = content.split('\n')
-    
-    # 1. Determine if there's a standard header guard at the top
-    has_header_guard = False
-    guard_depth = 0
-    for line in lines:
-        s = line.strip()
-        if not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'): continue
-        if re.match(r'^#[ \t]*include\b', s): continue
-        if re.match(r'^#[ \t]*ifndef\b', s) or re.match(r'^#[ \t]*if[ \t]+!defined\b', s):
-            has_header_guard = True
-            guard_depth = 1
-        break
-
-    # 2. Track `#if` depth line-by-line
-    depths = []
-    current_depth = 0
-    in_multiline = False
+    new_lines = []
+    brace_depth = 0
+    in_block_comment = False
     
     for line in lines:
-        depths.append(current_depth)
-        s = line.strip()
+        s = line
         
-        if in_multiline:
-            if not s.endswith('\\'): in_multiline = False
-            continue
+        # Remove single-line block comments to accurately evaluate structure
+        s = re.sub(r'/\*.*?\*/', '', s)
+        
+        if in_block_comment:
+            if '*/' in s:
+                s = s[s.find('*/') + 2:]
+                in_block_comment = False
+            else:
+                s = ''
+        
+        if not in_block_comment and '/*' in s:
+            in_block_comment = True
+            s = s[:s.find('/*')]
             
-        if s.startswith('#'):
-            if s.endswith('\\'): in_multiline = True
-            if re.match(r'^#[ \t]*if\b', s) or re.match(r'^#[ \t]*ifdef\b', s) or re.match(r'^#[ \t]*ifndef\b', s):
-                current_depth += 1
-            elif re.match(r'^#[ \t]*endif\b', s):
-                current_depth = max(0, current_depth - 1)
-                
-    # 3. Find the last #include in the file at the root depth ONLY
-    last_include_idx = -1
-    for i, line in enumerate(lines):
-        if re.match(r'^[ \t]*#[ \t]*include\b', line.strip()) and depths[i] <= guard_depth:
-            last_include_idx = i
-            
-    # 4. Safely locate injection points
-    insert_idx = 0
-    if last_include_idx != -1:
-        insert_idx = last_include_idx + 1
-    else:
-        if has_header_guard:
-            for i, line in enumerate(lines):
-                if re.match(r'^#[ \t]*define\b', line.strip()) and depths[i] == 1:
-                    insert_idx = i + 1
-                    break
-            if insert_idx == 0:
-                insert_idx = 1
-                
-    last_endif_idx = len(lines)
-    if has_header_guard:
-        for i in range(len(lines)-1, -1, -1):
-            if re.match(r'^#[ \t]*endif\b', lines[i].strip()) and depths[i] == 1:
-                last_endif_idx = i
-                break
-                
-    if insert_idx > last_endif_idx:
-        insert_idx = last_endif_idx
+        s = re.sub(r'//.*', '', s)
+        s_strip = s.strip()
+        
+        # Count structural braces to ensure we aren't breaking out inside an array/struct declaration
+        brace_depth += s.count('{') - s.count('}')
+        
+        if brace_depth == 0 and re.match(r'^#[ \t]*include\b', s_strip):
+            new_lines.append("#ifdef __cplusplus\n}\n#endif")
+            new_lines.append(line)
+            new_lines.append("#ifdef __cplusplus\nextern \"C\" {\n#endif")
+        else:
+            new_lines.append(line)
 
-    # 5. Reconstruct perfectly linked file
-    top = '\n'.join(lines[:insert_idx])
-    mid = '\n'.join(lines[insert_idx:last_endif_idx])
-    bot = '\n'.join(lines[last_endif_idx:])
+    result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
     
-    guard_open = "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
-    guard_close = "\n#ifdef __cplusplus\n}\n#endif\n"
-    
-    if last_endif_idx == len(lines):
-        return (top + guard_open + mid + guard_close).strip() + "\n"
-    else:
-        return (top + guard_open + mid + guard_close + bot).strip() + "\n"
+    # Clean up any redundant consecutive extern "C" blocks created by clustered includes
+    result = re.sub(r'#ifdef __cplusplus\nextern "C" \{\n#endif\n*#ifdef __cplusplus\n\}\n#endif\n*', '', result)
+    return result
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
     if filename not in CORE_TYPE_HEADERS:
@@ -296,14 +254,14 @@ def fix_linkage_conflicts(content):
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
-        any_func_pattern = re.compile(r"^([a-zA-Z_][\w\s\*]*\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*)\{", re.MULTILINE)
-        first_func_match = any_func_pattern.search(content)
-
-        if first_func_match:
-            pos = first_func_match.start()
-            content = content[:pos] + header_block + content[pos:]
+        last_include_pos = 0
+        for match in re.finditer(r'^#[ \t]*include.*$', content, re.MULTILINE):
+            last_include_pos = match.end()
+            
+        if last_include_pos > 0:
+            content = content[:last_include_pos] + "\n" + header_block + content[last_include_pos:]
         else:
-            content = content + "\n" + header_block
+            content = header_block + content
 
     return content
 
