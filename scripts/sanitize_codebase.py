@@ -58,15 +58,10 @@ N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
-    """
-    Detect if a file is an Android/JNI wrapper or C++ bridging code.
-    These files must ONLY have their SDK headers redirected, NO token replacements.
-    """
     if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
         return True
         
     path_lower = filepath.replace('\\', '/').lower()
-    
     if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
     
@@ -88,42 +83,81 @@ def inject_types_include(content):
 
 def inject_extern_c(content, filename):
     """
-    Intelligently wraps C headers in extern "C".
-    It wraps the whole file but temporarily breaks OUT of extern "C" for any #include directives,
-    preventing Android NDK C++ standard library conflicts.
+    Intelligently parses the C header structure to inject extern "C" {
+    AFTER header guards and includes, but BEFORE C declarations.
     """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
         return content
+        
+    lines = content.split('\n')
+    insert_idx = 0
+    depth = 0
+    in_multiline_macro = False
+    macro_depth_1 = False
     
-    # 1. Wrap the entire contents in extern "C"
-    guarded_content = (
-        "#ifdef __cplusplus\n"
-        "extern \"C\" {\n"
-        "#endif\n\n"
-        f"{content}\n\n"
-        "#ifdef __cplusplus\n"
-        "}\n"
-        "#endif\n"
-    )
-
-    # 2. Break out of extern "C" strictly for #include lines
-    break_out_block = (
-        "\n#ifdef __cplusplus\n"
-        "}\n"
-        "#endif\n"
-        r"\g<0>"
-        "\n#ifdef __cplusplus\n"
-        "extern \"C\" {\n"
-        "#endif\n"
-    )
+    # 1. Find the safe injection index immediately following top-level includes/guards
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s: continue
+        
+        # Handle line continuations for macros
+        if in_multiline_macro:
+            if not s.endswith('\\'):
+                in_multiline_macro = False
+                if macro_depth_1:
+                    insert_idx = i + 1
+            continue
+            
+        # Skip pure comments
+        if s.startswith('//') or s.startswith('/*') or s.startswith('*'): 
+            continue
+            
+        # Parse Preprocessor Directives
+        if s.startswith('#'):
+            is_multiline = s.endswith('\\')
+            if is_multiline:
+                in_multiline_macro = True
+                macro_depth_1 = (depth <= 1 and s.startswith('#define'))
+                
+            if s.startswith('#if') or s.startswith('#ifdef') or s.startswith('#ifndef'):
+                depth += 1
+                if depth == 1 and not is_multiline: 
+                    insert_idx = i + 1
+            elif s.startswith('#define'):
+                if depth <= 1 and not is_multiline: 
+                    insert_idx = i + 1
+            elif s.startswith('#endif'):
+                depth = max(0, depth - 1)
+            elif s.startswith('#include'):
+                if depth <= 1 and not is_multiline: 
+                    insert_idx = i + 1
+            continue
+            
+        # Real C code reached (structs, externs, typedefs), stop scanning!
+        break
+        
+    # 2. Find the last #endif to cleanly wrap the header guard
+    last_endif_idx = len(lines)
+    for i in range(len(lines)-1, -1, -1):
+        if lines[i].strip().startswith('#endif'):
+            last_endif_idx = i
+            break
+            
+    # 3. Reconstruct the file with perfect C++ linkage
+    top = '\n'.join(lines[:insert_idx])
+    mid = '\n'.join(lines[insert_idx:last_endif_idx])
+    bot = '\n'.join(lines[last_endif_idx:])
     
-    guarded_content = re.sub(r'^[ \t]*#include\s*[<"].*?[">].*$', break_out_block, guarded_content, flags=re.MULTILINE)
+    guard_open = "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
+    guard_close = "\n#ifdef __cplusplus\n}\n#endif\n"
     
-    return guarded_content
+    if last_endif_idx == len(lines):
+        return (top + guard_open + mid + guard_close).strip() + "\n"
+    else:
+        return (top + guard_open + mid + guard_close + bot).strip() + "\n"
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
-    # Fix: Prevent ALL root type headers from redirecting their own internal ultratypes.h inclusion
     if filename not in CORE_TYPE_HEADERS:
         content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
         content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
