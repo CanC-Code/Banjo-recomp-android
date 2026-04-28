@@ -111,10 +111,10 @@ def inject_extern_c(content, filename):
 
     result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
     
-    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\n*#ifdef __cplusplus\n\}\n#endif\n*', re.MULTILINE)
+    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
     result = empty_block_pattern.sub('', result)
     
-    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\n*#ifdef __cplusplus\nextern "C" \{\n#endif\n*', re.MULTILINE)
+    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\s*#ifdef __cplusplus\nextern "C" \{\n#endif\s*', re.MULTILINE)
     result = merge_pattern.sub('\n', result)
     
     return result.strip() + '\n'
@@ -222,22 +222,36 @@ def fix_linkage_conflicts(content):
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        # 1. Create a structurally invariant string matching content length exactly, stripping comments/strings
         def repl(m): return ' ' * len(m.group(0))
         clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
         clean_content = re.sub(r'//.*', repl, clean_content)
         clean_content = re.sub(r'".*?"', repl, clean_content)
         clean_content = re.sub(r"'.*?'", repl, clean_content)
 
-        # 2. Safely place prototypes precisely before the FIRST actual function definition
-        # This completely guarantees all typedefs, structs, and #includes are available!
         func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
         
         first_func_match = func_def_pattern.search(clean_content)
         
         if first_func_match:
             pos = first_func_match.start()
-            content = content[:pos] + header_block + content[pos:]
+            
+            # Backtrack to the outermost active preprocessor macro to avoid hiding prototypes!
+            pre_text = content[:pos]
+            lines = pre_text.split('\n')
+            
+            active_ifs = []
+            for i, line in enumerate(lines):
+                s = line.strip()
+                if s.startswith('#if'):
+                    active_ifs.append(i)
+                elif s.startswith('#endif'):
+                    if active_ifs:
+                        active_ifs.pop()
+            
+            insert_idx = active_ifs[0] if active_ifs else len(lines) - 1
+            if insert_idx < 0: insert_idx = 0
+            
+            content = '\n'.join(lines[:insert_idx]) + '\n' + header_block + '\n'.join(lines[insert_idx:]) + content[pos:]
         else:
             content = content + "\n" + header_block
 
