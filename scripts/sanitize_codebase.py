@@ -27,6 +27,17 @@ COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
+def redirect_legacy_includes(content):
+    """
+    Redirects legacy N64 SDK headers to modern Android-compatible headers.
+    Processed before safe token replacement to avoid string-protection conflicts.
+    """
+    content = re.sub(r'#include\s*<ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
+    content = re.sub(r'#include\s*"ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
+    content = re.sub(r'#include\s*<PR/ultratypes\.h>', '/* Redirected */ #include <n64_types.h>', content)
+    content = re.sub(r'#include\s*"PR/ultratypes\.h"', '/* Redirected */ #include <n64_types.h>', content)
+    return content
+
 def safe_token_replacement(content):
     """
     Safely replaces tokens in C/C++ code while ignoring comments and strings.
@@ -156,8 +167,11 @@ def sanitize_codebase(root_path):
                 except Exception: 
                     continue
 
+                # 0. Redirect legacy includes
+                content = redirect_legacy_includes(original_content)
+
                 # 1. Safely replace tokens (ignores strings and comments)
-                content = safe_token_replacement(original_content)
+                content = safe_token_replacement(content)
 
                 # 2. Fix array assignments and uninitialized tmp variables
                 content = fix_decompiler_artifacts(content, filename)
