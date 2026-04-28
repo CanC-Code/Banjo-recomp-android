@@ -54,12 +54,15 @@ TYPES_INCLUDE_PATTERNS = [
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
 
-def should_ignore_file(filepath, content):
+def is_modern_wrapper(filepath, content):
     """
-    Skip Android/JNI wrappers to avoid breaking native system compilation.
-    These files rely on standard C++ types and should NOT receive N64 replacements.
+    Detect if a file is an Android/JNI wrapper or C++ bridging code.
+    These files must ONLY have their headers redirected, but NO token replacements.
     """
-    # Use full path to properly detect wrapper directory structures
+    # Any C++ file is intrinsically modern wrapper/port code
+    if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
+        return True
+        
     path_lower = filepath.replace('\\', '/').lower()
     if "wrapper" in path_lower or "jni" in path_lower or "android" in path_lower:
         return True
@@ -222,14 +225,14 @@ def sanitize_codebase(root_path):
                     print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
-    skip_count = 0
+    wrapper_count = 0
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                # REVERTED: Strict extensions filter - avoid C++ standard system wrappers
-                if not filename.endswith(('.c', '.h')): continue
+                # Process all valid C/C++ extensions
+                if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
                 if filename == "n64_types.h": continue
 
                 filepath = os.path.join(root, filename)
@@ -238,13 +241,21 @@ def sanitize_codebase(root_path):
                         original_content = f.read()
                 except Exception: continue
 
-                # FIX: Check the *filepath* rather than filename so we filter wrapper folders correctly
-                if should_ignore_file(filepath, original_content):
-                    skip_count += 1
-                    print(f"  [Skipped] {filepath} (Android/JNI wrapper)")
+                is_wrapper = is_modern_wrapper(filepath, original_content)
+
+                # CRITICAL: EVERY file (including wrappers) must have its headers redirected.
+                # If a wrapper isn't redirected, it will hit system headers instead of the renamed game headers!
+                content = redirect_legacy_includes(original_content, headers_to_redirect)
+
+                if is_wrapper:
+                    if content != original_content:
+                        with open(filepath, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        wrapper_count += 1
+                        print(f"  [Wrapper Aligned] {filepath} (Redirected headers only)")
                     continue
 
-                content = redirect_legacy_includes(original_content, headers_to_redirect)
+                # --- Core Game Code Only (Wrappers skip this part entirely) ---
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
 
@@ -259,7 +270,7 @@ def sanitize_codebase(root_path):
                     patch_count += 1
                     print(f"  [Sanitized] {filepath}")
 
-    print(f"✅ Sanitization Complete! {patch_count} files modified. {skip_count} wrappers safely skipped.")
+    print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrapper files aligned.")
 
 if __name__ == "__main__":
     sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
