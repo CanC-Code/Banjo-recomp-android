@@ -24,6 +24,17 @@ typedef int64_t   s64;
 typedef float     f32;
 typedef double    f64;
 
+// Sanitizer script type mappings
+typedef s32       n64_bool;
+
+#ifndef TRUE
+#define TRUE 1
+#endif
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+
 // Wrap SDK in extern "C" for C++ compatibility
 #ifdef __cplusplus
 extern "C" {
@@ -35,5 +46,9 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+// Restore legacy N64 NULL definition for float initializers
+#undef NULL
+#define NULL 0
 
 #endif // N64_TYPES_H
