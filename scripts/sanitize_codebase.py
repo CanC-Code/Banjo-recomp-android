@@ -5,7 +5,6 @@ import sys
 TARGET_DIRS = ["src", "include"]
 CONFLICTING_HEADERS = ["string.h", "time.h", "math.h", "stdlib.h", "stdio.h", "stdarg.h", "stdint.h", "bool.h"]
 
-# Pre-compile the token replacements for performance
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "TRUE",
@@ -23,8 +22,6 @@ TOKEN_REPLACEMENTS = {
     r"\bprintf\b": "n64_printf",
     r"\bsin\b": "n64_sin",
     r"\bcos\b": "n64_cos",
-
-    # N64 SDK Volatile Types Resolution
     r"\bvu8\b": "volatile u8",
     r"\bvs8\b": "volatile s8",
     r"\bvu16\b": "volatile u16",
@@ -40,17 +37,50 @@ COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
+# Patterns that indicate n64 types are already available
+TYPES_INCLUDE_PATTERNS = [
+    r'#include\s*[<"]n64_types\.h[">]',
+    r'#include\s*[<"]ultra64\.h[">]',
+    r'#include\s*[<"]PR/ultra64\.h[">]',
+    r'#include\s*[<"]2\.0L/ultra64\.h[">]',
+    r'#include\s*[<"]core2/core2\.h[">]',
+    r'#include\s*[<"]core1/core1\.h[">]',
+    r'#include\s*[<"]functions\.h[">]',
+    r'#include\s*[<"]structs\.h[">]',
+    r'#include\s*[<"]osint\.h[">]',
+    r'#include\s*[<"]piint\.h[">]',
+    r'#include\s*[<"]PR/os\.h[">]',
+    r'#include\s*[<"]n64_bool\.h[">]',
+]
+TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
+
+N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
+
+
+def needs_types_injection(content):
+    """Return True if the file has no include that would pull in u8/s8/etc."""
+    return not bool(TYPES_INCLUDE_RE.search(content))
+
+
+def inject_types_include(content):
+    """Prepend n64_types.h include before the first #include or at top of file."""
+    # Try to insert after any leading comments/license block
+    first_include = re.search(r'^#include', content, re.MULTILINE)
+    if first_include:
+        pos = first_include.start()
+        return content[:pos] + N64_TYPES_PREAMBLE + content[pos:]
+    # No includes at all — prepend
+    return N64_TYPES_PREAMBLE + content
+
+
 def redirect_legacy_includes(content):
-    """Fixes missing PR/ prefixes and redirects ultratypes."""
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Redirect shadowed standard headers (including bool.h)
     for ch in CONFLICTING_HEADERS:
         escaped_ch = ch.replace('.', r'\.')
         content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
-    # Expanded SDK headers that MUST have PR/ prefix
     sdk_headers = [
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h',
         'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
@@ -72,7 +102,6 @@ def redirect_legacy_includes(content):
         content = re.sub(rf'#include\s*<(?![pP][rR]/){header}>', f'#include <PR/{header}>', content)
         content = re.sub(rf'#include\s*"(?![pP][rR]/){header}"', f'#include "PR/{header}"', content)
 
-    # REVERSAL: Fix files broken by previous aggressive PR/ targeting
     content = re.sub(r'#include\s*[<"]PR/n_synth\.h[">]', '#include "n_synth.h"', content)
     content = re.sub(r'#include\s*[<"]PR/n_synthInternals\.h[">]', '#include "n_synthInternals.h"', content)
     content = re.sub(r'#include\s*[<"]PR/synthInternals\.h[">]', '#include "synthInternals.h"', content)
@@ -80,8 +109,8 @@ def redirect_legacy_includes(content):
 
     return content
 
+
 def safe_token_replacement(content):
-    """Replaces tokens while avoiding strings and comments."""
     pattern = re.compile(
         r'(?P<string>"(?:\\.|[^"\\])*")|(?P<char>\'(?:\\.|[^\'\\])*\')|'
         r'(?P<block_comment>/\*.*?\*/)|(?P<line_comment>//[^\n]*)|'
@@ -98,8 +127,8 @@ def safe_token_replacement(content):
 
     return pattern.sub(replacer, content)
 
+
 def fix_decompiler_artifacts(content, filename):
-    # Fix shadowed variable names (u8 u8[10] -> u8 buffer_u8[10])
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
 
@@ -108,8 +137,8 @@ def fix_decompiler_artifacts(content, filename):
         content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
         content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buffer_{var_name}[', content)
 
-    # Convert illegal array assignments to memcpy
     assign_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([^;]+)\s*;', re.MULTILINE)
+
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
@@ -119,10 +148,8 @@ def fix_decompiler_artifacts(content, filename):
     content = assign_pattern.sub(array_to_memcpy, content)
     return content
 
-def fix_linkage_conflicts(content):
-    """Resolves conflicts between static definitions and non-static prototypes, and adds missing decls."""
 
-    # 1. Resolve conflicts: If a function has a static definition but a non-static prototype, strip 'static'.
+def fix_linkage_conflicts(content):
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1)
@@ -139,7 +166,6 @@ def fix_linkage_conflicts(content):
         if has_non_static_proto:
             content = content.replace("static " + full_sig, full_sig)
 
-    # 2. Add missing forward declarations for remaining static functions
     static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
@@ -168,11 +194,10 @@ def fix_linkage_conflicts(content):
 
     return content
 
+
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
 
-    # Proactively rename all potentially conflicting standard headers,
-    # searching all include subdirectories
     include_search_dirs = [
         "include",
         os.path.join("include", "2.0L"),
@@ -207,6 +232,9 @@ def sanitize_codebase(root_path):
 
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
+                    # Inject n64_types.h if no type-providing include exists
+                    if needs_types_injection(content):
+                        content = inject_types_include(content)
 
                 if content != original_content:
                     with open(filepath, 'w', encoding='utf-8') as f:
@@ -215,6 +243,7 @@ def sanitize_codebase(root_path):
                     print(f"  [Sanitized] {filepath}")
 
     print(f"✅ Sanitization Complete! {patch_count} files modified.")
+
 
 if __name__ == "__main__":
     sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
