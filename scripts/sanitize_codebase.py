@@ -54,14 +54,16 @@ TYPES_INCLUDE_PATTERNS = [
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
 
-def should_ignore_file(filename, content):
+def should_ignore_file(filepath, content):
     """
     Skip Android/JNI wrappers to avoid breaking native system compilation.
     These files rely on standard C++ types and should NOT receive N64 replacements.
     """
-    name_lower = filename.lower()
-    if "wrapper" in name_lower or "jni" in name_lower:
+    # Use full path to properly detect wrapper directory structures
+    path_lower = filepath.replace('\\', '/').lower()
+    if "wrapper" in path_lower or "jni" in path_lower or "android" in path_lower:
         return True
+    
     if re.search(r'#include\s*[<"]jni\.h[">]', content):
         return True
     if re.search(r'#include\s*[<"]android/', content):
@@ -226,7 +228,8 @@ def sanitize_codebase(root_path):
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                if not filename.endswith(('.c', '.h', '.cpp', '.hpp')): continue
+                # REVERTED: Strict extensions filter - avoid C++ standard system wrappers
+                if not filename.endswith(('.c', '.h')): continue
                 if filename == "n64_types.h": continue
 
                 filepath = os.path.join(root, filename)
@@ -235,8 +238,8 @@ def sanitize_codebase(root_path):
                         original_content = f.read()
                 except Exception: continue
 
-                # NEW: Skip Android Wrappers and JNI files!
-                if should_ignore_file(filename, original_content):
+                # FIX: Check the *filepath* rather than filename so we filter wrapper folders correctly
+                if should_ignore_file(filepath, original_content):
                     skip_count += 1
                     print(f"  [Skipped] {filepath} (Android/JNI wrapper)")
                     continue
@@ -245,7 +248,7 @@ def sanitize_codebase(root_path):
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
 
-                if filename.endswith(('.c', '.cpp')):
+                if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
                     if needs_types_injection(content):
                         content = inject_types_include(content)
