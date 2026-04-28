@@ -111,10 +111,10 @@ def inject_extern_c(content, filename):
 
     result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
     
-    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
+    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\n*#ifdef __cplusplus\n\}\n#endif\n*', re.MULTILINE)
     result = empty_block_pattern.sub('', result)
     
-    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\s*#ifdef __cplusplus\nextern "C" \{\n#endif\s*', re.MULTILINE)
+    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\n*#ifdef __cplusplus\nextern "C" \{\n#endif\n*', re.MULTILINE)
     result = merge_pattern.sub('\n', result)
     
     return result.strip() + '\n'
@@ -158,19 +158,13 @@ def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, fil
     return content
 
 def safe_token_replacement(content, tokens=COMPILED_TOKENS):
-    """
-    Dramatically optimized token replacement utilizing structural re.split().
-    Prevents catastrophic regex backtracking and memory exhaustion on enormous C source arrays.
-    """
     parts = re.split(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*)', content, flags=re.DOTALL)
-    
     for i in range(0, len(parts), 2):
         if parts[i]:
             code_chunk = parts[i]
             for pat, repl in tokens:
                 code_chunk = pat.sub(repl, code_chunk)
             parts[i] = code_chunk
-            
     return "".join(parts)
 
 def fix_decompiler_artifacts(content, filename):
@@ -228,19 +222,24 @@ def fix_linkage_conflicts(content):
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        # Safely insert exactly after the last global #include, perfectly averting mid-function injections.
-        last_safe_pos = 0
-        for match in re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', content, re.MULTILINE):
-            pos = match.start()
-            prefix = content[:pos]
-            if '{' in prefix or ';' in prefix:
-                break
-            last_safe_pos = match.end()
-            
-        if last_safe_pos > 0:
-            content = content[:last_safe_pos] + "\n" + header_block + content[last_safe_pos:]
+        # 1. Create a structurally invariant string matching content length exactly, stripping comments/strings
+        def repl(m): return ' ' * len(m.group(0))
+        clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
+        clean_content = re.sub(r'//.*', repl, clean_content)
+        clean_content = re.sub(r'".*?"', repl, clean_content)
+        clean_content = re.sub(r"'.*?'", repl, clean_content)
+
+        # 2. Safely place prototypes precisely before the FIRST actual function definition
+        # This completely guarantees all typedefs, structs, and #includes are available!
+        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
+        
+        first_func_match = func_def_pattern.search(clean_content)
+        
+        if first_func_match:
+            pos = first_func_match.start()
+            content = content[:pos] + header_block + content[pos:]
         else:
-            content = header_block + content
+            content = content + "\n" + header_block
 
     return content
 
