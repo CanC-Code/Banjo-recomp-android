@@ -38,19 +38,20 @@ COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
+# FIX: Only match headers that directly define primitive N64 typedefs (u8, s8, etc.).
+# Removed: core2/core2.h, core1/core1.h, functions.h, structs.h, osint.h, piint.h,
+#          PR/os.h, n64_bool.h — none of these guarantee u8/s8/u16/etc. are defined,
+#          causing needs_types_injection() to return False for files like dialog.c that
+#          include structs.h but never get n64_types.h injected, producing:
+#          error: unknown type name 'u8'
+# Added:   ultratypes.h, PR/ultratypes.h — actual typedef sources.
 TYPES_INCLUDE_PATTERNS = [
     r'#include\s*[<"]n64_types\.h[">]',
     r'#include\s*[<"]ultra64\.h[">]',
     r'#include\s*[<"]PR/ultra64\.h[">]',
     r'#include\s*[<"]2\.0L/ultra64\.h[">]',
-    r'#include\s*[<"]core2/core2\.h[">]',
-    r'#include\s*[<"]core1/core1\.h[">]',
-    r'#include\s*[<"]functions\.h[">]',
-    r'#include\s*[<"]structs\.h[">]',
-    r'#include\s*[<"]osint\.h[">]',
-    r'#include\s*[<"]piint\.h[">]',
-    r'#include\s*[<"]PR/os\.h[">]',
-    r'#include\s*[<"]n64_bool\.h[">]',
+    r'#include\s*[<"]ultratypes\.h[">]',
+    r'#include\s*[<"]PR/ultratypes\.h[">]',
 ]
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 
@@ -236,10 +237,8 @@ def fix_linkage_conflicts(content):
         if first_func_match:
             pos = first_func_match.start()
             
-            # The exact masked array mapping to resolve the index bounds correctly
             clean_pre_text = clean_content[:pos]
             
-            # Step safely past the semicolon offset explicitly
             last_semi = clean_pre_text.rfind(';')
             last_semi_pos = last_semi + 1 if last_semi != -1 else 0
             
@@ -252,7 +251,6 @@ def fix_linkage_conflicts(content):
             insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
             
             if insert_idx > 0:
-                # Step over formatting space exclusively without disturbing struct/typedef blocks
                 while insert_idx < pos and content[insert_idx] in ' \t\r\n':
                     insert_idx += 1
             else:
