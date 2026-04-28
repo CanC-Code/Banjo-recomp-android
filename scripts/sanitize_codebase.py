@@ -3,7 +3,7 @@ import re
 import sys
 
 TARGET_DIRS = ["src", "include"]
-CONFLICTING_HEADERS = ["string.h", "time.h", "math.h", "stdlib.h", "stdio.h", "stdarg.h", "stdint.h"]
+CONFLICTING_HEADERS = ["string.h", "time.h", "math.h", "stdlib.h", "stdio.h", "stdarg.h", "stdint.h", "bool.h"]
 
 # Pre-compile the token replacements for performance
 TOKEN_REPLACEMENTS = {
@@ -23,7 +23,7 @@ TOKEN_REPLACEMENTS = {
     r"\bprintf\b": "n64_printf",
     r"\bsin\b": "n64_sin",
     r"\bcos\b": "n64_cos",
-    
+
     # N64 SDK Volatile Types Resolution
     r"\bvu8\b": "volatile u8",
     r"\bvs8\b": "volatile s8",
@@ -45,14 +45,14 @@ def redirect_legacy_includes(content):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Redirect shadowed standard headers
+    # Redirect shadowed standard headers (including bool.h)
     for ch in CONFLICTING_HEADERS:
         escaped_ch = ch.replace('.', r'\.')
         content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
-    # Expanded SDK headers that MUST have PR/ prefix (Removed n_synth.h and related files)
+    # Expanded SDK headers that MUST have PR/ prefix
     sdk_headers = [
-        'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
+        'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h',
         'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
         'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_vi.h',
         'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h',
@@ -125,10 +125,9 @@ def fix_linkage_conflicts(content):
     # 1. Resolve conflicts: If a function has a static definition but a non-static prototype, strip 'static'.
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
-        full_sig = match.group(1) # e.g. "void __codeBF0_draw(Actor *this) {"
+        full_sig = match.group(1)
         func_name = match.group(2)
 
-        # Look for any non-static prototype for this function
         proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
         for p_match in proto_pattern.finditer(content):
@@ -138,7 +137,6 @@ def fix_linkage_conflicts(content):
                 break
 
         if has_non_static_proto:
-            # Demote the definition from static to non-static
             content = content.replace("static " + full_sig, full_sig)
 
     # 2. Add missing forward declarations for remaining static functions
@@ -150,7 +148,6 @@ def fix_linkage_conflicts(content):
     added_funcs = set()
 
     for full_sig, func_name in matches:
-        # Check if prototype exists (static or otherwise)
         has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
 
         if not has_prototype and func_name not in added_funcs:
@@ -174,12 +171,18 @@ def fix_linkage_conflicts(content):
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
 
-    # Proactively rename all potentially conflicting standard headers
+    # Proactively rename all potentially conflicting standard headers,
+    # searching all include subdirectories
+    include_search_dirs = [
+        "include",
+        os.path.join("include", "2.0L"),
+        os.path.join("include", "2.0L", "PR"),
+    ]
     for ch in CONFLICTING_HEADERS:
-        for sub_dir in ["include", os.path.join("include", "2.0L")]:
+        for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-            if os.path.exists(old_path):
+            if os.path.exists(old_path) and not os.path.exists(new_path):
                 os.rename(old_path, new_path)
                 print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
