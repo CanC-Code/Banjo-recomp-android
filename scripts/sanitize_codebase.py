@@ -53,6 +53,7 @@ TYPES_INCLUDE_PATTERNS = [
 ]
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
+
 # Define core type headers universally
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
@@ -86,12 +87,20 @@ def inject_types_include(content):
     return N64_TYPES_PREAMBLE + content
 
 def inject_extern_c(content, filename):
-    """Wrap C headers in extern "C" so the Android C++ bridge can link properly."""
+    """Wrap C headers in extern "C" AFTER the include block to prevent C++ standard library conflicts."""
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
         return content
     
-    return "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + content + "\n\n#ifdef __cplusplus\n}\n#endif\n"
+    # Locate the final #include directive in the header
+    includes = list(re.finditer(r'^#include.*$', content, re.MULTILINE))
+    if includes:
+        pos = includes[-1].end()
+        # Inject the extern "C" guard safely beneath all system and local includes
+        return content[:pos] + "\n\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n" + content[pos:] + "\n\n#ifdef __cplusplus\n}\n#endif\n"
+    else:
+        # If no includes exist, safe to inject at the very top
+        return "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + content + "\n\n#ifdef __cplusplus\n}\n#endif\n"
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
     # Fix: Prevent ALL root type headers from redirecting their own internal ultratypes.h inclusion
@@ -283,12 +292,14 @@ def sanitize_codebase(root_path):
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
                 
-                if filename.endswith('.h'):
-                    content = inject_extern_c(content, filename)
-                
+                # IMPORTANT: Inject Types Header BEFORE parsing includes for extern "C"
                 if filename.endswith(('.c', '.h')):
                     if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
                         content = inject_types_include(content)
+
+                # IMPORTANT: Inject extern "C" AFTER the types header has settled
+                if filename.endswith('.h'):
+                    content = inject_extern_c(content, filename)
 
                 if content != original_content:
                     with open(filepath, 'w', encoding='utf-8') as f:
