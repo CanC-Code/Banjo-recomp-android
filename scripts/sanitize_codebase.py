@@ -72,17 +72,6 @@ def is_modern_wrapper(filepath, content):
         return True
     return False
 
-def is_sdk_header(filepath):
-    """
-    SDK headers (like PR/os.h or ultratypes.h) define the core N64 types.
-    They must NEVER have token replacements applied, which would corrupt their typedefs!
-    """
-    path_lower = filepath.replace('\\', '/').lower()
-    parts = path_lower.split('/')
-    if 'pr' in parts or '2.0l' in parts or 'ultra64.h' in parts or 'ultratypes.h' in parts:
-        return True
-    return False
-
 def needs_types_injection(content):
     return not bool(TYPES_INCLUDE_RE.search(content))
 
@@ -240,7 +229,6 @@ def sanitize_codebase(root_path):
 
     patch_count = 0
     wrapper_count = 0
-    sdk_count = 0
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
@@ -256,7 +244,6 @@ def sanitize_codebase(root_path):
                 except Exception: continue
 
                 is_wrapper = is_modern_wrapper(filepath, original_content)
-                is_sdk = is_sdk_header(filepath)
 
                 # EVERY file (including wrappers and SDK) gets its legacy headers safely mapped
                 content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper)
@@ -269,14 +256,6 @@ def sanitize_codebase(root_path):
                         print(f"  [Wrapper Aligned] {filepath} (Redirected SDK headers only)")
                     continue
                     
-                if is_sdk:
-                    if content != original_content:
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            f.write(content)
-                        sdk_count += 1
-                        print(f"  [SDK Protected] {filepath} (Redirected includes only)")
-                    continue
-
                 # --- Core Game Code Only ---
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
@@ -295,7 +274,7 @@ def sanitize_codebase(root_path):
                     patch_count += 1
                     print(f"  [Sanitized] {filepath}")
 
-    print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers and {sdk_count} SDK headers aligned.")
+    print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers aligned.")
 
 if __name__ == "__main__":
     sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
