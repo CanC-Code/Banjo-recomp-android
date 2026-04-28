@@ -37,7 +37,6 @@ COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
-# Patterns that indicate n64 types are already available
 TYPES_INCLUDE_PATTERNS = [
     r'#include\s*[<"]n64_types\.h[">]',
     r'#include\s*[<"]ultra64\.h[">]',
@@ -53,29 +52,36 @@ TYPES_INCLUDE_PATTERNS = [
     r'#include\s*[<"]n64_bool\.h[">]',
 ]
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
-
 N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
 
+def should_ignore_file(filename, content):
+    """
+    Skip Android/JNI wrappers to avoid breaking native system compilation.
+    These files rely on standard C++ types and should NOT receive N64 replacements.
+    """
+    name_lower = filename.lower()
+    if "wrapper" in name_lower or "jni" in name_lower:
+        return True
+    if re.search(r'#include\s*[<"]jni\.h[">]', content):
+        return True
+    if re.search(r'#include\s*[<"]android/', content):
+        return True
+    return False
 
 def needs_types_injection(content):
-    """Return True if the file has no include that would pull in u8/s8/etc."""
     return not bool(TYPES_INCLUDE_RE.search(content))
 
-
 def inject_types_include(content):
-    """Prepend n64_types.h include before the first #include or at top of file."""
     first_include = re.search(r'^#include', content, re.MULTILINE)
     if first_include:
         pos = first_include.start()
         return content[:pos] + N64_TYPES_PREAMBLE + content[pos:]
     return N64_TYPES_PREAMBLE + content
 
-
 def redirect_legacy_includes(content, headers_to_redirect):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Only replace headers that actually exist locally and were renamed
     for ch in headers_to_redirect:
         escaped_ch = ch.replace('.', r'\.')
         content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
@@ -108,7 +114,6 @@ def redirect_legacy_includes(content, headers_to_redirect):
 
     return content
 
-
 def safe_token_replacement(content):
     pattern = re.compile(
         r'(?P<string>"(?:\\.|[^"\\])*")|(?P<char>\'(?:\\.|[^\'\\])*\')|'
@@ -125,7 +130,6 @@ def safe_token_replacement(content):
         return match.group(0)
 
     return pattern.sub(replacer, content)
-
 
 def fix_decompiler_artifacts(content, filename):
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
@@ -146,7 +150,6 @@ def fix_decompiler_artifacts(content, filename):
 
     content = assign_pattern.sub(array_to_memcpy, content)
     return content
-
 
 def fix_linkage_conflicts(content):
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
@@ -193,7 +196,6 @@ def fix_linkage_conflicts(content):
 
     return content
 
-
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
 
@@ -210,22 +212,21 @@ def sanitize_codebase(root_path):
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
             
-            # Record the header if it exists so we only redirect what we have!
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
                 
-                # Perform the renaming if it hasn't been done yet
                 if os.path.exists(old_path) and not os.path.exists(new_path):
                     os.rename(old_path, new_path)
                     print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
+    skip_count = 0
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
         for root, _, files in os.walk(dir_path):
             for filename in files:
-                if not filename.endswith(('.c', '.h')): continue
+                if not filename.endswith(('.c', '.h', '.cpp', '.hpp')): continue
                 if filename == "n64_types.h": continue
 
                 filepath = os.path.join(root, filename)
@@ -234,12 +235,17 @@ def sanitize_codebase(root_path):
                         original_content = f.read()
                 except Exception: continue
 
-                # We now pass our verified set of local headers to the redirect function
+                # NEW: Skip Android Wrappers and JNI files!
+                if should_ignore_file(filename, original_content):
+                    skip_count += 1
+                    print(f"  [Skipped] {filepath} (Android/JNI wrapper)")
+                    continue
+
                 content = redirect_legacy_includes(original_content, headers_to_redirect)
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
 
-                if filename.endswith('.c'):
+                if filename.endswith(('.c', '.cpp')):
                     content = fix_linkage_conflicts(content)
                     if needs_types_injection(content):
                         content = inject_types_include(content)
@@ -250,8 +256,7 @@ def sanitize_codebase(root_path):
                     patch_count += 1
                     print(f"  [Sanitized] {filepath}")
 
-    print(f"✅ Sanitization Complete! {patch_count} files modified.")
-
+    print(f"✅ Sanitization Complete! {patch_count} files modified. {skip_count} wrappers safely skipped.")
 
 if __name__ == "__main__":
     sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
