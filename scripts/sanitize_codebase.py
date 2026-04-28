@@ -236,18 +236,23 @@ def fix_linkage_conflicts(content):
         if first_func_match:
             pos = first_func_match.start()
             
-            # Crucial Fix: Search for last semicolon and include using the STERILE clean_content.
-            # This completely ignores semicolons/includes heavily nested inside old code comments.
+            # The exact masked array mapping to resolve the index bounds correctly
             clean_pre_text = clean_content[:pos]
+            
+            # Step safely past the semicolon offset explicitly
             last_semi = clean_pre_text.rfind(';')
+            last_semi_pos = last_semi + 1 if last_semi != -1 else 0
             
             last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_pre_text, re.MULTILINE))
-            last_inc = last_inc_match[-1].end() if last_inc_match else 0
+            last_inc_pos = last_inc_match[-1].end() if last_inc_match else 0
             
-            insert_idx = max(last_semi, last_inc)
+            last_macro_match = list(re.finditer(r'^[ \t]*#[ \t]*define[^\n]*', clean_pre_text, re.MULTILINE))
+            last_macro_pos = last_macro_match[-1].end() if last_macro_match else 0
+            
+            insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
             
             if insert_idx > 0:
-                # Advance past whitespace perfectly
+                # Step over formatting space exclusively without disturbing struct/typedef blocks
                 while insert_idx < pos and content[insert_idx] in ' \t\r\n':
                     insert_idx += 1
             else:
