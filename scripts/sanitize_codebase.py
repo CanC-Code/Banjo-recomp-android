@@ -102,8 +102,6 @@ def inject_extern_c(content, filename):
     new_lines = []
     
     for line in lines:
-        # ONLY break out of extern "C" for Standard C++ STL headers (which lack extensions like <vector>, <string>)
-        # Project-specific C headers (.h) MUST remain inside extern "C" to avoid C++ name mangling!
         match = re.match(r'^[ \t]*#[ \t]*include[ \t]*<([^>]+)>', line)
         if match and '.' not in match.group(1):
             new_lines.append("#ifdef __cplusplus\n}\n#endif")
@@ -238,18 +236,19 @@ def fix_linkage_conflicts(content):
         if first_func_match:
             pos = first_func_match.start()
             
-            # Goldilocks Heuristic: Place prototypes after the final global #include/typedef/struct 
-            # but before the actual function. This resolves the "Unknown Type" errors perfectly.
-            pre_text = content[:pos]
-            last_semi = pre_text.rfind(';')
+            # Crucial Fix: Search for last semicolon and include using the STERILE clean_content.
+            # This completely ignores semicolons/includes heavily nested inside old code comments.
+            clean_pre_text = clean_content[:pos]
+            last_semi = clean_pre_text.rfind(';')
             
-            last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', pre_text, re.MULTILINE))
+            last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_pre_text, re.MULTILINE))
             last_inc = last_inc_match[-1].end() if last_inc_match else 0
             
             insert_idx = max(last_semi, last_inc)
             
             if insert_idx > 0:
-                while insert_idx < pos and pre_text[insert_idx] in ' \t\r\n':
+                # Advance past whitespace perfectly
+                while insert_idx < pos and content[insert_idx] in ' \t\r\n':
                     insert_idx += 1
             else:
                 insert_idx = 0
