@@ -38,13 +38,6 @@ COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 
-# FIX: Only match headers that directly define primitive N64 typedefs (u8, s8, etc.).
-# Removed: core2/core2.h, core1/core1.h, functions.h, structs.h, osint.h, piint.h,
-#          PR/os.h, n64_bool.h — none of these guarantee u8/s8/u16/etc. are defined,
-#          causing needs_types_injection() to return False for files like dialog.c that
-#          include structs.h but never get n64_types.h injected, producing:
-#          error: unknown type name 'u8'
-# Added:   ultratypes.h, PR/ultratypes.h — actual typedef sources.
 TYPES_INCLUDE_PATTERNS = [
     r'#include\s*[<"]n64_types\.h[">]',
     r'#include\s*[<"]ultra64\.h[">]',
@@ -70,8 +63,40 @@ def is_modern_wrapper(filepath, content):
 def needs_types_injection(content):
     return not bool(TYPES_INCLUDE_RE.search(content))
 
-def inject_types_include(content):
+def inject_types_include(content, is_c_file=False):
+    """
+    For .c files: inject AFTER the last #include line in the file so that
+    n64_types.h wins over any system header collisions pulled in transitively.
+    This prevents the force-include from being poisoned by system typedefs
+    that conflicting game headers drag in.
+
+    For .h files: inject near the top (after include guard) as before, since
+    headers must expose types to their consumers.
+    """
+    if is_c_file:
+        # Strip existing n64_types.h so it can be cleanly moved to the end of the include block.
+        # This ensures idempotency while correctly repositioning it if previously injected at the top.
+        content = re.sub(r'^[ \t]*#[ \t]*include[ \t]*[<"]n64_types\.h[">][ \t]*\n?', '', content, flags=re.MULTILINE)
+
     lines = content.split('\n')
+
+    if is_c_file:
+        # Find the last #include line index
+        last_include_idx = -1
+        for i, line in enumerate(lines):
+            s = line.strip()
+            if re.match(r'^#[ \t]*include\b', s):
+                last_include_idx = i
+
+        if last_include_idx >= 0:
+            # Insert immediately after the last include
+            lines.insert(last_include_idx + 1, '#include <n64_types.h>')
+        else:
+            # No includes at all — insert at top
+            lines.insert(0, '#include <n64_types.h>')
+        return '\n'.join(lines)
+
+    # .h file path: insert after include guard or pragma once
     insert_idx = 0
     for i, line in enumerate(lines):
         s = line.strip()
@@ -90,7 +115,7 @@ def inject_types_include(content):
             break
         insert_idx = i
         break
-        
+
     lines.insert(insert_idx, '#include <n64_types.h>')
     return '\n'.join(lines)
 
@@ -101,7 +126,7 @@ def inject_extern_c(content, filename):
 
     lines = content.split('\n')
     new_lines = []
-    
+
     for line in lines:
         match = re.match(r'^[ \t]*#[ \t]*include[ \t]*<([^>]+)>', line)
         if match and '.' not in match.group(1):
@@ -112,13 +137,13 @@ def inject_extern_c(content, filename):
             new_lines.append(line)
 
     result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
-    
+
     empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
     result = empty_block_pattern.sub('', result)
-    
+
     merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\s*#ifdef __cplusplus\nextern "C" \{\n#endif\s*', re.MULTILINE)
     result = merge_pattern.sub('\n', result)
-    
+
     return result.strip() + '\n'
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
@@ -183,7 +208,7 @@ def fix_decompiler_artifacts(content, filename):
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
-        if src.startswith('{') or src.startswith('"') or src.startswith("'"): 
+        if src.startswith('{') or src.startswith('"') or src.startswith("'"):
             return match.group(0)
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
 
@@ -223,7 +248,7 @@ def fix_linkage_conflicts(content):
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
-        
+
         def repl(m): return ' ' * len(m.group(0))
         clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
         clean_content = re.sub(r'//.*', repl, clean_content)
@@ -231,31 +256,31 @@ def fix_linkage_conflicts(content):
         clean_content = re.sub(r"'.*?'", repl, clean_content)
 
         func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
-        
+
         first_func_match = func_def_pattern.search(clean_content)
-        
+
         if first_func_match:
             pos = first_func_match.start()
-            
+
             clean_pre_text = clean_content[:pos]
-            
+
             last_semi = clean_pre_text.rfind(';')
             last_semi_pos = last_semi + 1 if last_semi != -1 else 0
-            
+
             last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_pre_text, re.MULTILINE))
             last_inc_pos = last_inc_match[-1].end() if last_inc_match else 0
-            
+
             last_macro_match = list(re.finditer(r'^[ \t]*#[ \t]*define[^\n]*', clean_pre_text, re.MULTILINE))
             last_macro_pos = last_macro_match[-1].end() if last_macro_match else 0
-            
+
             insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
-            
+
             if insert_idx > 0:
                 while insert_idx < pos and content[insert_idx] in ' \t\r\n':
                     insert_idx += 1
             else:
                 insert_idx = 0
-                
+
             content = content[:insert_idx] + header_block + content[insert_idx:]
         else:
             content = content + "\n" + header_block
@@ -270,9 +295,9 @@ def sanitize_codebase(root_path):
         os.path.join("include", "2.0L"),
         os.path.join("include", "2.0L", "PR"),
     ]
-    
+
     headers_to_redirect = set()
-    
+
     for ch in CONFLICTING_HEADERS:
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
@@ -285,16 +310,16 @@ def sanitize_codebase(root_path):
 
     patch_count = 0
     wrapper_count = 0
-    
+
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
-        
+
         for root, _, files in os.walk(dir_path):
             for filename in files:
                 if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
                 filepath = os.path.join(root, filename)
-                
+
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
@@ -308,7 +333,7 @@ def sanitize_codebase(root_path):
                                 f.write(content)
                             wrapper_count += 1
                         continue
-                        
+
                     if filename in CORE_TYPE_HEADERS:
                         bool_tokens = [
                             (re.compile(r"\bbool\b"), "n64_bool"),
@@ -318,24 +343,26 @@ def sanitize_codebase(root_path):
                         content = safe_token_replacement(content, bool_tokens)
                     else:
                         content = safe_token_replacement(content, COMPILED_TOKENS)
-                    
+
                     content = fix_decompiler_artifacts(content, filename)
 
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
-                    
-                    if filename.endswith(('.c', '.h')):
-                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
-                            content = inject_types_include(content)
+                        # C files ALWAYS get n64_types.h appended at the end of their includes block 
+                        # to override system header poisoning, completely bypassing needs_types_injection.
+                        if filename not in CORE_TYPE_HEADERS:
+                            content = inject_types_include(content, is_c_file=True)
 
                     if filename.endswith('.h'):
+                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
+                            content = inject_types_include(content, is_c_file=False)
                         content = inject_extern_c(content, filename)
 
                     if content != original_content:
                         with open(filepath, 'w', encoding='utf-8') as f:
                             f.write(content)
                         patch_count += 1
-                        
+
                 except Exception as e:
                     print(f"❌ CRITICAL EXCEPTION in {filepath}:\n{traceback.format_exc()}")
                     continue
