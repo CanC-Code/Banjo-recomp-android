@@ -93,7 +93,28 @@ def fix_decompiler_artifacts(content, filename):
     return content
 
 def fix_linkage_conflicts(content):
-    """Identifies missing forward declarations and inserts them safely below typedefs."""
+    """Resolves conflicts between static definitions and non-static prototypes, and adds missing decls."""
+    
+    # 1. Resolve conflicts: If a function has a static definition but a non-static prototype, strip 'static'.
+    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
+    for match in static_def_pattern.finditer(content):
+        full_sig = match.group(1) # e.g. "void __codeBF0_draw(Actor *this) {"
+        func_name = match.group(2)
+        
+        # Look for any non-static prototype for this function
+        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
+        has_non_static_proto = False
+        for p_match in proto_pattern.finditer(content):
+            proto_line = p_match.group(0)
+            if "static" not in proto_line and "typedef" not in proto_line:
+                has_non_static_proto = True
+                break
+                
+        if has_non_static_proto:
+            # Demote the definition from static to non-static
+            content = content.replace("static " + full_sig, full_sig)
+
+    # 2. Add missing forward declarations for remaining static functions
     static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
@@ -102,8 +123,7 @@ def fix_linkage_conflicts(content):
     added_funcs = set()
     
     for full_sig, func_name in matches:
-        # Search the entire file for an existing prototype of this function (static or non-static)
-        # Looks for instances of: func_name( ... );
+        # Check if prototype exists (static or otherwise)
         has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
         
         if not has_prototype and func_name not in added_funcs:
@@ -113,8 +133,6 @@ def fix_linkage_conflicts(content):
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
-        
-        # Locate the first actual function definition to safely insert declarations AFTER all structs/typedefs
         any_func_pattern = re.compile(r"^([a-zA-Z_][\w\s\*]*\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*)\{", re.MULTILINE)
         first_func_match = any_func_pattern.search(content)
         
@@ -122,7 +140,6 @@ def fix_linkage_conflicts(content):
             pos = first_func_match.start()
             content = content[:pos] + header_block + content[pos:]
         else:
-            # Fallback if no clean match is found
             content = content + "\n" + header_block
             
     return content
