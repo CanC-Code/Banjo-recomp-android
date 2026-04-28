@@ -140,12 +140,22 @@ def fix_linkage_conflicts(content):
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n"
-        includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
-        if includes:
-            pos = includes[-1].end()
-            content = content[:pos] + "\n" + header_block + content[pos:]
+        
+        # INJECTION FIX: Find the first function body and inject declarations immediately before it, 
+        # allowing all file-level 'typedef struct' definitions to be read first.
+        first_func_match = re.search(r"^(?:static\s+)?[\w\s\*]+\s+\w+\s*\([^)]*\)\s*\{", content, re.MULTILINE)
+        
+        if first_func_match:
+            pos = first_func_match.start()
+            content = content[:pos] + header_block + "\n" + content[pos:]
         else:
-            content = header_block + "\n" + content
+            # Fallback if no function body is found
+            includes = list(re.finditer(r"^#include.*$", content, re.MULTILINE))
+            if includes:
+                pos = includes[-1].end()
+                content = content[:pos] + "\n" + header_block + content[pos:]
+            else:
+                content = header_block + "\n" + content
     return content
 
 def sanitize_codebase(root_path):
