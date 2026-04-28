@@ -21,15 +21,15 @@ option(EXCLUDE_GAME_SRC "Skip the main game source files" OFF)
 
 if(NOT EXCLUDE_GAME_SRC)
     message(STATUS "Including game source files from ${REPO_ROOT}/src")
-    
+
     # Recursively find all C files in the game source
     file(GLOB_RECURSE GAME_SOURCES 
         "${REPO_ROOT}/src/*.c"
     )
-    
+
     # Optional: Filter out specific incompatible files if needed
     # list(REMOVE_ITEM GAME_SOURCES "${REPO_ROOT}/src/problematic_file.c")
-    
+
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
 else()
     message(STATUS "Building in Verification Mode (Bridge only)")
@@ -59,6 +59,13 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=implicit-int"      # Common in IDO 5.3 code
     "-Wno-error=int-conversion"    # Critical for 32-bit pointer logic on 64-bit ARM
     "-Wno-error=implicit-function-declaration"
+)
+
+# --- 4.5 Microcode Definitions ---
+# Defines the F3DEX microcode family so headers like gbi.h correctly expand 
+# macros like gSP1Quadrangle to include G_TRI2 and related command IDs.
+target_compile_definitions(bkawrapper PRIVATE 
+    F3DEX_GBI
 )
 
 # --- 5. Linking ---
