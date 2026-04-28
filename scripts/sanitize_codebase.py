@@ -1,8 +1,9 @@
 import os
 import re
 import sys
+import traceback
 
-TARGET_DIRS = ["src", "include"]
+TARGET_DIRS = ["src", "include", "lib", "libultra"]
 CONFLICTING_HEADERS = ["string.h", "time.h", "math.h", "stdlib.h", "stdio.h", "stdarg.h", "stdint.h", "bool.h"]
 
 TOKEN_REPLACEMENTS = {
@@ -53,20 +54,15 @@ TYPES_INCLUDE_PATTERNS = [
 ]
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 
-# Define core type headers universally
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
     if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
         return True
-        
     path_lower = filepath.replace('\\', '/').lower()
     if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
-    
-    if re.search(r'#include\s*[<"]jni\.h[">]', content):
-        return True
-    if re.search(r'#include\s*[<"]android/', content):
+    if re.search(r'#include\s*[<"]jni\.h[">]', content) or re.search(r'#include\s*[<"]android/', content):
         return True
     return False
 
@@ -74,10 +70,6 @@ def needs_types_injection(content):
     return not bool(TYPES_INCLUDE_RE.search(content))
 
 def inject_types_include(content):
-    """
-    Safely injects the root types header at the very top of the file, preserving
-    any `#pragma once` or `#ifndef` optimizer hints.
-    """
     lines = content.split('\n')
     insert_idx = 0
     for i, line in enumerate(lines):
@@ -102,10 +94,6 @@ def inject_types_include(content):
     return '\n'.join(lines)
 
 def inject_extern_c(content, filename):
-    """
-    Surgically breaks OUT of C-linkage exclusively for `#include` directives. 
-    It prevents breaking C++ templates while gracefully collapsing empty blocks.
-    """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
         return content
@@ -123,11 +111,9 @@ def inject_extern_c(content, filename):
 
     result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
     
-    # 1. Clean up empty OPEN-CLOSE blocks completely (e.g. at the top of file above includes)
     empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
     result = empty_block_pattern.sub('', result)
     
-    # 2. Merge consecutive chunks correctly (e.g. CLOSE-OPEN redundancies)
     merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\s*#ifdef __cplusplus\nextern "C" \{\n#endif\s*', re.MULTILINE)
     result = merge_pattern.sub('\n', result)
     
@@ -172,21 +158,20 @@ def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, fil
     return content
 
 def safe_token_replacement(content, tokens=COMPILED_TOKENS):
-    pattern = re.compile(
-        r'(?P<string>"(?:\\.|[^"\\])*")|(?P<char>\'(?:\\.|[^\'\\])*\')|'
-        r'(?P<block_comment>/\*.*?\*/)|(?P<line_comment>//[^\n]*)|'
-        r'(?P<code>[^"\'/]+|/)', re.DOTALL
-    )
-
-    def replacer(match):
-        if match.group('code'):
-            code_chunk = match.group('code')
+    """
+    Dramatically optimized token replacement utilizing structural re.split().
+    Prevents catastrophic regex backtracking and memory exhaustion on enormous C source arrays.
+    """
+    parts = re.split(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*)', content, flags=re.DOTALL)
+    
+    for i in range(0, len(parts), 2):
+        if parts[i]:
+            code_chunk = parts[i]
             for pat, repl in tokens:
                 code_chunk = pat.sub(repl, code_chunk)
-            return code_chunk
-        return match.group(0)
-
-    return pattern.sub(replacer, content)
+            parts[i] = code_chunk
+            
+    return "".join(parts)
 
 def fix_decompiler_artifacts(content, filename):
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
@@ -235,7 +220,6 @@ def fix_linkage_conflicts(content):
 
     for full_sig, func_name in matches:
         has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
-
         if not has_prototype and func_name not in added_funcs:
             decl = f"{full_sig.strip()};"
             signatures.append(decl)
@@ -244,16 +228,19 @@ def fix_linkage_conflicts(content):
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        # FIX: Place prototypes safely before the first actual function, 
-        # completely avoiding mid-function data.inc #includes!
-        any_func_pattern = re.compile(r"^([a-zA-Z_][\w\s\*]*\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*)\{", re.MULTILINE)
-        first_func_match = any_func_pattern.search(content)
-
-        if first_func_match:
-            pos = first_func_match.start()
-            content = content[:pos] + header_block + content[pos:]
+        # Safely insert exactly after the last global #include, perfectly averting mid-function injections.
+        last_safe_pos = 0
+        for match in re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', content, re.MULTILINE):
+            pos = match.start()
+            prefix = content[:pos]
+            if '{' in prefix or ';' in prefix:
+                break
+            last_safe_pos = match.end()
+            
+        if last_safe_pos > 0:
+            content = content[:last_safe_pos] + "\n" + header_block + content[last_safe_pos:]
         else:
-            content = content + "\n" + header_block
+            content = header_block + content
 
     return content
 
@@ -272,70 +259,68 @@ def sanitize_codebase(root_path):
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-            
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
-                
                 if os.path.exists(old_path) and not os.path.exists(new_path):
                     os.rename(old_path, new_path)
                     print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
     wrapper_count = 0
+    
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
+        
         for root, _, files in os.walk(dir_path):
             for filename in files:
                 if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
-
                 filepath = os.path.join(root, filename)
+                
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
-                except Exception: continue
 
-                is_wrapper = is_modern_wrapper(filepath, original_content)
+                    is_wrapper = is_modern_wrapper(filepath, original_content)
+                    content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
 
-                content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
+                    if is_wrapper:
+                        if content != original_content:
+                            with open(filepath, 'w', encoding='utf-8') as f:
+                                f.write(content)
+                            wrapper_count += 1
+                        continue
+                        
+                    if filename in CORE_TYPE_HEADERS:
+                        bool_tokens = [
+                            (re.compile(r"\bbool\b"), "n64_bool"),
+                            (re.compile(r"\btrue\b"), "TRUE"),
+                            (re.compile(r"\bfalse\b"), "FALSE")
+                        ]
+                        content = safe_token_replacement(content, bool_tokens)
+                    else:
+                        content = safe_token_replacement(content, COMPILED_TOKENS)
+                    
+                    content = fix_decompiler_artifacts(content, filename)
 
-                if is_wrapper:
+                    if filename.endswith('.c'):
+                        content = fix_linkage_conflicts(content)
+                    
+                    if filename.endswith(('.c', '.h')):
+                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
+                            content = inject_types_include(content)
+
+                    if filename.endswith('.h'):
+                        content = inject_extern_c(content, filename)
+
                     if content != original_content:
                         with open(filepath, 'w', encoding='utf-8') as f:
                             f.write(content)
-                        wrapper_count += 1
-                        print(f"  [Wrapper Aligned] {filepath} (Redirected SDK headers only)")
+                        patch_count += 1
+                        
+                except Exception as e:
+                    print(f"❌ CRITICAL EXCEPTION in {filepath}:\n{traceback.format_exc()}")
                     continue
-                    
-                # --- Core Game Code Only ---
-                
-                if filename in CORE_TYPE_HEADERS:
-                    bool_tokens = [
-                        (re.compile(r"\bbool\b"), "n64_bool"),
-                        (re.compile(r"\btrue\b"), "TRUE"),
-                        (re.compile(r"\bfalse\b"), "FALSE")
-                    ]
-                    content = safe_token_replacement(content, bool_tokens)
-                else:
-                    content = safe_token_replacement(content, COMPILED_TOKENS)
-                
-                content = fix_decompiler_artifacts(content, filename)
-
-                if filename.endswith('.c'):
-                    content = fix_linkage_conflicts(content)
-                
-                if filename.endswith(('.c', '.h')):
-                    if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
-                        content = inject_types_include(content)
-
-                if filename.endswith('.h'):
-                    content = inject_extern_c(content, filename)
-
-                if content != original_content:
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    patch_count += 1
-                    print(f"  [Sanitized] {filepath}")
 
     print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers aligned.")
 
