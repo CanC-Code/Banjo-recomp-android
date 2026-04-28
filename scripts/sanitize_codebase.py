@@ -75,7 +75,7 @@ def needs_types_injection(content):
     return not bool(TYPES_INCLUDE_RE.search(content))
 
 def inject_types_include(content):
-    first_include = re.search(r'^#include', content, re.MULTILINE)
+    first_include = re.search(r'^[ \t]*#include', content, re.MULTILINE)
     if first_include:
         pos = first_include.start()
         return content[:pos] + N64_TYPES_PREAMBLE + content[pos:]
@@ -83,68 +83,79 @@ def inject_types_include(content):
 
 def inject_extern_c(content, filename):
     """
-    Intelligently parses the C header structure to inject extern "C" {
-    AFTER header guards and includes, but BEFORE C declarations.
+    Intelligently tracks preprocessor depth to safely inject extern "C" {
+    AFTER all includes, avoiding splitting any `#if` conditionals.
     """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
         return content
         
     lines = content.split('\n')
-    insert_idx = 0
-    depth = 0
-    in_multiline_macro = False
-    macro_depth_1 = False
     
-    # 1. Find the safe injection index immediately following top-level includes/guards
-    for i, line in enumerate(lines):
+    # 1. Determine if there's a standard header guard at the top
+    has_header_guard = False
+    guard_depth = 0
+    for line in lines:
         s = line.strip()
-        if not s: continue
-        
-        # Handle line continuations for macros
-        if in_multiline_macro:
-            if not s.endswith('\\'):
-                in_multiline_macro = False
-                if macro_depth_1:
-                    insert_idx = i + 1
-            continue
-            
-        # Skip pure comments
-        if s.startswith('//') or s.startswith('/*') or s.startswith('*'): 
-            continue
-            
-        # Parse Preprocessor Directives
-        if s.startswith('#'):
-            is_multiline = s.endswith('\\')
-            if is_multiline:
-                in_multiline_macro = True
-                macro_depth_1 = (depth <= 1 and s.startswith('#define'))
-                
-            if s.startswith('#if') or s.startswith('#ifdef') or s.startswith('#ifndef'):
-                depth += 1
-                if depth == 1 and not is_multiline: 
-                    insert_idx = i + 1
-            elif s.startswith('#define'):
-                if depth <= 1 and not is_multiline: 
-                    insert_idx = i + 1
-            elif s.startswith('#endif'):
-                depth = max(0, depth - 1)
-            elif s.startswith('#include'):
-                if depth <= 1 and not is_multiline: 
-                    insert_idx = i + 1
-            continue
-            
-        # Real C code reached (structs, externs, typedefs), stop scanning!
+        if not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'): continue
+        if re.match(r'^#[ \t]*ifndef', s) or re.match(r'^#[ \t]*if[ \t]+!defined', s):
+            has_header_guard = True
+            guard_depth = 1
         break
+
+    # 2. Track `#if` depth line-by-line
+    depths = []
+    current_depth = 0
+    in_multiline = False
+    
+    for line in lines:
+        depths.append(current_depth)
+        s = line.strip()
         
-    # 2. Find the last #endif to cleanly wrap the header guard
-    last_endif_idx = len(lines)
-    for i in range(len(lines)-1, -1, -1):
-        if lines[i].strip().startswith('#endif'):
-            last_endif_idx = i
-            break
+        if in_multiline:
+            if not s.endswith('\\'): in_multiline = False
+            continue
             
-    # 3. Reconstruct the file with perfect C++ linkage
+        if s.startswith('#'):
+            if s.endswith('\\'): in_multiline = True
+            if re.match(r'^#[ \t]*if', s):
+                current_depth += 1
+            elif re.match(r'^#[ \t]*endif', s):
+                current_depth = max(0, current_depth - 1)
+                
+    # 3. Find the last #include in the file
+    last_include_idx = -1
+    for i, line in enumerate(lines):
+        if re.match(r'^[ \t]*#[ \t]*include', line.strip()):
+            last_include_idx = i
+            
+    # 4. Safely locate injection points
+    if last_include_idx == -1:
+        insert_idx = 0
+        if has_header_guard:
+            for i, line in enumerate(lines):
+                if re.match(r'^#[ \t]*define', line.strip()) and depths[i] == 1:
+                    insert_idx = i + 1
+                    break
+            if insert_idx == 0:
+                insert_idx = 1
+    else:
+        # Step down safely outside of any active macros holding the includes
+        insert_idx = last_include_idx + 1
+        while insert_idx < len(lines) and depths[insert_idx] > guard_depth:
+            insert_idx += 1
+            
+    last_endif_idx = len(lines)
+    if has_header_guard:
+        for i in range(len(lines)-1, -1, -1):
+            if re.match(r'^#[ \t]*endif', lines[i].strip()):
+                last_endif_idx = i
+                break
+                
+    if insert_idx > last_endif_idx:
+        insert_idx = last_endif_idx
+
+    # 5. Reconstruct perfectly linked file
     top = '\n'.join(lines[:insert_idx])
     mid = '\n'.join(lines[insert_idx:last_endif_idx])
     bot = '\n'.join(lines[last_endif_idx:])
