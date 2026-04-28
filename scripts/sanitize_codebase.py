@@ -76,17 +76,26 @@ def needs_types_injection(content):
 def inject_types_include(content):
     """
     Safely injects the root types header at the very top of the file, preserving
-    any `#pragma once` optimizer hints without disrupting struct parsing.
+    any `#pragma once` or `#ifndef` optimizer hints.
     """
     lines = content.split('\n')
     insert_idx = 0
     for i, line in enumerate(lines):
         s = line.strip()
+        if not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'):
+            continue
         if re.match(r'^#[ \t]*pragma[ \t]+once\b', s):
             insert_idx = i + 1
             break
-        elif not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'):
-            continue
+        if re.match(r'^#[ \t]*ifndef\b', s) or re.match(r'^#[ \t]*if[ \t]+!defined\b', s):
+            for j in range(i+1, min(i+5, len(lines))):
+                if re.match(r'^#[ \t]*define\b', lines[j].strip()):
+                    insert_idx = j + 1
+                    break
+            if insert_idx == 0:
+                insert_idx = i + 1
+            break
+        insert_idx = i
         break
         
     lines.insert(insert_idx, '#include <n64_types.h>')
@@ -94,10 +103,10 @@ def inject_types_include(content):
 
 def inject_extern_c(content, filename):
     """
-    Wraps the entire file in extern "C", but surgically breaks OUT of C-linkage
-    for any `#include` directives. By tracking block comments and structural braces, 
-    it strictly preserves Android NDK standard libraries while ensuring C declarations 
-    link correctly against the modern JNI wrappers.
+    Wraps the entire header in extern "C", but reliably breaks OUT of C-linkage
+    for any `#include` directives. By entirely ignoring structural brace depth 
+    (which is often broken by `#ifdef`), we guarantee that standard Android NDK
+    includes are naturally excluded from C linkage, preventing C++ template crashes.
     """
     if not filename.endswith('.h'): return content
     if 'extern "C"' in content or '#ifdef __cplusplus' in content:
@@ -105,33 +114,33 @@ def inject_extern_c(content, filename):
 
     lines = content.split('\n')
     new_lines = []
-    brace_depth = 0
     in_block_comment = False
     
     for line in lines:
         s = line
         
-        # Remove single-line block comments to accurately evaluate structure
-        s = re.sub(r'/\*.*?\*/', '', s)
+        # Fast comment tracking to ensure we don't break out on commented #includes
+        s_no_strings = re.sub(r'".*?"', '', s)
+        s_no_comments = re.sub(r'//.*', '', s_no_strings)
         
         if in_block_comment:
-            if '*/' in s:
-                s = s[s.find('*/') + 2:]
+            if '*/' in s_no_comments:
+                s_no_comments = s_no_comments[s_no_comments.find('*/') + 2:]
                 in_block_comment = False
             else:
-                s = ''
+                s_no_comments = ''
+                
+        if not in_block_comment and '/*' in s_no_comments:
+            if '*/' in s_no_comments:
+                s_no_comments = re.sub(r'/\*.*?\*/', '', s_no_comments)
+            else:
+                in_block_comment = True
+                s_no_comments = s_no_comments[:s_no_comments.find('/*')]
+                
+        s_strip = s_no_comments.strip()
         
-        if not in_block_comment and '/*' in s:
-            in_block_comment = True
-            s = s[:s.find('/*')]
-            
-        s = re.sub(r'//.*', '', s)
-        s_strip = s.strip()
-        
-        # Count structural braces to ensure we aren't breaking out inside an array/struct declaration
-        brace_depth += s.count('{') - s.count('}')
-        
-        if brace_depth == 0 and re.match(r'^#[ \t]*include\b', s_strip):
+        # Break out on ANY active #include directive
+        if not in_block_comment and re.match(r'^#[ \t]*include\b', s_strip):
             new_lines.append("#ifdef __cplusplus\n}\n#endif")
             new_lines.append(line)
             new_lines.append("#ifdef __cplusplus\nextern \"C\" {\n#endif")
@@ -140,9 +149,11 @@ def inject_extern_c(content, filename):
 
     result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
     
-    # Clean up any redundant consecutive extern "C" blocks created by clustered includes
-    result = re.sub(r'#ifdef __cplusplus\nextern "C" \{\n#endif\n*#ifdef __cplusplus\n\}\n#endif\n*', '', result)
-    return result
+    # Clean up any redundant consecutive extern "C" blocks created by clustered includes or top-of-file includes
+    cleanup_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
+    result = cleanup_pattern.sub('', result)
+    
+    return result.strip() + '\n'
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
     if filename not in CORE_TYPE_HEADERS:
