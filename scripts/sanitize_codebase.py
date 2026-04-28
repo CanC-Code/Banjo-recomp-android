@@ -23,6 +23,18 @@ TOKEN_REPLACEMENTS = {
     r"\bprintf\b": "n64_printf",
     r"\bsin\b": "n64_sin",
     r"\bcos\b": "n64_cos",
+    
+    # N64 SDK Volatile Types Resolution
+    r"\bvu8\b": "volatile u8",
+    r"\bvs8\b": "volatile s8",
+    r"\bvu16\b": "volatile u16",
+    r"\bvs16\b": "volatile s16",
+    r"\bvu32\b": "volatile u32",
+    r"\bvs32\b": "volatile s32",
+    r"\bvu64\b": "volatile u64",
+    r"\bvs64\b": "volatile s64",
+    r"\bvf32\b": "volatile f32",
+    r"\bvf64\b": "volatile f64",
 }
 COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
