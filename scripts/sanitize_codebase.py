@@ -94,6 +94,7 @@ def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
+    # Do not redirect standard library headers if this is a modern wrapper
     if not is_wrapper:
         for ch in headers_to_redirect:
             escaped_ch = ch.replace('.', r'\.')
@@ -127,7 +128,7 @@ def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False):
 
     return content
 
-def safe_token_replacement(content):
+def safe_token_replacement(content, tokens=COMPILED_TOKENS):
     pattern = re.compile(
         r'(?P<string>"(?:\\.|[^"\\])*")|(?P<char>\'(?:\\.|[^\'\\])*\')|'
         r'(?P<block_comment>/\*.*?\*/)|(?P<line_comment>//[^\n]*)|'
@@ -137,7 +138,7 @@ def safe_token_replacement(content):
     def replacer(match):
         if match.group('code'):
             code_chunk = match.group('code')
-            for pat, repl in COMPILED_TOKENS:
+            for pat, repl in tokens:
                 code_chunk = pat.sub(repl, code_chunk)
             return code_chunk
         return match.group(0)
@@ -158,6 +159,7 @@ def fix_decompiler_artifacts(content, filename):
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
+        # Protect valid C string literals or initializer lists from being broken!
         if src.startswith('{') or src.startswith('"') or src.startswith("'"): 
             return match.group(0)
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
@@ -263,9 +265,18 @@ def sanitize_codebase(root_path):
                     
                 # --- Core Game Code Only ---
                 
-                # Protect raw N64 typedefs from being corrupted
-                if filename != "ultratypes.h":
-                    content = safe_token_replacement(content)
+                # Protect raw N64 typedefs from being corrupted by aggressive replacement
+                type_headers = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
+                if filename in type_headers:
+                    # ONLY apply bool replacements to these files to prevent corrupting `vu32` typedefs
+                    bool_tokens = [
+                        (re.compile(r"\bbool\b"), "n64_bool"),
+                        (re.compile(r"\btrue\b"), "TRUE"),
+                        (re.compile(r"\bfalse\b"), "FALSE")
+                    ]
+                    content = safe_token_replacement(content, bool_tokens)
+                else:
+                    content = safe_token_replacement(content, COMPILED_TOKENS)
                 
                 content = fix_decompiler_artifacts(content, filename)
 
@@ -276,9 +287,9 @@ def sanitize_codebase(root_path):
                 if filename.endswith('.h'):
                     content = inject_extern_c(content, filename)
                 
-                # Inject types include ONLY if it's not the types file itself
+                # Inject types include ONLY if it's not a type-definition file itself
                 if filename.endswith(('.c', '.h')):
-                    if filename != "n64_types.h" and needs_types_injection(content):
+                    if filename not in type_headers and needs_types_injection(content):
                         content = inject_types_include(content)
 
                 if content != original_content:
