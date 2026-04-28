@@ -53,6 +53,8 @@ TYPES_INCLUDE_PATTERNS = [
 ]
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 N64_TYPES_PREAMBLE = '#include <n64_types.h>\n'
+# Define core type headers universally
+CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
     """
@@ -64,7 +66,6 @@ def is_modern_wrapper(filepath, content):
         
     path_lower = filepath.replace('\\', '/').lower()
     
-    # Tightened to avoid false positives if the parent repository folder contains "android"
     if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
     
@@ -93,12 +94,11 @@ def inject_extern_c(content, filename):
     return "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + content + "\n\n#ifdef __cplusplus\n}\n#endif\n"
 
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
-    # Fix: Prevent n64_types.h from redirecting its own internal ultratypes.h inclusion
-    if filename != "n64_types.h":
+    # Fix: Prevent ALL root type headers from redirecting their own internal ultratypes.h inclusion
+    if filename not in CORE_TYPE_HEADERS:
         content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
         content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Do not redirect standard library headers if this is a modern wrapper
     if not is_wrapper:
         for ch in headers_to_redirect:
             escaped_ch = ch.replace('.', r'\.')
@@ -163,7 +163,6 @@ def fix_decompiler_artifacts(content, filename):
     def array_to_memcpy(match):
         indent, dtype, name, size, src = match.groups()
         src = src.strip()
-        # Protect valid C string literals or initializer lists from being broken!
         if src.startswith('{') or src.startswith('"') or src.startswith("'"): 
             return match.group(0)
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
@@ -269,10 +268,7 @@ def sanitize_codebase(root_path):
                     
                 # --- Core Game Code Only ---
                 
-                # Protect raw N64 typedefs from being corrupted by aggressive replacement
-                type_headers = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
-                if filename in type_headers:
-                    # ONLY apply bool replacements to these files to prevent corrupting `vu32` typedefs
+                if filename in CORE_TYPE_HEADERS:
                     bool_tokens = [
                         (re.compile(r"\bbool\b"), "n64_bool"),
                         (re.compile(r"\btrue\b"), "TRUE"),
@@ -287,13 +283,11 @@ def sanitize_codebase(root_path):
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
                 
-                # Wrap all headers in extern "C" to allow Android wrapper linkage
                 if filename.endswith('.h'):
                     content = inject_extern_c(content, filename)
                 
-                # Inject types include ONLY if it's not a type-definition file itself
                 if filename.endswith(('.c', '.h')):
-                    if filename not in type_headers and needs_types_injection(content):
+                    if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
                         content = inject_types_include(content)
 
                 if content != original_content:
