@@ -63,7 +63,9 @@ def is_modern_wrapper(filepath, content):
         return True
         
     path_lower = filepath.replace('\\', '/').lower()
-    if "wrapper" in path_lower or "jni" in path_lower or "android" in path_lower:
+    
+    # Tightened to avoid false positives if the parent repository folder contains "android"
+    if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
     
     if re.search(r'#include\s*[<"]jni\.h[">]', content):
@@ -90,9 +92,11 @@ def inject_extern_c(content, filename):
     
     return "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + content + "\n\n#ifdef __cplusplus\n}\n#endif\n"
 
-def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False):
-    content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
-    content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
+    # Fix: Prevent n64_types.h from redirecting its own internal ultratypes.h inclusion
+    if filename != "n64_types.h":
+        content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+        content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
     # Do not redirect standard library headers if this is a modern wrapper
     if not is_wrapper:
@@ -253,7 +257,7 @@ def sanitize_codebase(root_path):
                 is_wrapper = is_modern_wrapper(filepath, original_content)
 
                 # EVERY file (including wrappers and SDK) gets its legacy headers safely mapped
-                content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper)
+                content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
 
                 if is_wrapper:
                     if content != original_content:
