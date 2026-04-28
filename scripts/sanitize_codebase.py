@@ -43,9 +43,19 @@ def redirect_legacy_includes(content):
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
         'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
         'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_vi.h',
-        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h'
+        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h',
+        'os_internal.h', 'os_cont.h', 'os_cache.h', 'os_debug.h', 'os_eeprom.h',
+        'os_error.h', 'os_exception.h', 'os_gbpak.h', 'os_gio.h', 'os_host.h',
+        'os_rdp.h', 'os_reg.h', 'os_rsp.h', 'os_system.h', 'os_tlb.h', 'os_version.h',
+        'os_voice.h', 'PRimage.h', 'R4300.h', 'gs2dex.h', 'gt.h', 'leo.h',
+        'leoappli.h', 'ramrom.h', 'rdb.h', 'rmon.h', 'ucode.h', 'ucode_debug.h',
+        'ultraerror.h', 'uportals.h', 'n_abi.h', 'n_libaudio_s_to_n.h',
+        'os_internal_debug.h', 'os_internal_error.h', 'os_internal_exception.h',
+        'os_internal_gio.h', 'os_internal_host.h', 'os_internal_reg.h',
+        'os_internal_rsp.h', 'os_internal_si.h', 'os_internal_thread.h',
+        'os_internal_tlb.h'
     ]
-    
+
     for header in sdk_headers:
         content = re.sub(rf'#include\s*<(?![pP][rR]/){header}>', f'#include <PR/{header}>', content)
         content = re.sub(rf'#include\s*"(?![pP][rR]/){header}"', f'#include "PR/{header}"', content)
@@ -93,19 +103,19 @@ def fix_decompiler_artifacts(content, filename):
         src = src.strip()
         if src.startswith('{'): return match.group(0)
         return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
-    
+
     content = assign_pattern.sub(array_to_memcpy, content)
     return content
 
 def fix_linkage_conflicts(content):
     """Resolves conflicts between static definitions and non-static prototypes, and adds missing decls."""
-    
+
     # 1. Resolve conflicts: If a function has a static definition but a non-static prototype, strip 'static'.
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1) # e.g. "void __codeBF0_draw(Actor *this) {"
         func_name = match.group(2)
-        
+
         # Look for any non-static prototype for this function
         proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
@@ -114,7 +124,7 @@ def fix_linkage_conflicts(content):
             if "static" not in proto_line and "typedef" not in proto_line:
                 has_non_static_proto = True
                 break
-                
+
         if has_non_static_proto:
             # Demote the definition from static to non-static
             content = content.replace("static " + full_sig, full_sig)
@@ -126,11 +136,11 @@ def fix_linkage_conflicts(content):
 
     signatures = []
     added_funcs = set()
-    
+
     for full_sig, func_name in matches:
         # Check if prototype exists (static or otherwise)
         has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
-        
+
         if not has_prototype and func_name not in added_funcs:
             decl = f"{full_sig.strip()};"
             signatures.append(decl)
@@ -140,18 +150,18 @@ def fix_linkage_conflicts(content):
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         any_func_pattern = re.compile(r"^([a-zA-Z_][\w\s\*]*\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*)\{", re.MULTILINE)
         first_func_match = any_func_pattern.search(content)
-        
+
         if first_func_match:
             pos = first_func_match.start()
             content = content[:pos] + header_block + content[pos:]
         else:
             content = content + "\n" + header_block
-            
+
     return content
 
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
-    
+
     # Proactively rename all potentially conflicting standard headers
     for ch in CONFLICTING_HEADERS:
         for sub_dir in ["include", os.path.join("include", "2.0L")]:
@@ -179,7 +189,7 @@ def sanitize_codebase(root_path):
                 content = redirect_legacy_includes(original_content)
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
-                
+
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
 
