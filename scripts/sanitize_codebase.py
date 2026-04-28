@@ -38,18 +38,23 @@ def redirect_legacy_includes(content):
         escaped_ch = ch.replace('.', r'\.')
         content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
-    # Expanded SDK headers that MUST have PR/ prefix
+    # Expanded SDK headers that MUST have PR/ prefix (Removed n_synth.h and related files)
     sdk_headers = [
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
         'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
         'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_vi.h',
-        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h',
-        'n_synth.h', 'n_synthInternals.h', 'n_libaudio_sn.h'
+        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h'
     ]
     
     for header in sdk_headers:
         content = re.sub(rf'#include\s*<(?![pP][rR]/){header}>', f'#include <PR/{header}>', content)
         content = re.sub(rf'#include\s*"(?![pP][rR]/){header}"', f'#include "PR/{header}"', content)
+
+    # REVERSAL: Fix files broken by previous aggressive PR/ targeting
+    content = re.sub(r'#include\s*[<"]PR/n_synth\.h[">]', '#include "n_synth.h"', content)
+    content = re.sub(r'#include\s*[<"]PR/n_synthInternals\.h[">]', '#include "n_synthInternals.h"', content)
+    content = re.sub(r'#include\s*[<"]PR/synthInternals\.h[">]', '#include "synthInternals.h"', content)
+    content = re.sub(r'#include\s*[<"]PR/n_libaudio_sn\.h[">]', '#include "n_libaudio_sn.h"', content)
 
     return content
 
