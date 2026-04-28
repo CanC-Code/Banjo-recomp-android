@@ -99,12 +99,17 @@ def fix_linkage_conflicts(content):
     if not matches: return content
 
     signatures = []
-    existing_decls = set(re.findall(r"^static\s+.*?;", content, re.MULTILINE))
+    added_funcs = set()
+    
     for full_sig, func_name in matches:
-        decl = f"{full_sig.strip()};"
-        if decl not in existing_decls:
+        # Search the entire file for an existing prototype of this function (static or non-static)
+        # Looks for instances of: func_name( ... );
+        has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
+        
+        if not has_prototype and func_name not in added_funcs:
+            decl = f"{full_sig.strip()};"
             signatures.append(decl)
-            existing_decls.add(decl)
+            added_funcs.add(func_name)
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
