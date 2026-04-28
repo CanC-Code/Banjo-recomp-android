@@ -3,6 +3,7 @@ import re
 import sys
 
 TARGET_DIRS = ["src", "include"]
+CONFLICTING_HEADERS = ["string.h", "time.h", "math.h", "stdlib.h", "stdio.h", "stdarg.h", "stdint.h"]
 
 # Pre-compile the token replacements for performance
 TOKEN_REPLACEMENTS = {
@@ -32,8 +33,10 @@ def redirect_legacy_includes(content):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    # Redirect shadowed string.h
-    content = re.sub(r'#include\s*[<"]string\.h[">]', '/* Redirected */ #include <n64_string.h>', content)
+    # Redirect shadowed standard headers
+    for ch in CONFLICTING_HEADERS:
+        escaped_ch = ch.replace('.', r'\.')
+        content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
     # Expanded SDK headers that MUST have PR/ prefix
     sdk_headers = [
@@ -120,12 +123,14 @@ def fix_linkage_conflicts(content):
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
     
-    # Physically rename the conflicting header
-    string_h_path = os.path.join(root_path, "include", "string.h")
-    n64_string_h_path = os.path.join(root_path, "include", "n64_string.h")
-    if os.path.exists(string_h_path):
-        os.rename(string_h_path, n64_string_h_path)
-        print("  [Renamed] include/string.h -> include/n64_string.h to resolve shadowing")
+    # Proactively rename all potentially conflicting standard headers
+    for ch in CONFLICTING_HEADERS:
+        for sub_dir in ["include", os.path.join("include", "2.0L")]:
+            old_path = os.path.join(root_path, sub_dir, ch)
+            new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
+            if os.path.exists(old_path):
+                os.rename(old_path, new_path)
+                print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
     for dir_name in TARGET_DIRS:
