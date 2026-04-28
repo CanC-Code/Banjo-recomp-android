@@ -64,20 +64,19 @@ def needs_types_injection(content):
 
 def inject_types_include(content):
     """Prepend n64_types.h include before the first #include or at top of file."""
-    # Try to insert after any leading comments/license block
     first_include = re.search(r'^#include', content, re.MULTILINE)
     if first_include:
         pos = first_include.start()
         return content[:pos] + N64_TYPES_PREAMBLE + content[pos:]
-    # No includes at all — prepend
     return N64_TYPES_PREAMBLE + content
 
 
-def redirect_legacy_includes(content):
+def redirect_legacy_includes(content, headers_to_redirect):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
-    for ch in CONFLICTING_HEADERS:
+    # Only replace headers that actually exist locally and were renamed
+    for ch in headers_to_redirect:
         escaped_ch = ch.replace('.', r'\.')
         content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
@@ -203,13 +202,22 @@ def sanitize_codebase(root_path):
         os.path.join("include", "2.0L"),
         os.path.join("include", "2.0L", "PR"),
     ]
+    
+    headers_to_redirect = set()
+    
     for ch in CONFLICTING_HEADERS:
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-            if os.path.exists(old_path) and not os.path.exists(new_path):
-                os.rename(old_path, new_path)
-                print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
+            
+            # Record the header if it exists so we only redirect what we have!
+            if os.path.exists(old_path) or os.path.exists(new_path):
+                headers_to_redirect.add(ch)
+                
+                # Perform the renaming if it hasn't been done yet
+                if os.path.exists(old_path) and not os.path.exists(new_path):
+                    os.rename(old_path, new_path)
+                    print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
     for dir_name in TARGET_DIRS:
@@ -226,13 +234,13 @@ def sanitize_codebase(root_path):
                         original_content = f.read()
                 except Exception: continue
 
-                content = redirect_legacy_includes(original_content)
+                # We now pass our verified set of local headers to the redirect function
+                content = redirect_legacy_includes(original_content, headers_to_redirect)
                 content = safe_token_replacement(content)
                 content = fix_decompiler_artifacts(content, filename)
 
                 if filename.endswith('.c'):
                     content = fix_linkage_conflicts(content)
-                    # Inject n64_types.h if no type-providing include exists
                     if needs_types_injection(content):
                         content = inject_types_include(content)
 
