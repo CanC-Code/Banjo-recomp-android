@@ -32,6 +32,9 @@ def redirect_legacy_includes(content):
     content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
     content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
+    # Redirect shadowed string.h
+    content = re.sub(r'#include\s*[<"]string\.h[">]', '/* Redirected */ #include <n64_string.h>', content)
+
     # Expanded SDK headers that MUST have PR/ prefix
     sdk_headers = [
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h', 
@@ -116,6 +119,14 @@ def fix_linkage_conflicts(content):
 
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
+    
+    # Physically rename the conflicting header
+    string_h_path = os.path.join(root_path, "include", "string.h")
+    n64_string_h_path = os.path.join(root_path, "include", "n64_string.h")
+    if os.path.exists(string_h_path):
+        os.rename(string_h_path, n64_string_h_path)
+        print("  [Renamed] include/string.h -> include/n64_string.h to resolve shadowing")
+
     patch_count = 0
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
