@@ -68,35 +68,6 @@ void core1_loadOTR(uint8_t* data, size_t size) {
 
 
 /* =========================
-   Memory
-========================= */
-
-void* n64_memcpy(void* dst, const void* src, size_t size) {
-    return memcpy(dst, src, size);
-}
-
-void* n64_memset(void* dst, int val, size_t size) {
-    return memset(dst, val, size);
-}
-
-
-/* =========================
-   PI (FIXED SIGNATURES)
-========================= */
-
-s32 osPiReadIo(u32 addr, u32* data) {
-    if (data) {
-        *data = 0;
-    }
-    return 0;
-}
-
-s32 osPiWriteIo(u32 addr, u32 value) {
-    return 0;
-}
-
-
-/* =========================
    Threading
 ========================= */
 
