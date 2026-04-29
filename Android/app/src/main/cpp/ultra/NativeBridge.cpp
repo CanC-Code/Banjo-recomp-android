@@ -2,17 +2,18 @@
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
-#include <GLES3/gl3.h> // Added for OpenGL functions
+#include <GLES3/gl3.h>
 #include <stdint.h>
 #include <stdlib.h> 
 #include <string.h>
+
+// Include engine types AFTER JNI to prevent macro collisions
 #include "n64_types.h"
 
 #define TAG "BKA-NativeBridge"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
-// We wrap everything in a single extern "C" block to be safe and clean
 extern "C" {
     // Engine globals and external functions
     extern ALGlobals* alGlobals;
@@ -20,10 +21,6 @@ extern "C" {
     extern void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
                                                         int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
                                                         const char* outDirPath);
-    
-    // Placeholder for the engine's frame processing function
-    // Replace this with your actual engine tick function (e.g., Banjo_Step() )
-    extern void game_engine_update(); 
 
     static jobject g_service_ref = nullptr;
     static jmethodID g_progress_mid = nullptr;
@@ -70,32 +67,31 @@ extern "C" {
         LOGI("Engine Memory Booted! Waiting for GLRenderer to draw frames...");
     }
 
-    // THIS IS THE REAL GAME LOOP!
+    /**
+     * The Heartbeat: Updates the OpenGL texture with N64 frame data.
+     * Called 60fps from the Android Choreographer/GLSurfaceView.
+     */
     JNIEXPORT void JNICALL
     Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint textureId) {
         if (alGlobals == nullptr) return;
 
-        // 1. Tell the engine to calculate the next frame
-        // game_engine_update(); 
-
-        // 2. Bind the texture created by the Java GLRenderer
+        // 1. Bind the target texture
         glBindTexture(GL_TEXTURE_2D, textureId);
 
-        // 3. Upload the engine's framebuffer to the GPU texture
-        // Note: Change 320/240 and alGlobals->framebuffer to match your engine's actual output
-        if (alGlobals != nullptr) {
-            glTexSubImage2D(
-                GL_TEXTURE_2D, 
-                0,              // Level
-                0, 0,           // Offset
-                320, 240,       // Resolution (Standard N64)
-                GL_RGBA,        // Format
-                GL_UNSIGNED_BYTE, 
-                alGlobals;      // Pointer to raw pixel data
-            );
-        }
+        // 2. Upload Pixel Data
+        // Assumes a 320x240 buffer. Adjust resolution if your recomp uses 640x480.
+        // alGlobals must point to a valid pixel array (usually uint32_t for RGBA)
+        glTexSubImage2D(
+            GL_TEXTURE_2D, 
+            0,                  // Level
+            0, 0,               // Offsets
+            320, 240,           // Width, Height
+            GL_RGBA,            // Pixel Format
+            GL_UNSIGNED_BYTE,   // Data Type
+            alGlobals           // Pointer to raw frame data
+        );
 
-        // 4. Unbind
+        // 3. Unbind to stay clean
         glBindTexture(GL_TEXTURE_2D, 0);
     }
-} // End of extern "C"
+}
