@@ -47,6 +47,7 @@ float __libm_qnan_f = 0.0f; // Represents a floating point NaN
 // --- 3. Unknown Decompiled Functions ---
 int func_8025C29C(void) { return 0; }
 int func_80253010(void) { return 0; }
+int func_80253034(void) { return 0; } // <-- Added function
 void func_8026A2E0(void) {}
 
 // --- 4. Missing Global Variables & Decompiled Addresses ---
@@ -60,9 +61,15 @@ void* gFramebuffers[3] = {0, 0, 0};
 
 // --- 5. Missing Linker Script Symbols ---
 int crc_ROM_START = 0;
-int soundfont2ctl_ROM_END = 0;
+int soundfont1ctl_ROM_START = 0; // <-- Added
+int soundfont1ctl_ROM_END = 0;   // <-- Added
+int soundfont1tbl_ROM_START = 0; // <-- Added
 int soundfont2ctl_ROM_START = 0;
+int soundfont2ctl_ROM_END = 0;
 int soundfont2tbl_ROM_START = 0;
+int assets_ROM_START = 0;        // <-- Added
+int boot_bk_boot_ROM_START = 0;  // <-- Added
+int boot_bk_boot_ROM_END = 0;    // <-- Added
 int n_aspMainTextStart = 0;
 int n_aspMainDataStart = 0;
 int gSPF3DEX_fifoTextStart = 0;
