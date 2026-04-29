@@ -26,30 +26,34 @@ if(NOT EXCLUDE_GAME_SRC)
 
     # --- THE CRITICAL FIX: VERSION & SYMBOL PRUNING ---
     
-    # 1. Identify files that have version tags (e.g., .us.v10.c, .pal.c)
-    # We exclude these to avoid duplicates with the base .c files.
+    # 1. Improved Version Filtering
+    # This regex now catches .us.v10.c, .pal.v11.c, etc. 
+    # It looks for any sequence of version tags between the filename and .c extension.
     foreach(FILE_PATH ${GAME_SOURCES})
-        if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11)\\.c$")
+        if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11).*\\.c$")
             list(APPEND VERSIONED_FILES ${FILE_PATH})
         endif()
     endforeach()
 
-    # 2. Identify explicit system/library collisions from the logs
+    # 2. Identify explicit system/library collisions
     file(GLOB_RECURSE SYSTEM_CONFLICTS 
         "${REPO_ROOT}/src/done/*.c"      
         "${REPO_ROOT}/src/core1/os/*.c"  
         "${REPO_ROOT}/src/core1/io/*.c"
-        "${REPO_ROOT}/src/core1/audio/sl.c"  # Conflicts with stubs.cpp (alGlobals)
-        "${REPO_ROOT}/src/core1/code_0.c"    # Conflicts with stubs.cpp (mainLoop)
-        "${REPO_ROOT}/src/core1/code_7F60.c" # Duplicated math library
+        "${REPO_ROOT}/src/core1/audio/sl.c"  # Pruned: Conflicts with stubs.cpp (alGlobals)
+        "${REPO_ROOT}/src/core1/code_0.c"    # Pruned: Conflicts with stubs.cpp (mainLoop)
+        "${REPO_ROOT}/src/core1/code_7F60.c" # Pruned: Duplicated library function
     )
     
-    # Remove all identified conflicts
+    # Remove all identified conflicts from the master list
     if(VERSIONED_FILES)
         list(REMOVE_ITEM GAME_SOURCES ${VERSIONED_FILES})
+        message(STATUS "Pruned ${VERSIONED_FILES} version-specific duplicates.")
     endif()
+    
     if(SYSTEM_CONFLICTS)
         list(REMOVE_ITEM GAME_SOURCES ${SYSTEM_CONFLICTS})
+        message(STATUS "Pruned System/Audio conflicts.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
