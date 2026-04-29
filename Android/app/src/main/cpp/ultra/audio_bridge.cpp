@@ -13,7 +13,8 @@ void coMusicPlayer_playMusic(int id) {
     LOGW("playMusic stub: %d", id);
 }
 
-void comusic_8025AB44(...) {
+// FIXED: Replaced '...' with 'void' for strict C compatibility inside extern "C"
+void comusic_8025AB44(void) {
     LOGW("comusic_8025AB44 stub");
 }
 
@@ -21,27 +22,31 @@ void comusic_8025AB44(...) {
    Audio Engine
 ========================= */
 
-void n_alSynAddPlayer(...) {
+void n_alSynAddPlayer(void) {
     LOGW("n_alSynAddPlayer stub");
 }
 
-void n_alSynRemovePlayer(...) {
+void n_alSynRemovePlayer(void) {
     LOGW("n_alSynRemovePlayer stub");
 }
 
-void n_alSynStartVoice(...) {}
-void n_alSynStopVoice(...) {}
+void n_alSynStartVoice(void) {}
+void n_alSynStopVoice(void) {}
 
 /* =========================
    SFX
 ========================= */
 
-void sfx_play(...) {
+// FIXED: Commented out sfx_play to resolve the "duplicate symbol" linker error.
+// The game already provides the full definition for this in src/core2/code_85800.c.
+/*
+void sfx_play(void) {
     LOGW("sfx_play stub");
 }
+*/
 
-void func_8025F4F0(...) {
+void func_8025F4F0(void) {
     LOGW("audio func_8025F4F0 stub");
 }
 
-}
+} // extern "C"
