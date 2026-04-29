@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include <string.h>
 
-// libultra types come from n64_types.h (force included)
 extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
@@ -16,78 +15,61 @@ extern "C" {
 
 extern "C" {
 
-/**
- * ============================
- * Core Engine Globals
- * ============================
- */
+/* =========================
+   Globals
+========================= */
 
 ALGlobals* alGlobals = nullptr;
 
 
-/**
- * ============================
- * Engine Entry Points
- * ============================
- */
+/* =========================
+   Engine Entry
+========================= */
 
 void initInterruptTables() {
-    LOGI("initInterruptTables: Stubbed");
+    LOGI("initInterruptTables stub");
 }
 
 void mainLoop() {
-    LOGW("mainLoop called (stub)");
+    LOGW("mainLoop stub");
 }
 
 
-/**
- * ============================
- * Core Runtime Stubs
- * ============================
- */
+/* =========================
+   Core Runtime
+========================= */
 
 void core1_reset() {
-    LOGI("core1_reset called");
+    LOGI("core1_reset");
 }
 
-void core1_stepCPU() {
-}
-
-void core2_stepFrame() {
-}
+void core1_stepCPU() {}
+void core2_stepFrame() {}
 
 
-/**
- * ============================
- * Audio Stubs
- * ============================
- */
+/* =========================
+   Audio
+========================= */
 
-void n_audioStep() {
-}
+void n_audioStep() {}
 
 
-/**
- * ============================
- * Resource / OTR
- * ============================
- */
+/* =========================
+   OTR / Assets
+========================= */
 
 void core1_loadOTR(uint8_t* data, size_t size) {
     if (!data || size == 0) {
-        LOGW("core1_loadOTR: invalid data");
+        LOGW("core1_loadOTR invalid");
         return;
     }
-
-    LOGI("core1_loadOTR: Loaded OTR (%zu bytes)", size);
+    LOGI("Loaded OTR (%zu bytes)", size);
 }
 
 
-/**
- * ============================
- * Memory Stubs
- * ============================
- */
+/* =========================
+   Memory
+========================= */
 
 void* n64_memcpy(void* dst, const void* src, size_t size) {
     return memcpy(dst, src, size);
@@ -98,11 +80,9 @@ void* n64_memset(void* dst, int val, size_t size) {
 }
 
 
-/**
- * ============================
- * PI (Peripheral Interface)
- * ============================
- */
+/* =========================
+   PI (FIXED SIGNATURES)
+========================= */
 
 s32 osPiReadIo(u32 addr, u32* data) {
     if (data) {
@@ -116,69 +96,56 @@ s32 osPiWriteIo(u32 addr, u32 value) {
 }
 
 
-/**
- * ============================
- * Threading (Minimal Safe Stubs)
- * ============================
- */
+/* =========================
+   Threading
+========================= */
 
-void osCreateThread(OSThread* thread, OSId id, void (*entry)(void*), void* arg,
+void osCreateThread(OSThread* t, OSId id, void (*entry)(void*), void* arg,
                     void* stack, OSPri pri) {
     LOGW("osCreateThread stub");
 }
 
-void osStartThread(OSThread* thread) {
+void osStartThread(OSThread* t) {
     LOGW("osStartThread stub");
 }
 
-OSPri osGetThreadPri(OSThread* thread) {
+OSPri osGetThreadPri(OSThread* t) {
     return 0;
 }
 
-void osSetThreadPri(OSThread* thread, OSPri pri) {
-}
+void osSetThreadPri(OSThread* t, OSPri pri) {}
 
 
-/**
- * ============================
- * Message Queue
- * ============================
- */
+/* =========================
+   Messaging
+========================= */
 
-void osCreateMesgQueue(OSMesgQueue* mq, OSMesg* buf, s32 count) {
-}
+void osCreateMesgQueue(OSMesgQueue* mq, OSMesg* buf, s32 count) {}
 
 s32 osSendMesg(OSMesgQueue* mq, OSMesg msg, s32 flags) {
     return 0;
 }
 
 s32 osRecvMesg(OSMesgQueue* mq, OSMesg* msg, s32 flags) {
-    if (msg) {
-        *msg = 0;
-    }
+    if (msg) *msg = 0;
     return 0;
 }
 
 
-/**
- * ============================
- * Interrupts / System
- * ============================
- */
+/* =========================
+   Interrupts
+========================= */
 
 OSIntMask osSetIntMask(OSIntMask mask) {
     return 0;
 }
 
-void osYieldThread(void) {
-}
+void osYieldThread(void) {}
 
 
-/**
- * ============================
- * Timing
- * ============================
- */
+/* =========================
+   Timing
+========================= */
 
 u64 osGetTime(void) {
     return 0;
@@ -189,30 +156,18 @@ u32 osGetCount(void) {
 }
 
 
-/**
- * ============================
- * Generic Safe Fallbacks
- * ============================
- */
+/* =========================
+   Generic Fallbacks
+========================= */
 
-int stub_return_0() {
-    return 0;
-}
-
-float stub_return_0f() {
-    return 0.0f;
-}
-
-void stub_void() {
-}
+int stub_return_0() { return 0; }
+float stub_return_0f() { return 0.0f; }
+void stub_void() {}
 
 
-/**
- * ============================
- * Example Game Function Stubs
- * (EXPAND FROM LINKER ERRORS)
- * ============================
- */
+/* =========================
+   Example Game Stubs
+========================= */
 
 int func_80258A4C(...) {
     LOGW("func_80258A4C stub");
