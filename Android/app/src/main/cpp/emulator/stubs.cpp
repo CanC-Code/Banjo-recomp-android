@@ -7,7 +7,7 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-#include <PR/libaudio.h> // This provides the correct ALGlobals type
+#include <PR/libaudio.h> // Required to define the ALGlobals type
 }
 
 #define LOG_TAG "BKA_STUBS"
@@ -21,10 +21,8 @@ extern "C" {
 ========================= */
 
 /**
- * FIX: We match the type defined in libaudio.h exactly.
- * Since we are just setting it to nullptr (empty), the 
- * compiler doesn't need to know the full internal 
- * details of the ALGlobals struct yet.
+ * FIXED: We now use 'ALGlobals*' instead of 'void*' to match 
+ * the declaration found in PR/libaudio.h.
  */
 ALGlobals* alGlobals = nullptr;
 
