@@ -3,12 +3,13 @@
 #include <stddef.h>
 #include <string.h>
 
+// IMPORTANT: Include our bridge types to get AndroidBridgeGlobals
+#include "n64_types.h"
+
 extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-// Note: We don't include libaudio.h here because it is already 
-// provided by the forced-include in CMake (n64_types.h).
 }
 
 #define LOG_TAG "BKA_STUBS"
@@ -22,10 +23,11 @@ extern "C" {
 ========================= */
 
 /**
- * FIXED: Matching the type declared in the forced-include headers.
- * This resolves the "redefinition with a different type" error.
+ * FIXED: Renamed to gBridgeGlobals with type AndroidBridgeGlobals.
+ * This prevents the collision with the N64 SDK's internal 'ALGlobals' 
+ * while giving us a safe place to store the Android screenBuffer.
  */
-ALGlobals* alGlobals = nullptr;
+AndroidBridgeGlobals* gBridgeGlobals = nullptr;
 
 
 /* =========================
@@ -79,9 +81,6 @@ void stub_void(void) {}
    Game-Specific Stubs
 ========================= */
 
-// FIXED: Removed the bare '...' variadic arguments. 
-// Using '(void)' or an empty signature is safer in an extern "C" block
-// unless the exact C header declares a specific variadic signature.
 int func_80258A4C(void) {
     LOGW("func_80258A4C stub");
     return 0;
