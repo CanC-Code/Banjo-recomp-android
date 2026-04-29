@@ -21,7 +21,7 @@ set(BRIDGE_SOURCES
     ultra/lowlevel_bridge.cpp
 
     # Emulator / runtime
-    emulator/stubs.cpp
+    # FIXED: Removed emulator/stubs.cpp to rely purely on original sources
     emulator/pi_hle.cpp
     emulator/resource_mgr.cpp
 
@@ -57,8 +57,10 @@ if(NOT EXCLUDE_GAME_SRC)
     endif()
 
     # --- Remove conflicting subsystems ---
+    # FIXED: We are now allowing src/core1/ to compile so the real engine, 
+    # math, and viewport functions are linked. We keep src/done/ excluded 
+    # because it contains N64 OS code that conflicts with the ultra bridges.
     file(GLOB_RECURSE CONFLICTS
-        "${REPO_ROOT}/src/core1/*"
         "${REPO_ROOT}/src/done/*"
     )
 
