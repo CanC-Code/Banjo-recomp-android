@@ -71,22 +71,36 @@ int gSPL3DEX_fifoTextStart = 0;
 int gSPL3DEX_fifoDataStart = 0;
 int gSPL3DEX_fifoTextEnd = 0;
 
-// Core2 overlays
-int core2_TEXT_START = 0;
-int core2_TEXT_END = 0;
-int core2_DATA_START = 0;
-int core2_RODATA_END = 0;
-int core2_BSS_START = 0;
-int core2_BSS_END = 0;
-int core2_VRAM = 0;
-int core2_VRAM_END = 0;
-int core2_ROM_START = 0;
-int core2_ROM_END = 0;
+// --- 6. Overlay Memory Boundaries ---
+
+// A C-Macro to easily define all 10 memory boundary variables for any given level
+#define DEFINE_OVERLAY(name) \
+    int name##_VRAM = 0; \
+    int name##_VRAM_END = 0; \
+    int name##_ROM_START = 0; \
+    int name##_ROM_END = 0; \
+    int name##_TEXT_START = 0; \
+    int name##_TEXT_END = 0; \
+    int name##_DATA_START = 0; \
+    int name##_RODATA_END = 0; \
+    int name##_BSS_START = 0; \
+    int name##_BSS_END = 0;
+
+// Core Engine Overlays
+DEFINE_OVERLAY(core2)
 
 // Level Overlays
-int emptyLvl_VRAM = 0;
-int emptyLvl_VRAM_END = 0;
-int emptyLvl_ROM_START = 0;
-int emptyLvl_ROM_END = 0;
-int CC_VRAM = 0;
-int CC_VRAM_END = 0;
+DEFINE_OVERLAY(emptyLvl)
+DEFINE_OVERLAY(SM)          // Spiral Mountain
+DEFINE_OVERLAY(MM)          // Mumbo's Mountain
+DEFINE_OVERLAY(TTC)         // Treasure Trove Cove
+DEFINE_OVERLAY(CC)          // Clanker's Cavern
+DEFINE_OVERLAY(BGS)         // Bubblegloop Swamp
+DEFINE_OVERLAY(FP)          // Freezeezy Peak
+DEFINE_OVERLAY(GV)          // Gobi's Valley
+DEFINE_OVERLAY(MMM)         // Mad Monster Mansion
+DEFINE_OVERLAY(RBB)         // Rusty Bucket Bay
+DEFINE_OVERLAY(CCW)         // Click Clock Wood
+DEFINE_OVERLAY(lair)        // Gruntilda's Lair
+DEFINE_OVERLAY(fight)       // Final Battle
+DEFINE_OVERLAY(cutscenes)   // Intro/Outro Cutscenes
