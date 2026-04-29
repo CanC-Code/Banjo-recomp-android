@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22.1)
+Cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
@@ -64,7 +64,9 @@ if(NOT EXCLUDE_GAME_SRC)
         "${REPO_ROOT}/src/done/*"
     )
 
+    # FIX: Rescue bk_boot_1050.c from the conflicts list so bootproc is compiled!
     if(CONFLICTS)
+        list(REMOVE_ITEM CONFLICTS "${REPO_ROOT}/src/done/bk_boot_1050.c")
         list(REMOVE_ITEM GAME_SOURCES ${CONFLICTS})
     endif()
 
