@@ -5,7 +5,7 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(TARGET_VERSION "us.v10")
 
 # ============================================================
-# 1. Bridge Sources (CORE RUNTIME LAYER)
+# 1. Bridge Sources
 # ============================================================
 set(BRIDGE_SOURCES
     ultra/NativeBridge.cpp
@@ -25,10 +25,7 @@ set(BRIDGE_SOURCES
 # ============================================================
 # 2. Add Library
 # ============================================================
-add_library(bkawrapper SHARED
-    ${BRIDGE_SOURCES}
-    # Note: Game sources are usually added here via a separate glob or script
-)
+add_library(bkawrapper SHARED ${BRIDGE_SOURCES})
 
 # ============================================================
 # 3. Include Directories
@@ -37,6 +34,7 @@ target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
     ${CMAKE_CURRENT_SOURCE_DIR}/emulator
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools     # FIX: Added for rare_decompression.h
     ${REPO_ROOT}/include
     ${REPO_ROOT}/include/2.0L
     ${REPO_ROOT}/src
@@ -45,11 +43,8 @@ target_include_directories(bkawrapper PRIVATE
 # ============================================================
 # 4. Compile Options
 # ============================================================
-
 target_compile_options(bkawrapper PRIVATE
-    # CRITICAL: This injects n64_types.h into every source file automatically
     "-include${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    
     -w
     -fpermissive
     -Wno-error=implicit-int
