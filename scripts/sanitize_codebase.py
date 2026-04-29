@@ -65,6 +65,8 @@ def needs_types_injection(content):
 
 def inject_types_include(content, is_c_file=False):
     if is_c_file:
+        # Strip existing n64_types.h so it can be moved to the end of the include block.
+        # This ensures the file is "modified" if it was previously at the top.
         content = re.sub(r'^[ \t]*#[ \t]*include[ \t]*[<"]n64_types\.h[">][ \t]*\n?', '', content, flags=re.MULTILINE)
 
     lines = content.split('\n')
@@ -206,8 +208,9 @@ def fix_struct_shadowing(content):
     'u8', 's8', etc., hiding the actual global typedefs from Clang.
     """
     for shadow_type in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64']:
-        # Match pattern `} u8;` accommodating varied spacing
-        pat = re.compile(rf'\}\s*{shadow_type}\s*;')
+        # Match pattern `} u8;` accommodating varied spacing.
+        # Concatenation used here to avoid f-string single brace SyntaxError.
+        pat = re.compile(r'\}\s*' + shadow_type + r'\s*;')
         if pat.search(content):
             # Rename definition (e.g. `} u8;` -> `} u8_struct;`)
             content = pat.sub(f'}} {shadow_type}_struct;', content)
@@ -351,6 +354,7 @@ def sanitize_codebase(root_path):
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
                         if filename not in CORE_TYPE_HEADERS:
+                            # C files always get n64_types.h appended after the include block
                             content = inject_types_include(content, is_c_file=True)
 
                     if filename.endswith('.h'):
