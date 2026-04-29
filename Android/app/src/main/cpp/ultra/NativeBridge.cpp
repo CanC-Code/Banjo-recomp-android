@@ -7,6 +7,7 @@
 #include <stdlib.h> 
 #include <string.h>
 
+// Include our types first
 #include "n64_types.h"
 
 #define TAG "BKA-NativeBridge"
@@ -14,9 +15,11 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 extern "C" {
-    // Linked to the renamed struct
-    extern AndroidBridgeGlobals* gBridgeGlobals; 
-    
+    // 1. Global Bridge Instance (Linked to the renamed struct)
+    // You will need to ensure your engine initialization sets this pointer!
+    static AndroidBridgeGlobals* gBridgeGlobals = nullptr; 
+
+    // 2. Engine Function Externs
     extern void initInterruptTables();
     extern void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
                                                         int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
@@ -25,6 +28,8 @@ extern "C" {
     static jobject g_service_ref = nullptr;
     static jmethodID g_progress_mid = nullptr;
 
+    // --- JNI Implementation ---
+
     JNIEXPORT void JNICALL
     Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass clazz, jobject serviceObj) {
         if (g_service_ref != nullptr) env->DeleteGlobalRef(g_service_ref);
@@ -32,7 +37,7 @@ extern "C" {
 
         jclass serviceClass = env->GetObjectClass(g_service_ref);
         g_progress_mid = env->GetMethodID(serviceClass, "updateOtrProgress", "(ILjava/lang/String;)V");
-        LOGI("NativeBridge Initialized.");
+        LOGI("NativeBridge: Initialized.");
     }
 
     JNIEXPORT void JNICALL
@@ -62,15 +67,32 @@ extern "C" {
         }
 
         initInterruptTables();
-        LOGI("Engine Memory Booted!");
+        LOGI("NativeBridge: Engine Memory Booted.");
     }
 
+    /**
+     * Updates the OpenGL texture with pixels from the N64 engine.
+     */
     JNIEXPORT void JNICALL
     Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint textureId) {
-        if (gBridgeGlobals == nullptr || gBridgeGlobals->screenBuffer == nullptr) return;
+        // Ensure the bridge and its buffer are ready
+        if (gBridgeGlobals == nullptr || gBridgeGlobals->screenBuffer == nullptr) {
+            return;
+        }
 
         glBindTexture(GL_TEXTURE_2D, textureId);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 240, GL_RGBA, GL_UNSIGNED_BYTE, gBridgeGlobals->screenBuffer);
+
+        // Upload the pixels from the N64 engine's buffer
+        glTexSubImage2D(
+            GL_TEXTURE_2D, 
+            0, 
+            0, 0, 
+            320, 240, 
+            GL_RGBA, 
+            GL_UNSIGNED_BYTE, 
+            gBridgeGlobals->screenBuffer 
+        );
+
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 }
