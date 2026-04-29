@@ -4,7 +4,6 @@ project("bkawrapper")
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
 # --- 1. Define Native Port Infrastructure ---
-# These files bridge the N64 logic to Android hardware and provide OS stubs.
 set(VERIFICATION_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -25,18 +24,21 @@ if(NOT EXCLUDE_GAME_SRC)
     # Recursively find all C files in the game source
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # --- THE CRITICAL FIX: EXCLUDING SYSTEM CONFLICTS ---
-    # We must exclude recompiled OS and IO folders because the 
-    # Native Bridge (VERIFICATION_SOURCES) already implements these.
+    # --- THE CRITICAL FIX: LINKER PRUNING ---
+    # We must exclude specific files that contain duplicate symbols
+    # or conflict with the modern Android entry points in stubs.cpp.
     file(GLOB_RECURSE CONFLICTING_FILES 
-        "${REPO_ROOT}/src/done/*.c"      # Manual overrides
-        "${REPO_ROOT}/src/core1/os/*.c"  # Recompiled OS (conflicts with stubs.cpp)
-        "${REPO_ROOT}/src/core1/io/*.c"  # Recompiled IO (conflicts with pi_hle.cpp)
+        "${REPO_ROOT}/src/done/*.c"      
+        "${REPO_ROOT}/src/core1/os/*.c"  
+        "${REPO_ROOT}/src/core1/io/*.c"  
+        # --- NEW EXCLUSIONS BASED ON LATEST LOG ---
+        "${REPO_ROOT}/src/core1/code_0.c"    # Conflicts with stubs.cpp (mainLoop)
+        "${REPO_ROOT}/src/core1/code_7F60.c" # Duplicated library function (__guMtxF2L)
     )
     
     if(CONFLICTING_FILES)
         list(REMOVE_ITEM GAME_SOURCES ${CONFLICTING_FILES})
-        message(STATUS "Pruned recompiled OS/IO files to resolve linker collisions.")
+        message(STATUS "Pruned specific files to resolve mainLoop and library collisions.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
@@ -58,7 +60,7 @@ target_include_directories(bkawrapper PRIVATE
     ${REPO_ROOT}/tools/bk_rom_compressor/modules/rarezip
 )
 
-# --- 4. Compilation Flags for Legacy Code ---
+# --- 4. Compilation Flags ---
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
     "-w"                           
@@ -69,10 +71,9 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=incompatible-pointer-types"
 )
 
-# Define the microcode for the Graphics Binary Interface
 target_compile_definitions(bkawrapper PRIVATE F3DEX_GBI)
 
-# --- 5. Linking Native Libraries ---
+# --- 5. Linking ---
 find_library(log-lib log)
 target_link_libraries(bkawrapper 
     android 
