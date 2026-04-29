@@ -21,24 +21,35 @@ option(EXCLUDE_GAME_SRC "Skip the main game source files" OFF)
 if(NOT EXCLUDE_GAME_SRC)
     message(STATUS "Including original N64 source files from ${REPO_ROOT}/src")
 
-    # Recursively find all C files in the game source
+    # Recursively find all C files
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # --- THE CRITICAL FIX: LINKER PRUNING ---
-    # We must exclude specific files that contain duplicate symbols
-    # or conflict with the modern Android entry points in stubs.cpp.
-    file(GLOB_RECURSE CONFLICTING_FILES 
+    # --- THE CRITICAL FIX: VERSION & SYMBOL PRUNING ---
+    
+    # 1. Identify files that have version tags (e.g., .us.v10.c, .pal.c)
+    # We exclude these to avoid duplicates with the base .c files.
+    foreach(FILE_PATH ${GAME_SOURCES})
+        if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11)\\.c$")
+            list(APPEND VERSIONED_FILES ${FILE_PATH})
+        endif()
+    endforeach()
+
+    # 2. Identify explicit system/library collisions from the logs
+    file(GLOB_RECURSE SYSTEM_CONFLICTS 
         "${REPO_ROOT}/src/done/*.c"      
         "${REPO_ROOT}/src/core1/os/*.c"  
-        "${REPO_ROOT}/src/core1/io/*.c"  
-        # --- NEW EXCLUSIONS BASED ON LATEST LOG ---
+        "${REPO_ROOT}/src/core1/io/*.c"
+        "${REPO_ROOT}/src/core1/audio/sl.c"  # Conflicts with stubs.cpp (alGlobals)
         "${REPO_ROOT}/src/core1/code_0.c"    # Conflicts with stubs.cpp (mainLoop)
-        "${REPO_ROOT}/src/core1/code_7F60.c" # Duplicated library function (__guMtxF2L)
+        "${REPO_ROOT}/src/core1/code_7F60.c" # Duplicated math library
     )
     
-    if(CONFLICTING_FILES)
-        list(REMOVE_ITEM GAME_SOURCES ${CONFLICTING_FILES})
-        message(STATUS "Pruned specific files to resolve mainLoop and library collisions.")
+    # Remove all identified conflicts
+    if(VERSIONED_FILES)
+        list(REMOVE_ITEM GAME_SOURCES ${VERSIONED_FILES})
+    endif()
+    if(SYSTEM_CONFLICTS)
+        list(REMOVE_ITEM GAME_SOURCES ${SYSTEM_CONFLICTS})
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
@@ -75,10 +86,4 @@ target_compile_definitions(bkawrapper PRIVATE F3DEX_GBI)
 
 # --- 5. Linking ---
 find_library(log-lib log)
-target_link_libraries(bkawrapper 
-    android 
-    ${log-lib} 
-    GLESv3 
-    EGL
-    z 
-)
+target_link_libraries(bkawrapper android ${log-lib} GLESv3 EGL z)
