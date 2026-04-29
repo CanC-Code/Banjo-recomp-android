@@ -63,9 +63,6 @@ if(NOT EXCLUDE_GAME_SRC)
     file(GLOB_RECURSE CONFLICTS
         "${REPO_ROOT}/src/done/*"
     )
-    
-    # Fix the duplicate symbol: sfx_play error from the audio bridge
-    list(APPEND CONFLICTS "${REPO_ROOT}/src/core2/code_85800.c")
 
     if(CONFLICTS)
         list(REMOVE_ITEM GAME_SOURCES ${CONFLICTS})
@@ -77,13 +74,24 @@ else()
 endif()
 
 # ============================================================
-# 3. Library
+# 3. Source File Specific Properties (The Fix!)
+# ============================================================
+
+# We need code_85800.c for the SFX API, but it contains a duplicate sfx_play function.
+# We rename it here during compilation so our audio_bridge.cpp can safely take over.
+set_source_files_properties(
+    "${REPO_ROOT}/src/core2/code_85800.c" 
+    PROPERTIES COMPILE_DEFINITIONS "sfx_play=original_sfx_play"
+)
+
+# ============================================================
+# 4. Library
 # ============================================================
 
 add_library(bkawrapper SHARED ${ALL_SOURCES})
 
 # ============================================================
-# 4. Includes
+# 5. Includes
 # ============================================================
 
 target_include_directories(bkawrapper PRIVATE
@@ -99,7 +107,7 @@ target_include_directories(bkawrapper PRIVATE
 )
 
 # ============================================================
-# 5. Compile Options
+# 6. Compile Options
 # ============================================================
 
 target_compile_options(bkawrapper PRIVATE
@@ -121,7 +129,7 @@ target_compile_options(bkawrapper PRIVATE
 )
 
 # ============================================================
-# 6. Defines
+# 7. Defines
 # ============================================================
 
 target_compile_definitions(bkawrapper PRIVATE
@@ -132,12 +140,11 @@ target_compile_definitions(bkawrapper PRIVATE
 )
 
 # ============================================================
-# 7. Link Options & Libraries
+# 8. Link Options & Libraries
 # ============================================================
 
 find_library(log-lib log)
 
-# Allows Android Bridges to override N64 functions
 target_link_options(bkawrapper PRIVATE "-Wl,--allow-multiple-definition")
 
 target_link_libraries(bkawrapper PRIVATE
