@@ -3,7 +3,8 @@ project("bkawrapper")
 
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
-# --- 1. Define Core Verification Sources ---
+# --- 1. Define Native Port Infrastructure ---
+# These files are necessary to bridge the N64 logic to Android hardware.
 set(VERIFICATION_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -15,20 +16,25 @@ set(VERIFICATION_SOURCES
     "tools/rare_decompression.cpp" 
 )
 
-# --- 2. Dynamically Include Game Source (The 870 Files) ---
-# This matches the -DEXCLUDE_GAME_SRC flag from your workflow
+# --- 2. Original N64 Source Integration ---
 option(EXCLUDE_GAME_SRC "Skip the main game source files" OFF)
 
 if(NOT EXCLUDE_GAME_SRC)
-    message(STATUS "Including game source files from ${REPO_ROOT}/src")
+    message(STATUS "Including original N64 source files from ${REPO_ROOT}/src")
 
-    # Recursively find all C files in the game source
-    file(GLOB_RECURSE GAME_SOURCES 
-        "${REPO_ROOT}/src/*.c"
-    )
+    # Recursively find all C files in the game source (the 870+ files)
+    file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # Optional: Filter out specific incompatible files if needed
-    # list(REMOVE_ITEM GAME_SOURCES "${REPO_ROOT}/src/problematic_file.c")
+    # --- THE CRITICAL FIX ---
+    # To use the "Original" source, we must EXCLUDE the "done" folder.
+    # The "done" folder contains manual overrides that cause the duplicate 
+    # symbol errors (e.g., two versions of osCreateThread).
+    file(GLOB_RECURSE DONE_FOLDER_FILES "${REPO_ROOT}/src/done/*.c")
+    
+    if(DONE_FOLDER_FILES)
+        list(REMOVE_ITEM GAME_SOURCES ${DONE_FOLDER_FILES})
+        message(STATUS "Excluded /src/done/ to prioritize original N64 recompiled sources.")
+    endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
 else()
@@ -46,29 +52,25 @@ target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
     ${REPO_ROOT}/include
     ${REPO_ROOT}/include/2.0L
-    ${REPO_ROOT}/src               # Essential for internal game headers
+    ${REPO_ROOT}/src               
     ${REPO_ROOT}/tools/bk_rom_compressor/modules/rarezip
 )
 
-# --- 4. Realignment Compilation Options ---
-# Addressing modern Clang restrictions for legacy MIPS code
+# --- 4. Compilation Flags for Legacy Code ---
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w"                           # Silences warnings (useful for initial alignment)
-    "-fpermissive"                 # Softens C++ standard checks if any .c is treated as .cpp
-    "-Wno-error=implicit-int"      # Common in IDO 5.3 code
-    "-Wno-error=int-conversion"    # Critical for 32-bit pointer logic on 64-bit ARM
+    "-w"                           
+    "-fpermissive"                 
+    "-Wno-error=implicit-int"      
+    "-Wno-error=int-conversion"    
     "-Wno-error=implicit-function-declaration"
+    "-Wno-error=incompatible-pointer-types"
 )
 
-# --- 4.5 Microcode Definitions ---
-# Defines the F3DEX microcode family so headers like gbi.h correctly expand 
-# macros like gSP1Quadrangle to include G_TRI2 and related command IDs.
-target_compile_definitions(bkawrapper PRIVATE 
-    F3DEX_GBI
-)
+# Define the microcode for the Graphics Binary Interface
+target_compile_definitions(bkawrapper PRIVATE F3DEX_GBI)
 
-# --- 5. Linking ---
+# --- 5. Linking Native Libraries ---
 find_library(log-lib log)
 target_link_libraries(bkawrapper 
     android 
