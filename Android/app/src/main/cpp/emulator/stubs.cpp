@@ -7,7 +7,7 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-// Note: libaudio.h is removed to avoid the incomplete type conflict
+#include <PR/libaudio.h> // This provides the correct ALGlobals type
 }
 
 #define LOG_TAG "BKA_STUBS"
@@ -21,11 +21,12 @@ extern "C" {
 ========================= */
 
 /**
- * FIX: We define alGlobals as void* here. 
- * The Linker only cares about the name 'alGlobals'. 
- * By using void*, we avoid "Incomplete Type" errors from N64 headers.
+ * FIX: We match the type defined in libaudio.h exactly.
+ * Since we are just setting it to nullptr (empty), the 
+ * compiler doesn't need to know the full internal 
+ * details of the ALGlobals struct yet.
  */
-void* alGlobals = nullptr;
+ALGlobals* alGlobals = nullptr;
 
 
 /* =========================
@@ -77,7 +78,6 @@ void stub_void() {}
 
 /* =========================
    Game-Specific Stubs
-   These satisfy the linker for symbols specific to Banjo-Kazooie.
 ========================= */
 
 int func_80258A4C(...) {
