@@ -15,7 +15,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
-import android.opengl.GLSurfaceView; // Added for the 3D screen transition
+import android.opengl.GLSurfaceView;
+import java.io.File; // Added to check for files
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "BKA-MainActivity";
@@ -38,7 +39,6 @@ public class MainActivity extends AppCompatActivity {
                 updateUI(percent, status);
 
             } else if (OtrService.ACTION_OTR_COMPLETE.equals(action)) {
-                // The "Final Boss" has been defeated. Boot the game!
                 handleExtractionComplete();
 
             } else if (OtrService.ACTION_OTR_ERROR.equals(action)) {
@@ -51,15 +51,23 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
 
-        menuOverlay = findViewById(R.id.menu_overlay);
-        otrContainer = findViewById(R.id.otr_ui_container);
-        progressBar = findViewById(R.id.otr_progress_bar);
-        progressText = findViewById(R.id.otr_progress_text);
-        currentArtifactText = findViewById(R.id.otr_current_artifact);
+        // 1. Check if the game has already been extracted!
+        if (hasExtractedOtr()) {
+            Log.i(TAG, "OTR file found! Bypassing menu and starting game.");
+            bootGameEngine();
+        } else {
+            // 2. No game found, load the ROM Selection Menu UI
+            setContentView(R.layout.activity_main);
 
-        new MenuController(this);
+            menuOverlay = findViewById(R.id.menu_overlay);
+            otrContainer = findViewById(R.id.otr_ui_container);
+            progressBar = findViewById(R.id.otr_progress_bar);
+            progressText = findViewById(R.id.otr_progress_text);
+            currentArtifactText = findViewById(R.id.otr_current_artifact);
+
+            new MenuController(this);
+        }
     }
 
     @Override
@@ -76,6 +84,20 @@ public class MainActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         LocalBroadcastManager.getInstance(this).unregisterReceiver(progressReceiver);
+    }
+
+    // --- NEW METHOD: Scans the internal storage for the extracted OTR ---
+    private boolean hasExtractedOtr() {
+        File directory = getFilesDir();
+        File[] files = directory.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.getName().endsWith(".otr")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public void openFilePicker() {
@@ -112,7 +134,6 @@ public class MainActivity extends AppCompatActivity {
     private void handleExtractionComplete() {
         currentArtifactText.setText("Booting Banjo-Kazooie Engine...");
 
-        // Brief delay to let the user see the 100% state before the game starts
         otrContainer.postDelayed(() -> {
             otrContainer.setVisibility(View.GONE);
             bootGameEngine();
@@ -126,15 +147,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bootGameEngine() {
-        // 1. Switch the Android screen to 3D Hardware Rendering
         GLSurfaceView glView = new GLSurfaceView(this);
-        glView.setEGLContextClientVersion(2); // Use OpenGL ES 2.0 or 3.0
+        glView.setEGLContextClientVersion(2); 
         glView.setRenderer(new GLRenderer(this));
-        
-        // 2. Change the screen to show the GLView (Fixes the black screen issue)
+
         setContentView(glView);
 
-        // 3. Start the C++ Game Loop in the background
         new Thread(() -> {
             Log.i(TAG, "Entering nativeGameBoot...");
             String otrPath = getFilesDir().getAbsolutePath();
