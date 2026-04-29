@@ -11,9 +11,9 @@ OSIntMask osSetIntMask(OSIntMask mask) { return 0; }
 OSIntMask __osDisableInt(void) { return 0; }
 void __osRestoreInt(OSIntMask mask) {}
 
-// Standard C memory support for older N64 code
+// Standard C memory support for older N64 code (Note the 'int' size parameters)
 void bzero(void *s, int n) { memset(s, 0, (size_t)n); }
-void bcopy(const void *src, void *dest, size_t n) { memmove(dest, src, n); }
+void bcopy(const void *src, void *dest, int n) { memmove(dest, src, (size_t)n); }
 
 // Cache and Hardware Interrupts
 void osWritebackDCache(void *vaddr, int32_t nbytes) {}
