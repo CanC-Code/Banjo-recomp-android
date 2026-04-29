@@ -3,7 +3,7 @@ project("bkawrapper")
 
 # --- Project Configuration ---
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
-set(TARGET_VERSION "us.v10") # Explicitly targeting US Version 1.0
+set(TARGET_VERSION "us.v10")
 
 # --- 1. Define Native Port Infrastructure ---
 set(VERIFICATION_SOURCES
@@ -22,34 +22,28 @@ option(EXCLUDE_GAME_SRC "Skip the main game source files" OFF)
 
 if(NOT EXCLUDE_GAME_SRC)
     message(STATUS "Including original N64 source files from ${REPO_ROOT}/src")
-
-    # Recursively find all C files
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
     # --- Version and Library Selection ---
     set(FILES_TO_REMOVE "")
-
     foreach(FILE_PATH ${GAME_SOURCES})
-        # Check if the file is a versioned variant (us, pal, jp, v10, v11)
         if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11).*\\.c$")
-            # If it's NOT our target version, discard it
             if(NOT ${FILE_PATH} MATCHES ".*\\.us\\.v10\\.c$")
                 list(APPEND FILES_TO_REMOVE ${FILE_PATH})
             else()
-                # If it IS our target version, remove the "generic" base file
                 string(REGEX REPLACE "\\.us\\.v10\\.c$" ".c" BASE_FILE ${FILE_PATH})
                 list(APPEND FILES_TO_REMOVE ${BASE_FILE})
             endif()
         endif()
     endforeach()
 
-    # Remove versioned files and their base counterparts
     if(FILES_TO_REMOVE)
         list(REMOVE_ITEM GAME_SOURCES ${FILES_TO_REMOVE})
         message(STATUS "Version Selector: Active for ${TARGET_VERSION}")
     endif()
 
     # --- Bridge Subsystem Conflicts ---
+    # Add ALL conflicting files here, including those in /src/done/
     file(GLOB_RECURSE BRIDGE_CONFLICTS
         "${REPO_ROOT}/src/core1/os/*.c"
         "${REPO_ROOT}/src/core1/io/*.c"
@@ -57,14 +51,15 @@ if(NOT EXCLUDE_GAME_SRC)
         "${REPO_ROOT}/src/core1/inflate.c"
         "${REPO_ROOT}/src/core1/code_0*.c"
         "${REPO_ROOT}/src/core1/code_7F60*.c"
+        "${REPO_ROOT}/src/done/pirawdma.c"  # <-- Add this line
+        "${REPO_ROOT}/src/done/ll.c"        # <-- Add if also conflicting
     )
 
     if(BRIDGE_CONFLICTS)
         list(REMOVE_ITEM GAME_SOURCES ${BRIDGE_CONFLICTS})
-        message(STATUS "Subsystem Pruning: Removed OS/Audio/Decompression collisions.")
+        message(STATUS "Subsystem Pruning: Removed OS/Audio/Decompression collisions and pirawdma.c.")
     endif()
 
-    # Combine all sources
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
 endif()
 
@@ -84,7 +79,6 @@ target_include_directories(bkawrapper PRIVATE
 )
 
 # --- 5. Compilation Flags ---
-# Global flags for both C and C++
 target_compile_options(bkawrapper PRIVATE
     "-include${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
     "-w"
@@ -95,12 +89,12 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=incompatible-pointer-types"
 )
 
-# C++-only flags (e.g., -std=c++17)
+# C++-only flags
 target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
 )
 
-# C-only flags (e.g., -std=gnu11)
+# C-only flags
 target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
 )
@@ -108,7 +102,7 @@ target_compile_options(bkawrapper PRIVATE
 # --- 6. Compile Definitions ---
 target_compile_definitions(bkawrapper PRIVATE
     F3DEX_GBI
-    VERSION=0 # Target us.v10
+    VERSION=0
 )
 
 # --- 7. Linking ---
