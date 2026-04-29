@@ -50,14 +50,13 @@ if(NOT EXCLUDE_GAME_SRC)
     endif()
 
     # --- Bridge Subsystem Conflicts ---
-    # Prune OS, IO, Audio, and Decompression libraries
     file(GLOB_RECURSE BRIDGE_CONFLICTS
-        "${REPO_ROOT}/src/core1/os/*.c"      # Use /src/done/ for Android-compatible OS
-        "${REPO_ROOT}/src/core1/io/*.c"      # Handled by pi_hle.cpp
-        "${REPO_ROOT}/src/core1/audio/sl*.c" # Handled by stubs.cpp (alGlobals clash)
-        "${REPO_ROOT}/src/core1/inflate.c"   # Handled by rare_decompression.cpp
-        "${REPO_ROOT}/src/core1/code_0*.c"   # Entry point clash (mainLoop)
-        "${REPO_ROOT}/src/core1/code_7F60*.c" # Math library duplicates
+        "${REPO_ROOT}/src/core1/os/*.c"
+        "${REPO_ROOT}/src/core1/io/*.c"
+        "${REPO_ROOT}/src/core1/audio/sl*.c"
+        "${REPO_ROOT}/src/core1/inflate.c"
+        "${REPO_ROOT}/src/core1/code_0*.c"
+        "${REPO_ROOT}/src/core1/code_7F60*.c"
     )
 
     if(BRIDGE_CONFLICTS)
@@ -85,6 +84,7 @@ target_include_directories(bkawrapper PRIVATE
 )
 
 # --- 5. Compilation Flags ---
+# Global flags for both C and C++
 target_compile_options(bkawrapper PRIVATE
     "-include${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
     "-w"
@@ -93,7 +93,16 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=int-conversion"
     "-Wno-error=implicit-function-declaration"
     "-Wno-error=incompatible-pointer-types"
-    "-std=c++17" # Modern C++ support
+)
+
+# C++-only flags (e.g., -std=c++17)
+target_compile_options(bkawrapper PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
+)
+
+# C-only flags (e.g., -std=gnu11)
+target_compile_options(bkawrapper PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
 )
 
 # --- 6. Compile Definitions ---
