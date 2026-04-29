@@ -4,7 +4,7 @@ project("bkawrapper")
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
 # --- 1. Define Native Port Infrastructure ---
-# These files are necessary to bridge the N64 logic to Android hardware.
+# These files bridge the N64 logic to Android hardware and provide OS stubs.
 set(VERIFICATION_SOURCES
     "ultra/NativeBridge.cpp"
     "ultra/otr_builder.cpp"
@@ -22,27 +22,25 @@ option(EXCLUDE_GAME_SRC "Skip the main game source files" OFF)
 if(NOT EXCLUDE_GAME_SRC)
     message(STATUS "Including original N64 source files from ${REPO_ROOT}/src")
 
-    # Recursively find all C files in the game source (the 870+ files)
+    # Recursively find all C files in the game source
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # --- THE CRITICAL FIX: PRUNING DUPLICATES ---
-    # We must exclude the recompiled versions of the OS and IO subsystems.
-    # Why? Because your Native Bridge (NativeBridge.cpp, pi_hle.cpp, etc.) 
-    # already provides modern C++ versions of these functions.
+    # --- THE CRITICAL FIX: EXCLUDING SYSTEM CONFLICTS ---
+    # We must exclude recompiled OS and IO folders because the 
+    # Native Bridge (VERIFICATION_SOURCES) already implements these.
     file(GLOB_RECURSE CONFLICTING_FILES 
-        "${REPO_ROOT}/src/done/*.c"      # Manual overrides from previous attempts
-        "${REPO_ROOT}/src/core1/os/*.c"  # Original N64 OS logic (conflicts with NativeBridge/stubs)
-        "${REPO_ROOT}/src/core1/io/*.c"  # Original N64 IO logic (conflicts with pi_hle.cpp)
+        "${REPO_ROOT}/src/done/*.c"      # Manual overrides
+        "${REPO_ROOT}/src/core1/os/*.c"  # Recompiled OS (conflicts with stubs.cpp)
+        "${REPO_ROOT}/src/core1/io/*.c"  # Recompiled IO (conflicts with pi_hle.cpp)
     )
     
     if(CONFLICTING_FILES)
         list(REMOVE_ITEM GAME_SOURCES ${CONFLICTING_FILES})
-        message(STATUS "Excluded conflicting System/IO folders to prioritize Native Bridge.")
+        message(STATUS "Pruned recompiled OS/IO files to resolve linker collisions.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
 else()
-    message(STATUS "Building in Verification Mode (Bridge only)")
     set(ALL_SOURCES ${VERIFICATION_SOURCES})
 endif()
 
@@ -63,7 +61,7 @@ target_include_directories(bkawrapper PRIVATE
 # --- 4. Compilation Flags for Legacy Code ---
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w"                           # Suppress warnings from legacy IDO code
+    "-w"                           
     "-fpermissive"                 
     "-Wno-error=implicit-int"      
     "-Wno-error=int-conversion"    
