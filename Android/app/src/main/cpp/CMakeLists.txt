@@ -21,6 +21,8 @@ set(BRIDGE_SOURCES
     ultra/lowlevel_bridge.cpp
 
     # Emulator / runtime
+    # FIXED: Brought stubs back to resolve missing N64 hardware/linker symbols
+    emulator/stubs.cpp
     emulator/pi_hle.cpp
     emulator/resource_mgr.cpp
 
@@ -132,8 +134,7 @@ target_compile_definitions(bkawrapper PRIVATE
 
 find_library(log-lib log)
 
-# FIXED: Tell the linker to allow duplicate definitions and just use the first one it finds.
-# Since BRIDGE_SOURCES are compiled first, they will cleanly override the N64 sources!
+# Allows the Android Bridge files to safely override overlapping N64 functions
 target_link_options(bkawrapper PRIVATE "-Wl,--allow-multiple-definition")
 
 target_link_libraries(bkawrapper PRIVATE
