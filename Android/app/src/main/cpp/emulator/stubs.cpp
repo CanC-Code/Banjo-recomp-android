@@ -7,7 +7,7 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-#include <PR/libaudio.h> // Include this to get the correct ALGlobals definition
+#include <PR/libaudio.h> // Fixed: Include this for the correct ALGlobals typedef
 }
 
 #define LOG_TAG "BKA_STUBS"
@@ -20,12 +20,13 @@ extern "C" {
    Globals
 ========================= */
 
-// Now using the definition provided by libaudio.h
+// Fixed: Removed 'struct ALGlobals;' forward declaration.
+// This now uses the correct definition from libaudio.h.
 ALGlobals* alGlobals = nullptr;
 
 
 /* =========================
-   Engine / Bridge Stubs
+   Engine Entry
 ========================= */
 
 void initInterruptTables() {
@@ -50,6 +51,13 @@ void core2_stepFrame() {}
 
 
 /* =========================
+   Audio
+========================= */
+
+void n_audioStep() {}
+
+
+/* =========================
    OTR / Assets
 ========================= */
 
@@ -60,6 +68,16 @@ void core1_loadOTR(uint8_t* data, size_t size) {
     }
     LOGI("Loaded OTR (%zu bytes)", size);
 }
+
+/* =========================
+   Removed: Memory & PI & OS
+   -------------------------
+   Removing n64_memcpy, n64_memset, osPiReadIo, osPiWriteIo, 
+   and all os... threading/timing/messaging stubs.
+   Reason: These are now provided by libultrarecomp and the bridge files.
+   Keeping them here would cause "Duplicate Symbol" linker errors.
+========================= */
+
 
 /* =========================
    Generic Fallbacks
