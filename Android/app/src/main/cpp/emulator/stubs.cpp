@@ -13,17 +13,22 @@ extern "C" {
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
+// Forward declaration to prevent "unknown type" errors
+struct ALGlobals;
+
 extern "C" {
 
 /* =========================
    Globals
 ========================= */
 
+// Only keep this if it's not defined in your audio bridge
 ALGlobals* alGlobals = nullptr;
 
 
 /* =========================
-   Engine Entry
+   Engine / Bridge Stubs
+   Note: If NativeBridge.cpp defines these, remove them here.
 ========================= */
 
 void initInterruptTables() {
@@ -48,13 +53,6 @@ void core2_stepFrame() {}
 
 
 /* =========================
-   Audio
-========================= */
-
-void n_audioStep() {}
-
-
-/* =========================
    OTR / Assets
 ========================= */
 
@@ -66,65 +64,13 @@ void core1_loadOTR(uint8_t* data, size_t size) {
     LOGI("Loaded OTR (%zu bytes)", size);
 }
 
-
 /* =========================
-   Threading
+   OS / Threading / Timing
+   REMOVED: osCreateThread, osStartThread, osGetTime, etc.
+   These are now handled by libultrarecomp. 
+   If the linker says they are "missing", you can re-add 
+   them one by one.
 ========================= */
-
-void osCreateThread(OSThread* t, OSId id, void (*entry)(void*), void* arg,
-                    void* stack, OSPri pri) {
-    LOGW("osCreateThread stub");
-}
-
-void osStartThread(OSThread* t) {
-    LOGW("osStartThread stub");
-}
-
-OSPri osGetThreadPri(OSThread* t) {
-    return 0;
-}
-
-void osSetThreadPri(OSThread* t, OSPri pri) {}
-
-
-/* =========================
-   Messaging
-========================= */
-
-void osCreateMesgQueue(OSMesgQueue* mq, OSMesg* buf, s32 count) {}
-
-s32 osSendMesg(OSMesgQueue* mq, OSMesg msg, s32 flags) {
-    return 0;
-}
-
-s32 osRecvMesg(OSMesgQueue* mq, OSMesg* msg, s32 flags) {
-    if (msg) *msg = 0;
-    return 0;
-}
-
-
-/* =========================
-   Interrupts
-========================= */
-
-OSIntMask osSetIntMask(OSIntMask mask) {
-    return 0;
-}
-
-void osYieldThread(void) {}
-
-
-/* =========================
-   Timing
-========================= */
-
-u64 osGetTime(void) {
-    return 0;
-}
-
-u32 osGetCount(void) {
-    return 0;
-}
 
 
 /* =========================
@@ -137,7 +83,8 @@ void stub_void() {}
 
 
 /* =========================
-   Example Game Stubs
+   Game-Specific Stubs
+   These are unique to the Banjo-Kazooie codebase.
 ========================= */
 
 int func_80258A4C(...) {
