@@ -7,14 +7,12 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
+#include <PR/libaudio.h> // Include this to get the correct ALGlobals definition
 }
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
-
-// Forward declaration to prevent "unknown type" errors
-struct ALGlobals;
 
 extern "C" {
 
@@ -22,13 +20,12 @@ extern "C" {
    Globals
 ========================= */
 
-// Only keep this if it's not defined in your audio bridge
+// Now using the definition provided by libaudio.h
 ALGlobals* alGlobals = nullptr;
 
 
 /* =========================
    Engine / Bridge Stubs
-   Note: If NativeBridge.cpp defines these, remove them here.
 ========================= */
 
 void initInterruptTables() {
@@ -65,15 +62,6 @@ void core1_loadOTR(uint8_t* data, size_t size) {
 }
 
 /* =========================
-   OS / Threading / Timing
-   REMOVED: osCreateThread, osStartThread, osGetTime, etc.
-   These are now handled by libultrarecomp. 
-   If the linker says they are "missing", you can re-add 
-   them one by one.
-========================= */
-
-
-/* =========================
    Generic Fallbacks
 ========================= */
 
@@ -84,7 +72,6 @@ void stub_void() {}
 
 /* =========================
    Game-Specific Stubs
-   These are unique to the Banjo-Kazooie codebase.
 ========================= */
 
 int func_80258A4C(...) {
