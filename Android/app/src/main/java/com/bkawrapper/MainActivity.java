@@ -1,3 +1,4 @@
+// File: Android/app/src/main/java/com/bkawrapper/MainActivity.java
 package com.bkawrapper;
 
 import android.content.BroadcastReceiver;
@@ -14,6 +15,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import android.opengl.GLSurfaceView; // Added for the 3D screen transition
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "BKA-MainActivity";
@@ -109,7 +111,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void handleExtractionComplete() {
         currentArtifactText.setText("Booting Banjo-Kazooie Engine...");
-        
+
         // Brief delay to let the user see the 100% state before the game starts
         otrContainer.postDelayed(() -> {
             otrContainer.setVisibility(View.GONE);
@@ -124,12 +126,20 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bootGameEngine() {
+        // 1. Switch the Android screen to 3D Hardware Rendering
+        GLSurfaceView glView = new GLSurfaceView(this);
+        glView.setEGLContextClientVersion(2); // Use OpenGL ES 2.0 or 3.0
+        glView.setRenderer(new GLRenderer(this));
+        
+        // 2. Change the screen to show the GLView (Fixes the black screen issue)
+        setContentView(glView);
+
+        // 3. Start the C++ Game Loop in the background
         new Thread(() -> {
             Log.i(TAG, "Entering nativeGameBoot...");
             String otrPath = getFilesDir().getAbsolutePath();
             AssetManager assetManager = getAssets();
-            
-            // This starts the infinite N64 main loop in C++
+
             NativeBridge.nativeGameBoot(otrPath, assetManager);
         }).start();
     }
