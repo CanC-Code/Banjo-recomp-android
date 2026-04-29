@@ -25,46 +25,45 @@ if(NOT EXCLUDE_GAME_SRC)
     # 1. Recursively find all C files
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # --- THE CRITICAL FIX: SMART VERSION FILTERING ---
+    # --- THE CRITICAL FIX: US.V10 VERSION SELECTOR ---
     set(FILES_TO_REMOVE "")
     
     foreach(FILE_PATH ${GAME_SOURCES})
-        # If the file is versioned (contains us, pal, jp, v10, v11)
+        # Identify versioned files (containing us, pal, jp, v10, or v11)
         if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11).*\\.c$")
             
-            # If it's NOT our target version, get rid of it
+            # If it's NOT our target version, discard it entirely
             if(NOT ${FILE_PATH} MATCHES ".*\\.us\\.v10\\.c$")
                 list(APPEND FILES_TO_REMOVE ${FILE_PATH})
             else()
-                # If it IS our target version, find the "base" file name 
-                # (e.g. src/SM/code_46C0.c) and mark it for removal so the 
-                # versioned file takes its place.
+                # If it IS our target version, we must remove the "generic" 
+                # base file so this one can take its place.
                 string(REGEX REPLACE "\\.us\\.v10\\.c$" ".c" BASE_FILE ${FILE_PATH})
-                if(EXISTS ${BASE_FILE})
-                    list(APPEND FILES_TO_REMOVE ${BASE_FILE})
-                endif()
+                list(APPEND FILES_TO_REMOVE ${BASE_FILE})
             endif()
         endif()
     endforeach()
 
-    # 2. Identify explicit system/library collisions
-    file(GLOB_RECURSE SYSTEM_CONFLICTS 
-        "${REPO_ROOT}/src/core1/os/*.c"      # Use /src/done/ instead
+    # 2. Identify Bridge Conflicts
+    # We prune the recompiled stubs for OS, IO, and Audio because 
+    # your modern Android bridge handles these subsystems.
+    file(GLOB_RECURSE BRIDGE_CONFLICTS 
+        "${REPO_ROOT}/src/core1/os/*.c"      # Use /src/done/ overrides instead
         "${REPO_ROOT}/src/core1/io/*.c"      # Use pi_hle.cpp instead
-        "${REPO_ROOT}/src/core1/audio/sl.c"  # Clash on alGlobals
-        "${REPO_ROOT}/src/core1/code_0.c"    # Clash on mainLoop
-        "${REPO_ROOT}/src/core1/code_7F60.c" # Math library duplicate
+        "${REPO_ROOT}/src/core1/audio/sl*.c" # Catch sl.c or sl.us.v10.c (alGlobals)
+        "${REPO_ROOT}/src/core1/code_0*.c"   # Catch code_0 variants (mainLoop)
+        "${REPO_ROOT}/src/core1/code_7F60*.c" # Math library duplicate
     )
     
-    # Apply all prunings
+    # 3. Apply the filter
     if(FILES_TO_REMOVE)
         list(REMOVE_ITEM GAME_SOURCES ${FILES_TO_REMOVE})
-        message(STATUS "Applied Version Filtering for ${TARGET_VERSION}")
+        message(STATUS "Applied Version Preference: Keeping only ${TARGET_VERSION} variants.")
     endif()
     
-    if(SYSTEM_CONFLICTS)
-        list(REMOVE_ITEM GAME_SOURCES ${SYSTEM_CONFLICTS})
-        message(STATUS "Pruned OS/Audio library conflicts.")
+    if(BRIDGE_CONFLICTS)
+        list(REMOVE_ITEM GAME_SOURCES ${BRIDGE_CONFLICTS})
+        message(STATUS "Pruned recompiled OS/Audio library conflicts.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
@@ -95,10 +94,10 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=incompatible-pointer-types"
 )
 
-# Define version and microcode
+# Define version-specific constants
 target_compile_definitions(bkawrapper PRIVATE 
     F3DEX_GBI
-    VERSION=0 # 0 usually represents us.v10 in this project
+    VERSION=0 # 0 corresponds to us.v10
 )
 
 # --- 5. Linking ---
