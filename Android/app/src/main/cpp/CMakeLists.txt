@@ -11,8 +11,8 @@ set(VERIFICATION_SOURCES
     "ultra/otr_builder.cpp"
     "ultra/parameters.cpp"
     "ultra/libm_vals.cpp"
-    "emulator/stubs.cpp"
-    "emulator/pi_hle.cpp"
+    "emulator/stubs.cpp"      # Must define `alLink` and other audio stubs
+    "emulator/pi_hle.cpp"     # Replaces pirawdma.c
     "emulator/resource_mgr.cpp"
     "tools/rare_decompression.cpp"
 )
@@ -36,25 +36,24 @@ if(NOT EXCLUDE_GAME_SRC)
             endif()
         endif()
     endforeach()
-
     if(FILES_TO_REMOVE)
         list(REMOVE_ITEM GAME_SOURCES ${FILES_TO_REMOVE})
         message(STATUS "Version Selector: Active for ${TARGET_VERSION}")
     endif()
 
     # --- Bridge Subsystem Conflicts ---
-    # Add ALL conflicting files here, including those in /src/done/
+    # Exclude ALL files that conflict with the bridge
     file(GLOB_RECURSE BRIDGE_CONFLICTS
         "${REPO_ROOT}/src/core1/os/*.c"
         "${REPO_ROOT}/src/core1/io/*.c"
-        "${REPO_ROOT}/src/core1/audio/sl*.c"
+        "${REPO_ROOT}/src/core1/audio/sl*.c"  # Audio stubs
+        "${REPO_ROOT}/src/core1/audio/event.c" # Defines `alLink` (excluded if stubs.cpp replaces it)
         "${REPO_ROOT}/src/core1/inflate.c"
         "${REPO_ROOT}/src/core1/code_0*.c"
         "${REPO_ROOT}/src/core1/code_7F60*.c"
-        "${REPO_ROOT}/src/done/pirawdma.c"  # <-- Add this line
-        "${REPO_ROOT}/src/done/ll.c"        # <-- Add if also conflicting
+        "${REPO_ROOT}/src/done/pirawdma.c"     # <-- Critical: Remove this
+        "${REPO_ROOT}/src/done/ll.c"           # <-- Remove if conflicting
     )
-
     if(BRIDGE_CONFLICTS)
         list(REMOVE_ITEM GAME_SOURCES ${BRIDGE_CONFLICTS})
         message(STATUS "Subsystem Pruning: Removed OS/Audio/Decompression collisions and pirawdma.c.")
@@ -88,13 +87,9 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=implicit-function-declaration"
     "-Wno-error=incompatible-pointer-types"
 )
-
-# C++-only flags
 target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
 )
-
-# C-only flags
 target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
 )
@@ -110,7 +105,6 @@ find_library(log-lib log)
 if(NOT log-lib)
     message(FATAL_ERROR "Required library 'log' not found.")
 endif()
-
 target_link_libraries(bkawrapper PRIVATE
     android
     ${log-lib}
