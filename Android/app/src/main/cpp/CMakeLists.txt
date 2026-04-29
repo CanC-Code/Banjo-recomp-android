@@ -27,33 +27,34 @@ if(NOT EXCLUDE_GAME_SRC)
     # --- THE CRITICAL FIX: VERSION & SYMBOL PRUNING ---
     
     # 1. Improved Version Filtering
-    # This regex now catches .us.v10.c, .pal.v11.c, etc. 
-    # It looks for any sequence of version tags between the filename and .c extension.
+    # This logic identifies and removes files with region tags (like .us.v10.c)
+    # to prevent duplicates with the base files (like code_46C0.c).
+    set(VERSIONED_FILES "")
     foreach(FILE_PATH ${GAME_SOURCES})
         if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11).*\\.c$")
             list(APPEND VERSIONED_FILES ${FILE_PATH})
         endif()
     endforeach()
 
-    # 2. Identify explicit system/library collisions
+    # 2. Identify System & Subsystem Conflicts
+    # Note: We do NOT exclude src/done/ here anymore, as it provides osStartThread.
     file(GLOB_RECURSE SYSTEM_CONFLICTS 
-        "${REPO_ROOT}/src/done/*.c"      
-        "${REPO_ROOT}/src/core1/os/*.c"  
-        "${REPO_ROOT}/src/core1/io/*.c"
-        "${REPO_ROOT}/src/core1/audio/sl.c"  # Pruned: Conflicts with stubs.cpp (alGlobals)
-        "${REPO_ROOT}/src/core1/code_0.c"    # Pruned: Conflicts with stubs.cpp (mainLoop)
-        "${REPO_ROOT}/src/core1/code_7F60.c" # Pruned: Duplicated library function
+        "${REPO_ROOT}/src/core1/os/*.c"      # Original O/S logic (use /src/done/ instead)
+        "${REPO_ROOT}/src/core1/io/*.c"      # Original I/O logic (use /src/done/ instead)
+        "${REPO_ROOT}/src/core1/audio/sl.c"  # Conflicts with stubs.cpp (alGlobals)
+        "${REPO_ROOT}/src/core1/code_0.c"    # Conflicts with stubs.cpp (mainLoop)
+        "${REPO_ROOT}/src/core1/code_7F60.c" # Duplicated library function
     )
     
-    # Remove all identified conflicts from the master list
+    # Apply the pruning
     if(VERSIONED_FILES)
         list(REMOVE_ITEM GAME_SOURCES ${VERSIONED_FILES})
-        message(STATUS "Pruned ${VERSIONED_FILES} version-specific duplicates.")
+        message(STATUS "Pruned region-specific duplicates (e.g. .us.v10.c).")
     endif()
     
     if(SYSTEM_CONFLICTS)
         list(REMOVE_ITEM GAME_SOURCES ${SYSTEM_CONFLICTS})
-        message(STATUS "Pruned System/Audio conflicts.")
+        message(STATUS "Pruned OS/Audio library conflicts.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
