@@ -1,13 +1,28 @@
 #include <jni.h>
-#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <android/log.h>
+#include <sys/syscall.h>
 #include "rare_decompression.h"
 
-// --- Helper to send debug messages directly to the Android UI ---
+// --- 1. Shadow-Proof Kernel System Calls ---
+// These bypass the standard C library, making it impossible for the N64 game to shadow them.
+static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
+    return syscall(SYS_pread64, fd, buf, count, offset);
+}
+static int safe_open(const char *pathname, int flags, mode_t mode) {
+    return syscall(SYS_openat, AT_FDCWD, pathname, flags, mode);
+}
+static ssize_t safe_write(int fd, const void *buf, size_t count) {
+    return syscall(SYS_write, fd, buf, count);
+}
+static int safe_close(int fd) {
+    return syscall(SYS_close, fd);
+}
+
+// --- 2. Visual Debugger Helper ---
+// Prints debug messages directly to your Android UI
 void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const char* msg) {
     if (!env || !callbackObj || !progressMid) return;
     jstring jMsg = env->NewStringUTF(msg);
@@ -15,7 +30,7 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
     env->DeleteLocalRef(jMsg);
 }
 
-// --- Helper to prevent ARM64 Alignment Crashes (Safe from memcpy shadowing) ---
+// --- 3. Shadow-Proof Memory & Strings ---
 static uint32_t read_u32_safe(uint8_t* ptr) {
     uint32_t val;
     uint8_t* dst = (uint8_t*)&val;
@@ -23,7 +38,6 @@ static uint32_t read_u32_safe(uint8_t* ptr) {
     return val;
 }
 
-// Recursively create directories (Safe from snprintf shadowing)
 void ensure_directories(const char* path) {
     char tmp[512];
     int i = 0;
@@ -47,7 +61,6 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                                            int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
                                            const char* outDirPath) {
 
-    // 1. Check if we made it into C++ at all
     debug_ui(env, callbackObj, progressMid, "DEBUG 1: Entered native C++");
 
     if (!manifestPtr || manifestSize < 4) {
@@ -79,7 +92,7 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
         uint32_t fileSize  = read_u32_safe(record + 4);
 
         char fileName[33];
-        for(int j = 0; j < 32; j++) fileName[j] = *(record + 8 + j); // Manual copy
+        for(int j = 0; j < 32; j++) fileName[j] = *(record + 8 + j);
         fileName[32] = '\0';
 
         int percentage = (int)(((i + 1) * 100) / entryCount);
@@ -91,8 +104,7 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
             continue;
         }
 
-        // Only print debug logic for the very first file to prevent spamming the UI
-        if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 4: Setting up first file path");
+        if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 4: Setting up file path");
 
         char fullPath[512];
         int pIdx = 0;
@@ -104,11 +116,12 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
 
         ensure_directories(fullPath);
 
+        // :: scopes the compiler to the global standard library, ignoring N64 malloc
         uint8_t* compressedBuffer = (uint8_t*)::malloc(fileSize);
         if (compressedBuffer) {
             if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 5: Reading ROM");
 
-            if (pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
+            if (safe_pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
                 uint32_t decompressedSize = 0;
 
                 if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 6: Decompressing asset");
@@ -118,10 +131,10 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                 uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
                 if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 7: Writing file to disk");
-                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                int outFd = safe_open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                 if (outFd != -1) {
-                    write(outFd, writePtr, writeSize);
-                    close(outFd);
+                    safe_write(outFd, writePtr, writeSize);
+                    safe_close(outFd);
                 }
                 if (finalBuffer) ::free(finalBuffer);
             }
