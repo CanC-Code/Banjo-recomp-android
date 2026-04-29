@@ -7,7 +7,8 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-#include <PR/libaudio.h> // Required to define the ALGlobals type
+// Note: We don't include libaudio.h here because it is already 
+// provided by the forced-include in CMake (n64_types.h).
 }
 
 #define LOG_TAG "BKA_STUBS"
@@ -21,8 +22,8 @@ extern "C" {
 ========================= */
 
 /**
- * FIXED: We now use 'ALGlobals*' instead of 'void*' to match 
- * the declaration found in PR/libaudio.h.
+ * FIXED: Matching the type declared in the forced-include headers.
+ * This resolves the "redefinition with a different type" error.
  */
 ALGlobals* alGlobals = nullptr;
 
