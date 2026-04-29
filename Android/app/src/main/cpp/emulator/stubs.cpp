@@ -7,7 +7,7 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-#include <PR/libaudio.h> // Fixed: Include this for the correct ALGlobals typedef
+// Note: libaudio.h is removed to avoid the incomplete type conflict
 }
 
 #define LOG_TAG "BKA_STUBS"
@@ -20,9 +20,12 @@ extern "C" {
    Globals
 ========================= */
 
-// Fixed: Removed 'struct ALGlobals;' forward declaration.
-// This now uses the correct definition from libaudio.h.
-ALGlobals* alGlobals = nullptr;
+/**
+ * FIX: We define alGlobals as void* here. 
+ * The Linker only cares about the name 'alGlobals'. 
+ * By using void*, we avoid "Incomplete Type" errors from N64 headers.
+ */
+void* alGlobals = nullptr;
 
 
 /* =========================
@@ -51,13 +54,6 @@ void core2_stepFrame() {}
 
 
 /* =========================
-   Audio
-========================= */
-
-void n_audioStep() {}
-
-
-/* =========================
    OTR / Assets
 ========================= */
 
@@ -68,15 +64,6 @@ void core1_loadOTR(uint8_t* data, size_t size) {
     }
     LOGI("Loaded OTR (%zu bytes)", size);
 }
-
-/* =========================
-   Removed: Memory & PI & OS
-   -------------------------
-   Removing n64_memcpy, n64_memset, osPiReadIo, osPiWriteIo, 
-   and all os... threading/timing/messaging stubs.
-   Reason: These are now provided by libultrarecomp and the bridge files.
-   Keeping them here would cause "Duplicate Symbol" linker errors.
-========================= */
 
 
 /* =========================
@@ -90,6 +77,7 @@ void stub_void() {}
 
 /* =========================
    Game-Specific Stubs
+   These satisfy the linker for symbols specific to Banjo-Kazooie.
 ========================= */
 
 int func_80258A4C(...) {
