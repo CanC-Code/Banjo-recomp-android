@@ -20,8 +20,10 @@ set(BRIDGE_SOURCES
     ultra/audio_bridge.cpp
     ultra/lowlevel_bridge.cpp
 
+    # NEW: C-side stubs for linker symbols and hardware calls
+    ultra/missing_stubs.c
+
     # Emulator / runtime
-    # FIXED: Brought stubs back to resolve missing N64 hardware/linker symbols
     emulator/stubs.cpp
     emulator/pi_hle.cpp
     emulator/resource_mgr.cpp
@@ -122,8 +124,6 @@ target_compile_options(bkawrapper PRIVATE
 target_compile_definitions(bkawrapper PRIVATE
     F3DEX_GBI
     VERSION=0
-
-    # Enable if needed for future stubs
     N64_RECOMP
     __ANDROID__
 )
@@ -134,7 +134,7 @@ target_compile_definitions(bkawrapper PRIVATE
 
 find_library(log-lib log)
 
-# Allows the Android Bridge files to safely override overlapping N64 functions
+# Allows Android Bridges to override N64 functions
 target_link_options(bkawrapper PRIVATE "-Wl,--allow-multiple-definition")
 
 target_link_libraries(bkawrapper PRIVATE
@@ -143,4 +143,6 @@ target_link_libraries(bkawrapper PRIVATE
     GLESv3
     EGL
     z
+    atomic
+    m
 )
