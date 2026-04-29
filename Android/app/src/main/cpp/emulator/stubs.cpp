@@ -32,11 +32,11 @@ ALGlobals* alGlobals = nullptr;
    Engine Entry
 ========================= */
 
-void initInterruptTables() {
+void initInterruptTables(void) {
     LOGI("initInterruptTables stub");
 }
 
-void mainLoop() {
+void mainLoop(void) {
     LOGW("mainLoop stub");
 }
 
@@ -45,12 +45,12 @@ void mainLoop() {
    Core Runtime
 ========================= */
 
-void core1_reset() {
+void core1_reset(void) {
     LOGI("core1_reset");
 }
 
-void core1_stepCPU() {}
-void core2_stepFrame() {}
+void core1_stepCPU(void) {}
+void core2_stepFrame(void) {}
 
 
 /* =========================
@@ -70,21 +70,24 @@ void core1_loadOTR(uint8_t* data, size_t size) {
    Generic Fallbacks
 ========================= */
 
-int stub_return_0() { return 0; }
-float stub_return_0f() { return 0.0f; }
-void stub_void() {}
+int stub_return_0(void) { return 0; }
+float stub_return_0f(void) { return 0.0f; }
+void stub_void(void) {}
 
 
 /* =========================
    Game-Specific Stubs
 ========================= */
 
-int func_80258A4C(...) {
+// FIXED: Removed the bare '...' variadic arguments. 
+// Using '(void)' or an empty signature is safer in an extern "C" block
+// unless the exact C header declares a specific variadic signature.
+int func_80258A4C(void) {
     LOGW("func_80258A4C stub");
     return 0;
 }
 
-void func_8025A123(...) {
+void func_8025A123(void) {
     LOGW("func_8025A123 stub");
 }
 
