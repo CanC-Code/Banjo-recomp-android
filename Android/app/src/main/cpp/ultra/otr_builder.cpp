@@ -7,23 +7,33 @@
 #include <android/log.h>
 #include "rare_decompression.h"
 
-#define LOG_TAG "OtrBuilder"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+// --- Helper to send debug messages directly to the Android UI ---
+void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const char* msg) {
+    if (!env || !callbackObj || !progressMid) return;
+    jstring jMsg = env->NewStringUTF(msg);
+    env->CallVoidMethod(callbackObj, progressMid, 0, jMsg);
+    env->DeleteLocalRef(jMsg);
+}
 
-// Helper to prevent ARM64 Alignment Crashes
+// --- Helper to prevent ARM64 Alignment Crashes (Safe from memcpy shadowing) ---
 static uint32_t read_u32_safe(uint8_t* ptr) {
     uint32_t val;
-    memcpy(&val, ptr, 4);
+    uint8_t* dst = (uint8_t*)&val;
+    for(int i = 0; i < 4; i++) dst[i] = ptr[i]; // Manual copy bypasses N64 memcpy
     return val;
 }
 
-// Recursively create directories for the outDirPath/fileName path
+// Recursively create directories (Safe from snprintf shadowing)
 void ensure_directories(const char* path) {
     char tmp[512];
-    char* p = NULL;
-    snprintf(tmp, sizeof(tmp), "%s", path);
-    for (p = tmp + 1; *p; p++) {
+    int i = 0;
+    while(path[i] != '\0' && i < 511) {
+        tmp[i] = path[i];
+        i++;
+    }
+    tmp[i] = '\0';
+    
+    for (char* p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
             mkdir(tmp, 0777);
@@ -37,46 +47,43 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                                            int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
                                            const char* outDirPath) {
 
+    // 1. Check if we made it into C++ at all
+    debug_ui(env, callbackObj, progressMid, "DEBUG 1: Entered native C++");
+
     if (!manifestPtr || manifestSize < 4) {
-        LOGE("run_native_otr: Manifest pointer is NULL or too small!");
+        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest is NULL");
         return;
     }
 
-    // 1. Read the Entry Count (4-byte header)
+    debug_ui(env, callbackObj, progressMid, "DEBUG 2: Reading manifest header");
     uint32_t entryCount = read_u32_safe(manifestPtr);
     uint8_t* recordStart = manifestPtr + 4;
 
-    LOGI("Manifest loaded. Entries to process: %u", entryCount);
-
     if (entryCount == 0 || entryCount > 50000) {
-        LOGE("run_native_otr: Invalid entry count (%u). Aborting.", entryCount);
+        debug_ui(env, callbackObj, progressMid, "ERROR: Invalid entry count");
         return;
     }
 
+    debug_ui(env, callbackObj, progressMid, "DEBUG 3: Entering extraction loop");
+
     for (uint32_t i = 0; i < entryCount; i++) {
-        // Prevent JNI Local Reference Overflow (especially important for ~8k assets)
         if (env->PushLocalFrame(16) < 0) return;
 
-        // Each record is 48 bytes based on the Python script (<II32s8s)
         uint8_t* record = recordStart + (i * 48);
-        
         if (record + 48 > manifestPtr + manifestSize) {
-            LOGE("Buffer overflow prevented at entry %u", i);
             env->PopLocalFrame(NULL);
             break;
         }
 
         uint32_t romOffset = read_u32_safe(record + 0);
         uint32_t fileSize  = read_u32_safe(record + 4);
-        
+
         char fileName[33];
-        memcpy(fileName, record + 8, 32);
+        for(int j = 0; j < 32; j++) fileName[j] = *(record + 8 + j); // Manual copy
         fileName[32] = '\0';
 
-        // Calculate percentage early so we can report progress even for skipped files
         int percentage = (int)(((i + 1) * 100) / entryCount);
 
-        // Skip files with 0 size (like padding or tail markers) but still update the UI
         if (fileSize == 0) {
             jstring jNameSkip = env->NewStringUTF(fileName);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jNameSkip);
@@ -84,43 +91,51 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
             continue;
         }
 
+        // Only print debug logic for the very first file to prevent spamming the UI
+        if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 4: Setting up first file path");
+
         char fullPath[512];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
+        int pIdx = 0;
+        while(outDirPath[pIdx] != '\0' && pIdx < 400) { fullPath[pIdx] = outDirPath[pIdx]; pIdx++; }
+        fullPath[pIdx++] = '/';
+        int nIdx = 0;
+        while(fileName[nIdx] != '\0' && pIdx < 510) { fullPath[pIdx++] = fileName[nIdx++]; }
+        fullPath[pIdx] = '\0';
+
         ensure_directories(fullPath);
 
-        uint8_t* compressedBuffer = (uint8_t*)malloc(fileSize);
+        uint8_t* compressedBuffer = (uint8_t*)::malloc(fileSize);
         if (compressedBuffer) {
+            if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 5: Reading ROM");
+
             if (pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
                 uint32_t decompressedSize = 0;
-                
-                // decompress_rare_asset handles the 0x1172 magic check
+
+                if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 6: Decompressing asset");
                 uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompressedSize);
-                
+
                 uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : compressedBuffer;
                 uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
+                if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 7: Writing file to disk");
                 int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                 if (outFd != -1) {
                     write(outFd, writePtr, writeSize);
                     close(outFd);
                 }
-                if (finalBuffer) free(finalBuffer);
-            } else {
-                LOGE("Failed to read ROM for %s at offset %u", fileName, romOffset);
+                if (finalBuffer) ::free(finalBuffer);
             }
-            free(compressedBuffer);
+            ::free(compressedBuffer);
         }
 
-        // Update Progress with current filename
+        if (i == 0) debug_ui(env, callbackObj, progressMid, "DEBUG 8: First file completely successful!");
+
         jstring jName = env->NewStringUTF(fileName);
         env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
-        
+
         env->PopLocalFrame(NULL);
     }
 
-    // --- FINAL COMPLETION SIGNAL ---
-    // This ensures the UI hits 100% and triggers the "Extraction Complete" logic in Java
-    LOGI("OTR Generation Finished. Sending final 100%% signal.");
     jstring doneMsg = env->NewStringUTF("Extraction Complete! Booting Game...");
     env->CallVoidMethod(callbackObj, progressMid, 100, doneMsg);
 }
