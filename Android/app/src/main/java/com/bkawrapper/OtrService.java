@@ -1,3 +1,4 @@
+// File: Android/app/src/main/java/com/bkawrapper/OtrService.java
 package com.bkawrapper;
 
 import android.app.Notification;
@@ -5,23 +6,34 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
-import android.net.Uri;
-import androidx.core.app.NotificationCompat;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import android.util.Log;
 
-public class OtrService extends Service {
-    private static final String TAG = "OtrService";
-    private static final String CHANNEL_ID = "OtrServiceChannel";
-    private static final int NOTIFICATION_ID = 1;
+import androidx.core.app.NotificationCompat;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
-    // Intent Actions
+import java.io.File;
+
+public class OtrService extends Service {
+
+    private static final String TAG             = "OtrService";
+    private static final String CHANNEL_ID      = "OtrServiceChannel";
+    private static final int    NOTIFICATION_ID = 1;
+
+    // Sentinel filename — must match the constant in MainActivity
+    private static final String SENTINEL_FILENAME = "extraction_complete";
+
+    // Intent actions broadcast to MainActivity
     public static final String ACTION_OTR_PROGRESS = "OTR_PROGRESS";
     public static final String ACTION_OTR_COMPLETE = "OTR_COMPLETE";
-    public static final String ACTION_OTR_ERROR = "OTR_ERROR";
+    public static final String ACTION_OTR_ERROR    = "OTR_ERROR";
+
+    // -----------------------------------------------------------------------
+    // Service lifecycle
+    // -----------------------------------------------------------------------
 
     @Override
     public void onCreate() {
@@ -29,85 +41,124 @@ public class OtrService extends Service {
         createNotificationChannel();
     }
 
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID, "Asset Extraction Service", NotificationManager.IMPORTANCE_LOW);
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) manager.createNotificationChannel(channel);
-        }
-    }
-
-    /**
-     * Called by C++ via JNI (NativeBridge) to update the UI
-     */
-    public void updateOtrProgress(int percent, String status) {
-        // 1. Send broadcast to update the ProgressBar in MainActivity
-        Intent intent = new Intent(ACTION_OTR_PROGRESS);
-        intent.putExtra("percent", percent);
-        intent.putExtra("status", status);
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
-
-        // 2. Update the system notification
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Extracting Banjo-Kazooie Assets")
-                .setContentText(percent + "% - " + status)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setProgress(100, percent, false)
-                .setOngoing(true)
-                .build();
-
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) manager.notify(NOTIFICATION_ID, notification);
-    }
-
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
 
         String uriString = intent.getStringExtra("uri");
-        String outDir = intent.getStringExtra("outDir");
+        String outDir    = intent.getStringExtra("outDir");
 
-        // Start as a foreground service immediately to prevent the OS from killing us
-        startForeground(NOTIFICATION_ID, new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Preparing Extraction")
-                .setSmallIcon(android.R.drawable.stat_sys_download).build());
+        // Start foreground immediately so Android does not kill us mid-extract
+        startForeground(NOTIFICATION_ID,
+            new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Preparing Banjo-Kazooie Assets")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .build());
 
         new Thread(() -> {
             try {
                 Uri uri = Uri.parse(uriString);
-                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
+                ParcelFileDescriptor pfd =
+                    getContentResolver().openFileDescriptor(uri, "r");
 
-                if (pfd != null) {
-                    // Detach the FD so C++ code owns the file handle
-                    int fd = pfd.detachFd(); 
-                    Log.i(TAG, "ROM File Descriptor detached: " + fd);
-
-                    // Initialize JNI bridge and run extraction (this blocks until done)
-                    NativeBridge.nativeInit(this);
-                    NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
-
-                    // --- EXTRACTION FINISHED SUCCESSFULLY ---
-                    Log.i(TAG, "Extraction complete. Sending OTR_COMPLETE signal.");
-                    LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
-                } else {
+                if (pfd == null) {
                     throw new Exception("Could not open ROM file descriptor.");
                 }
+
+                // Detach FD — C++ now owns the file handle
+                int fd = pfd.detachFd();
+                Log.i(TAG, "ROM fd detached: " + fd);
+
+                // Register the JNI callback and run extraction (blocks until done)
+                NativeBridge.nativeInit(this);
+                NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
+
+                // Write the sentinel so MainActivity knows extraction is done
+                writeSentinel(outDir);
+
+                Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
+                LocalBroadcastManager.getInstance(this)
+                    .sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
+
             } catch (Exception e) {
-                Log.e(TAG, "Extraction Failed", e);
-                Intent errorIntent = new Intent(ACTION_OTR_ERROR);
-                errorIntent.putExtra("message", e.getMessage());
-                LocalBroadcastManager.getInstance(this).sendBroadcast(errorIntent);
+                Log.e(TAG, "Extraction failed", e);
+                Intent err = new Intent(ACTION_OTR_ERROR);
+                err.putExtra("message", e.getMessage());
+                LocalBroadcastManager.getInstance(this).sendBroadcast(err);
             } finally {
-                // Cleanup service
                 stopForeground(true);
                 stopSelf();
             }
-        }).start();
+        }, "BKA-ExtractionThread").start();
 
         return START_NOT_STICKY;
     }
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
+
+    // -----------------------------------------------------------------------
+    // JNI callback — called from C++ to push progress to the UI
+    // -----------------------------------------------------------------------
+
+    /**
+     * Called by C++ via JNI to update the extraction progress bar.
+     *
+     * @param percent  0–100
+     * @param status   Name of the asset currently being extracted.
+     */
+    public void updateOtrProgress(int percent, String status) {
+        // Broadcast to MainActivity's ProgressBar
+        Intent intent = new Intent(ACTION_OTR_PROGRESS);
+        intent.putExtra("percent", percent);
+        intent.putExtra("status",  status);
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
+
+        // Update the persistent notification
+        Notification notification =
+            new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Extracting Banjo-Kazooie Assets")
+                .setContentText(percent + "% — " + status)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setProgress(100, percent, false)
+                .setOngoing(true)
+                .build();
+
+        NotificationManager mgr =
+            (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Writes a zero-byte sentinel file into {@code outDir} so that
+     * subsequent launches of MainActivity can detect a completed extraction
+     * without scanning the whole asset directory.
+     */
+    private void writeSentinel(String outDir) {
+        try {
+            File sentinel = new File(outDir, SENTINEL_FILENAME);
+            if (!sentinel.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                sentinel.createNewFile();
+            }
+            Log.i(TAG, "Sentinel written: " + sentinel.getAbsolutePath());
+        } catch (Exception e) {
+            Log.w(TAG, "Could not write sentinel: " + e.getMessage());
+        }
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                "Asset Extraction Service",
+                NotificationManager.IMPORTANCE_LOW);
+            NotificationManager mgr = getSystemService(NotificationManager.class);
+            if (mgr != null) mgr.createNotificationChannel(channel);
+        }
+    }
 }
