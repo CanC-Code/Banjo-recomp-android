@@ -25,15 +25,19 @@ if(NOT EXCLUDE_GAME_SRC)
     # Recursively find all C files in the game source (the 870+ files)
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # --- THE CRITICAL FIX ---
-    # To use the "Original" source, we must EXCLUDE the "done" folder.
-    # The "done" folder contains manual overrides that cause the duplicate 
-    # symbol errors (e.g., two versions of osCreateThread).
-    file(GLOB_RECURSE DONE_FOLDER_FILES "${REPO_ROOT}/src/done/*.c")
+    # --- THE CRITICAL FIX: PRUNING DUPLICATES ---
+    # We must exclude the recompiled versions of the OS and IO subsystems.
+    # Why? Because your Native Bridge (NativeBridge.cpp, pi_hle.cpp, etc.) 
+    # already provides modern C++ versions of these functions.
+    file(GLOB_RECURSE CONFLICTING_FILES 
+        "${REPO_ROOT}/src/done/*.c"      # Manual overrides from previous attempts
+        "${REPO_ROOT}/src/core1/os/*.c"  # Original N64 OS logic (conflicts with NativeBridge/stubs)
+        "${REPO_ROOT}/src/core1/io/*.c"  # Original N64 IO logic (conflicts with pi_hle.cpp)
+    )
     
-    if(DONE_FOLDER_FILES)
-        list(REMOVE_ITEM GAME_SOURCES ${DONE_FOLDER_FILES})
-        message(STATUS "Excluded /src/done/ to prioritize original N64 recompiled sources.")
+    if(CONFLICTING_FILES)
+        list(REMOVE_ITEM GAME_SOURCES ${CONFLICTING_FILES})
+        message(STATUS "Excluded conflicting System/IO folders to prioritize Native Bridge.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
@@ -59,7 +63,7 @@ target_include_directories(bkawrapper PRIVATE
 # --- 4. Compilation Flags for Legacy Code ---
 target_compile_options(bkawrapper PRIVATE 
     "-include" "${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w"                           
+    "-w"                           # Suppress warnings from legacy IDO code
     "-fpermissive"                 
     "-Wno-error=implicit-int"      
     "-Wno-error=int-conversion"    
