@@ -24,9 +24,34 @@ typedef s32       n64_bool;
 #define FALSE 0
 #endif
 
-// --- Core N64 OS Structures (HLE Definitions) ---
-// We define these here to avoid circular dependencies with original SDK headers.
+// --- Graphics & Math Types (Required by gu.h) ---
+// N64 Matrices are 512-bit fixed point arrays
+typedef s32 Mtx_t[4][4];
+typedef union {
+    Mtx_t       m;
+    long long   force_structure_alignment;
+} Mtx;
 
+// Gfx is the N64 Display List command (64-bit)
+typedef struct {
+    uint32_t words[2];
+} Gfx;
+
+// Other Gfx-related types expected by headers
+typedef struct { u32 words[2]; } Vp;
+typedef struct { u32 words[2]; } LookAt;
+typedef struct { u32 words[2]; } Hilite;
+
+// --- Audio Types (Required by libaudio.h) ---
+// Acmd is the Audio Command (64-bit)
+typedef struct {
+    uint32_t words[2];
+} Acmd;
+
+// ADPCM state is used for samples
+typedef s16 ADPCM_STATE[16];
+
+// --- Core N64 OS Structures (HLE Definitions) ---
 typedef void * OSMesg;
 
 typedef struct OSMesgQueue_s {
@@ -39,7 +64,7 @@ typedef struct OSMesgQueue_s {
 } OSMesgQueue;
 
 typedef struct OSIoMesg_s {
-    void* hdr;      // OSThread or similar
+    void* hdr;
     void* dramAddr;
     u32           devAddr;
     u32           size;
