@@ -1,8 +1,16 @@
 #ifndef N64_TYPES_H
 #define N64_TYPES_H
 
+#ifndef _LANGUAGE_C
+#define _LANGUAGE_C
+#endif
+
+// Prevent N64 SDK from defining its own conflicting types
+#define _ULTRATYPES_H_
+
 #include <stdint.h>
 #include <stddef.h>
+#include <math.h> // Include system math first
 
 // --- Basic N64 Types ---
 typedef uint8_t   u8;
@@ -15,6 +23,7 @@ typedef int32_t   s32;
 typedef int64_t   s64;
 typedef float     f32;
 typedef double    f64;
+
 typedef s32       n64_bool;
 
 #ifndef TRUE
@@ -86,8 +95,11 @@ typedef struct OSPiHandle_s {
 extern "C" {
 #endif
 
+#include <ultra64.h>
+#include <PR/sched.h>
+
 typedef struct {
-    uint32_t* screenBuffer; 
+    uint32_t* screenBuffer;
     uint32_t frameCount;
 } AndroidBridgeGlobals;
 
@@ -95,6 +107,7 @@ typedef struct {
 }
 #endif
 
+// Restore legacy N64 NULL definition for float initializers
 #undef NULL
 #define NULL 0
 
