@@ -11,7 +11,7 @@ set(VERIFICATION_SOURCES
     "ultra/otr_builder.cpp"
     "ultra/parameters.cpp"
     "ultra/libm_vals.cpp"
-    "emulator/stubs.cpp"      # Must define `alLink` and other audio stubs
+    "emulator/stubs.cpp"      # Must define ALL audio stubs (alLink, alEvtqNew, etc.)
     "emulator/pi_hle.cpp"     # Replaces pirawdma.c
     "emulator/resource_mgr.cpp"
     "tools/rare_decompression.cpp"
@@ -42,21 +42,23 @@ if(NOT EXCLUDE_GAME_SRC)
     endif()
 
     # --- Bridge Subsystem Conflicts ---
-    # Exclude ALL files that conflict with the bridge
-    file(GLOB_RECURSE BRIDGE_CONFLICTS
+    # Exclude ALL files that conflict with the bridge or stubs
+    set(BRIDGE_CONFLICTS
         "${REPO_ROOT}/src/core1/os/*.c"
         "${REPO_ROOT}/src/core1/io/*.c"
-        "${REPO_ROOT}/src/core1/audio/sl*.c"  # Audio stubs
-        "${REPO_ROOT}/src/core1/audio/event.c" # Defines `alLink` (excluded if stubs.cpp replaces it)
-        "${REPO_ROOT}/src/core1/inflate.c"
-        "${REPO_ROOT}/src/core1/code_0*.c"
-        "${REPO_ROOT}/src/core1/code_7F60*.c"
-        "${REPO_ROOT}/src/done/pirawdma.c"     # <-- Critical: Remove this
-        "${REPO_ROOT}/src/done/ll.c"           # <-- Remove if conflicting
+        "${REPO_ROOT}/src/core1/audio/sl*.c"
+        "${REPO_ROOT}/src/core1/audio/event.c"  # Conflicts with stubs.cpp
+        "${REPO_ROOT}/src/core1/audio/seq.c"     # Conflicts with stubs.cpp
+        "${REPO_ROOT}/src/core1/audio/synth.c"   # Conflicts with stubs.cpp
+        "${REPO_ROOT}/src/core1/inflate.c"       # Handled by rare_decompression.cpp
+        "${REPO_ROOT}/src/core1/code_0*.c"       # Entry point clash
+        "${REPO_ROOT}/src/core1/code_7F60*.c"    # Math library duplicates
+        "${REPO_ROOT}/src/done/pirawdma.c"       # Conflicts with pi_hle.cpp
+        "${REPO_ROOT}/src/done/ll.c"             # Conflicts with bridge
     )
     if(BRIDGE_CONFLICTS)
         list(REMOVE_ITEM GAME_SOURCES ${BRIDGE_CONFLICTS})
-        message(STATUS "Subsystem Pruning: Removed OS/Audio/Decompression collisions and pirawdma.c.")
+        message(STATUS "Subsystem Pruning: Removed OS/Audio/Decompression collisions, pirawdma.c, and ll.c.")
     endif()
 
     set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
@@ -87,9 +89,11 @@ target_compile_options(bkawrapper PRIVATE
     "-Wno-error=implicit-function-declaration"
     "-Wno-error=incompatible-pointer-types"
 )
+# C++-only flags
 target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
 )
+# C-only flags
 target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
 )
