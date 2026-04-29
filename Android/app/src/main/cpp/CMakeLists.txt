@@ -1,64 +1,66 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("bkawrapper")
 
-# --- Project Configuration ---
 set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(TARGET_VERSION "us.v10")
 
-# --- 1. Define Native Port Infrastructure ---
-set(VERIFICATION_SOURCES
-    "ultra/NativeBridge.cpp"
-    "ultra/otr_builder.cpp"
-    "ultra/parameters.cpp"
-    "ultra/libm_vals.cpp"
-    "emulator/stubs.cpp"      # Replaces audio, mainLoop, etc.
-    "emulator/pi_hle.cpp"     # Replaces pirawdma.c, pidma.c, etc.
-    "emulator/resource_mgr.cpp"
-    "tools/rare_decompression.cpp"
+# === 1. Verification / Bridge sources (expand as needed) ===
+set(BRIDGE_SOURCES
+    ultra/NativeBridge.cpp
+    ultra/otr_builder.cpp
+    ultra/parameters.cpp
+    ultra/libm_vals.cpp
+    emulator/stubs.cpp
+    emulator/pi_hle.cpp
+    emulator/resource_mgr.cpp
+    tools/rare_decompression.cpp
 )
 
-# --- 2. Original N64 Source Integration ---
+# Add more bridge files here once you implement them
+# e.g. ultra/math_bridge.cpp, ultra/timer_bridge.cpp, core2/shims.cpp, etc.
+
+# === 2. Game sources with heavy pruning ===
 option(EXCLUDE_GAME_SRC "Skip the main game source files" OFF)
 
 if(NOT EXCLUDE_GAME_SRC)
-    message(STATUS "Including original N64 source files from ${REPO_ROOT}/src")
     file(GLOB_RECURSE GAME_SOURCES "${REPO_ROOT}/src/*.c")
 
-    # --- Version and Library Selection ---
+    # Version filtering (keep only us.v10)
     set(FILES_TO_REMOVE "")
     foreach(FILE_PATH ${GAME_SOURCES})
         if(${FILE_PATH} MATCHES ".*\\.(us|pal|jp|v10|v11).*\\.c$")
             if(NOT ${FILE_PATH} MATCHES ".*\\.us\\.v10\\.c$")
                 list(APPEND FILES_TO_REMOVE ${FILE_PATH})
             else()
+                # Also remove the non-versioned variant if it exists
                 string(REGEX REPLACE "\\.us\\.v10\\.c$" ".c" BASE_FILE ${FILE_PATH})
                 list(APPEND FILES_TO_REMOVE ${BASE_FILE})
             endif()
         endif()
     endforeach()
+
     if(FILES_TO_REMOVE)
         list(REMOVE_ITEM GAME_SOURCES ${FILES_TO_REMOVE})
-        message(STATUS "Version Selector: Active for ${TARGET_VERSION}")
     endif()
 
-    # --- Bridge Subsystem Conflicts ---
-    # Exclude ALL files in core1/ and done/ (they conflict with the bridge)
-    file(GLOB_RECURSE BRIDGE_CONFLICTS
-        "${REPO_ROOT}/src/core1/*"    # ALL files in core1/
-        "${REPO_ROOT}/src/done/*"      # ALL files in done/
+    # === Critical: Remove conflicting subsystems ===
+    file(GLOB_RECURSE CONFLICTS
+        "${REPO_ROOT}/src/core1/*"
+        "${REPO_ROOT}/src/done/*"
+        # Add more directories that belong to the old emulator/runtime if they cause duplicate symbols
+        # "${REPO_ROOT}/src/core2/*"   # ← only if you provide full shims
     )
-    if(BRIDGE_CONFLICTS)
-        list(REMOVE_ITEM GAME_SOURCES ${BRIDGE_CONFLICTS})
-        message(STATUS "Subsystem Pruning: Removed ALL core1/ and done/ files to avoid duplicates.")
+    if(CONFLICTS)
+        list(REMOVE_ITEM GAME_SOURCES ${CONFLICTS})
     endif()
 
-    set(ALL_SOURCES ${VERIFICATION_SOURCES} ${GAME_SOURCES})
+    set(ALL_SOURCES ${BRIDGE_SOURCES} ${GAME_SOURCES})
+else()
+    set(ALL_SOURCES ${BRIDGE_SOURCES})
 endif()
 
-# --- 3. Create the Library ---
 add_library(bkawrapper SHARED ${ALL_SOURCES})
 
-# --- 4. Include Paths ---
 target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra
@@ -70,36 +72,28 @@ target_include_directories(bkawrapper PRIVATE
     ${REPO_ROOT}/tools/bk_rom_compressor/modules/rarezip
 )
 
-# --- 5. Compilation Flags ---
 target_compile_options(bkawrapper PRIVATE
     "-include${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    "-w"
-    "-fpermissive"
-    "-Wno-error=implicit-int"
-    "-Wno-error=int-conversion"
-    "-Wno-error=implicit-function-declaration"
-    "-Wno-error=incompatible-pointer-types"
-)
-# C++-only flags
-target_compile_options(bkawrapper PRIVATE
+    -w
+    -fpermissive
+    -Wno-error=implicit-int
+    -Wno-error=int-conversion
+    -Wno-error=implicit-function-declaration
+    -Wno-error=incompatible-pointer-types
+    -Wno-error=unused-function
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
-)
-# C-only flags
-target_compile_options(bkawrapper PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
 )
 
-# --- 6. Compile Definitions ---
 target_compile_definitions(bkawrapper PRIVATE
     F3DEX_GBI
     VERSION=0
+    # Add these if helpful for stubs:
+    # N64_RECOMP
+    # __ANDROID__
 )
 
-# --- 7. Linking ---
 find_library(log-lib log)
-if(NOT log-lib)
-    message(FATAL_ERROR "Required library 'log' not found.")
-endif()
 target_link_libraries(bkawrapper PRIVATE
     android
     ${log-lib}
