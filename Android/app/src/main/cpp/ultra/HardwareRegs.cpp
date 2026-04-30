@@ -25,7 +25,7 @@ static void aligned_free(void* ptr) {
     free(ptr);
 }
 
-void HardwareRegs_Init() {
+extern "C" void InitN64Registers() {
     if (gN64_Reg_Base != nullptr) {
         return;
     }
