@@ -336,61 +336,60 @@ def fix_linkage_conflicts(content):
     clean_content = re.sub(r'".*?"', repl, clean_content)
     clean_content = re.sub(r"'.*?'", repl, clean_content)
 
-    # 1. Identify all static definitions
+    # 1. Strip 'static' from definitions that have global prototypes (Static follows Non-Static fix)
     static_def_pattern = re.compile(
-        r"^[ \t]*static\s+((?:[A-Za-z_]\w*[ \t\n\*]+)+\b(\w+)\s*\([^;{]*\))\s*\{", 
+        r"^[ \t]*(static\s+((?:[A-Za-z_]\w*[ \t\n\*]+)+\b(\w+)\s*\([^;{]*\)))\s*\{", 
         re.MULTILINE
     )
 
+    for match in static_def_pattern.finditer(clean_content):
+        orig_full = match.group(1)
+        func_name = match.group(3)
+        # Look for a non-static prototype
+        proto_search = re.compile(rf"^[ \t]*(?!static\b|return\b|if\b|while\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", re.MULTILINE)
+        if proto_search.search(clean_content):
+            original_match_str = content[match.start(1):match.end(1)]
+            new_def = re.sub(r"^static\s+", "", original_match_str, count=1)
+            content = content.replace(original_match_str, new_def)
+            clean_content = clean_content[:match.start(1)] + new_def + clean_content[match.end(1):]
+
+    # 2. Automated Forward Declarations for Static Functions (Injection point fix)
     signatures = []
     added_funcs = set()
+    # Pre-collect existing prototypes (manual or auto) to avoid duplicates
+    existing_proto_names = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean_content))
 
     for match in static_def_pattern.finditer(clean_content):
-        sig_no_brace = match.group(1).strip()
-        func_name = match.group(2)
+        sig_no_brace = match.group(2).strip()
+        func_name = match.group(3)
 
-        # 2. Check for non-static prototypes that might conflict
-        proto_pattern = re.compile(
-            rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b|static\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", 
-            re.MULTILINE
-        )
-        has_non_static_proto = bool(proto_pattern.search(clean_content))
+        if func_name in existing_proto_names or func_name in added_funcs:
+            continue
+        
+        # Skip signatures containing 'enum' to avoid "incomplete type" errors
+        # if the enum is defined between the injection point and the definition.
+        if "enum " in sig_no_brace:
+            continue
 
-        if has_non_static_proto:
-            # Resolve the conflict by making the function global (matching the prototype)
-            original_match = content[match.start(0):match.end(1)]
-            new_def = re.sub(r"^[ \t]*static\s+", "", original_match, count=1)
-            content = content.replace(original_match, new_def)
-        else:
-            # No conflict, but add a static forward declaration to prevent "implicit declaration" errors
-            if func_name not in added_funcs:
-                signatures.append(f"static {sig_no_brace};")
-                added_funcs.add(func_name)
+        signatures.append(f"static {sig_no_brace};")
+        added_funcs.add(func_name)
 
-    # 3. Inject the Automated Forward Declarations
     if signatures:
-        header_block = "\n/* Automated Forward Decls (Fix for static-follows-non-static) */\n" + "\n".join(signatures) + "\n\n"
-
-        # Find the best injection point: after the last include
-        last_include_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', content, re.MULTILINE))
-        if last_include_match:
-            insert_idx = last_include_match[-1].end()
-            content = content[:insert_idx] + "\n" + header_block + content[insert_idx:]
-        else:
-            # No includes? Put it at the very top.
-            content = header_block + content
+        header_block = "\n/* Automated Forward Decls (Placed before definitions to ensure types are defined) */\n" + "\n".join(signatures) + "\n\n"
+        
+        # Inject right before the first function definition (NOT the top of the file)
+        any_func_pattern = re.compile(r"^[ \t]*(?:static\s+)?(?:[A-Za-z_]\w*[ \t\n\*]+)+\b\w+\s*\([^;{]*\)\s*\{", re.MULTILINE)
+        first_func_match = any_func_pattern.search(clean_content)
+        
+        if first_func_match:
+            insert_idx = first_func_match.start()
+            content = content[:insert_idx] + header_block + content[insert_idx:]
 
     return content
 
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
-
-    include_search_dirs = [
-        "include",
-        os.path.join("include", "2.0L"),
-        os.path.join("include", "2.0L", "PR"),
-    ]
-
+    include_search_dirs = ["include", os.path.join("include", "2.0L"), os.path.join("include", "2.0L", "PR")]
     headers_to_redirect = set()
 
     for ch in CONFLICTING_HEADERS:
@@ -401,7 +400,7 @@ def sanitize_codebase(root_path):
                 headers_to_redirect.add(ch)
                 if os.path.exists(old_path) and not os.path.exists(new_path):
                     os.rename(old_path, new_path)
-                    print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
+                    print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch}")
 
     patch_count = 0
     wrapper_count = 0
@@ -409,59 +408,38 @@ def sanitize_codebase(root_path):
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
-
         for root, _, files in os.walk(dir_path):
             for filename in files:
                 if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
                 filepath = os.path.join(root, filename)
-
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
-
                     is_wrapper = is_modern_wrapper(filepath, original_content)
                     content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
-
                     if is_wrapper:
                         if content != original_content:
-                            with open(filepath, 'w', encoding='utf-8') as f:
-                                f.write(content)
+                            with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
                             wrapper_count += 1
                         continue
-
                     if filename in CORE_TYPE_HEADERS:
-                        bool_tokens = [
-                            (re.compile(r"\bbool\b"), "n64_bool"),
-                            (re.compile(r"\btrue\b"), "TRUE"),
-                            (re.compile(r"\bfalse\b"), "FALSE")
-                        ]
-                        content = safe_token_replacement(content, bool_tokens)
+                        content = safe_token_replacement(content, [(re.compile(r"\bbool\b"), "n64_bool"), (re.compile(r"\btrue\b"), "TRUE"), (re.compile(r"\bfalse\b"), "FALSE")])
                     else:
                         content = safe_token_replacement(content, COMPILED_TOKENS)
-
                     content = fix_decompiler_artifacts(content, filename)
                     content = fix_struct_shadowing(content)
                     content = apply_android_memory_routing(content, filename)
-
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
-                        if filename not in CORE_TYPE_HEADERS:
-                            content = inject_types_include(content, is_c_file=True)
-
+                        if filename not in CORE_TYPE_HEADERS: content = inject_types_include(content, is_c_file=True)
                     if filename.endswith('.h'):
-                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
-                            content = inject_types_include(content, is_c_file=False)
+                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content): content = inject_types_include(content, is_c_file=False)
                         content = inject_extern_c(content, filename)
-
                     if content != original_content:
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            f.write(content)
+                        with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
                         patch_count += 1
-
                 except Exception as e:
                     print(f"❌ CRITICAL EXCEPTION in {filepath}:\n{traceback.format_exc()}")
-                    continue
-
     print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers aligned.")
 
 if __name__ == "__main__":
