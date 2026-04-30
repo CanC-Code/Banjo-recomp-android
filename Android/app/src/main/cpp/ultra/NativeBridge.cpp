@@ -10,9 +10,6 @@
 #include <time.h>
 #include <stdatomic.h>
 
-// Include the register definitions from File 1
-#include "n64_registers.h" // Replace with the actual header name
-
 #define TAG "BKA-NativeBridge"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
