@@ -1,5 +1,14 @@
 #include <cstdint>
 
+// Macro collision fix: The N64 headers define these as numbers. 
+// We need to undefine them so we can declare them as pointers.
+#undef RI_CONFIG_REG
+#undef RI_CURRENT_LOAD_REG
+#undef RI_SELECT_REG
+#undef RI_REFRESH_REG
+#undef PI_STATUS_REG
+#undef VI_STATUS_REG
+
 #define RECOMP_SYMBOL __attribute__((used)) __attribute__((visibility("default")))
 
 extern "C" {
