@@ -50,7 +50,6 @@ def inject_types_include(content, is_c_file=False):
     last_inc = -1
     for i, line in enumerate(lines):
         if re.match(r'^#[ \t]*include\b', line.strip()): last_inc = i
-    
     if last_inc >= 0: lines.insert(last_inc + 1, '#include <n64_types.h>')
     else: lines.insert(0, '#include <n64_types.h>')
     return '\n'.join(lines)
@@ -100,19 +99,22 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     return content
 
 def fix_linkage_conflicts(content):
-    # 1. Resolve conflicts between 'extern' in headers and 'static' in .c files
+    # 1. Extern vs Static conflict resolution
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig, func_name = match.group(1), match.group(2)
         if re.search(r"^[ \t]*(?!static\b|typedef\b)[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE):
             content = content.replace("static " + full_sig, full_sig)
 
-    # 2. Automated Forward Declarations for all static functions
+    # 2. Automated Forward Declarations for Static Functions with Type Handling
     sigs, added = [], set()
+    custom_types = set()
+    standard_types = {'static', 'void', 'int', 'char', 'short', 'long', 'float', 'double', 'unsigned', 'signed', 
+                      's8', 'u8', 's16', 'u16', 's32', 'u32', 's64', 'u64', 'f32', 'f64', 'n64_bool'}
+
     clean = re.sub(r'("(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*)', ' ', content, flags=re.DOTALL)
     existing_protos = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
     
-    # Catch every static function definition to ensure visibility for calls made earlier in the file
     for match in re.finditer(r"^[ \t]*static\s+([^{;]+)\s*\{", content, re.MULTILINE):
         full_def_sig = match.group(1).strip()
         name_match = re.search(r'(\w+)\s*\(', full_def_sig)
@@ -121,16 +123,22 @@ def fix_linkage_conflicts(content):
             if name not in existing_protos and name not in added:
                 sigs.append(f"static {full_def_sig};")
                 added.add(name)
-                
+                # Find identifiers used as pointers to forward declare them as structs
+                found_ptr_types = re.findall(r'\b([a-zA-Z_]\w*)\s*\*+', full_def_sig)
+                for t in found_ptr_types:
+                    if t not in standard_types: custom_types.add(t)
+
     if sigs:
-        block = "\n/* Automated Forward Decls for Linkage Fix */\n" + "\n".join(sigs) + "\n\n"
+        # Pre-declare types to prevent "unknown type" errors in prototypes
+        type_decls = [f"typedef struct {t} {t};" for t in sorted(custom_types)]
+        block = "\n/* Automated Forward Decls for Linkage Fix */\n"
+        if type_decls: block += "\n".join(type_decls) + "\n"
+        block += "\n".join(sigs) + "\n\n"
+        
         lines = content.split('\n')
         last_include_idx = -1
         for i, line in enumerate(lines):
-            if re.match(r'^#[ \t]*include\b', line.strip()):
-                last_include_idx = i
-        
-        # Inject after includes so that types like n64_bool are already defined
+            if re.match(r'^#[ \t]*include\b', line.strip()): last_include_idx = i
         if last_include_idx != -1: lines.insert(last_include_idx + 1, block)
         else: lines.insert(0, block)
         content = '\n'.join(lines)
