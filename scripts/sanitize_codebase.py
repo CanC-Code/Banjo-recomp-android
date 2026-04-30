@@ -181,9 +181,7 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
 
 def apply_android_memory_routing(content, filename):
     """
-    Implements Just-In-Time Pointer Translation. Instead of eagerly converting hex addresses to 64-bit host
-    pointers (which breaks when the original code stores them in 32-bit `u32` integers), we inject
-    BKA_TRANSLATE_ADDR globally into all N64 dereference casts.
+    Implements Just-In-Time Pointer Translation. 
     """
     if "BKA_TRANSLATE_ADDR" not in content and filename.endswith(('.c', '.h')):
         header = """#include <stdint.h>\n#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n#define BKA_TRANSLATE_ADDR(addr) ( \\\n    (((uintptr_t)(addr) >= 0x04000000) && ((uintptr_t)(addr) < 0x05000000)) ? ((uintptr_t)BKA_GET_REG_BASE() + ((uintptr_t)(addr) - 0x04000000)) : \\\n    (((uintptr_t)(addr) >= 0x1FC00000) && ((uintptr_t)(addr) < 0x1FC01000)) ? ((uintptr_t)BKA_GET_PIF_BASE() + ((uintptr_t)(addr) - 0x1FC00000)) : \\\n    (((uintptr_t)(addr) >= 0xA4000000) && ((uintptr_t)(addr) < 0xA5000000)) ? ((uintptr_t)BKA_GET_REG_BASE() + ((uintptr_t)(addr) - 0xA4000000)) : \\\n    (((uintptr_t)(addr) >= 0xBFC00000) && ((uintptr_t)(addr) < 0xBFC01000)) ? ((uintptr_t)BKA_GET_PIF_BASE() + ((uintptr_t)(addr) - 0xBFC00000)) : \\\n    (uintptr_t)(addr) \\\n)\n\n"""
@@ -196,27 +194,34 @@ def apply_android_memory_routing(content, filename):
         content
     )
     
-    # 2. Match standard variable dereferences: (vu32 *)var
+    # 2. Match function-like macros or variables with parentheses: (vu32 *)MACRO(ARGS)
+    # This prevents truncating calls like PHYS_TO_K1(0x284)
     content = re.sub(
-        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+)',
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\((?:[^)(]+|\([^)(]*\))*\))',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
     
-    # 3. Match explicit offset dereferences: (vu32 *)(var + offset)
+    # 3. Match standard variable dereferences: (vu32 *)var 
+    # The negative lookahead (?!\s*\() guarantees this regex does not accidentally slice a macro.
+    content = re.sub(
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+)(?!\s*\()',
+        r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
+        content
+    )
+    
+    # 4. Match explicit offset dereferences: (vu32 *)(var + offset)
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*\(\s*([a-zA-Z0-9_]+)\s*\+\s*(0x[0-9a-fA-F]+|\d+)\s*\)',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2 + \3)',
         content
     )
 
-    # 4. Intercept all global SDK Hardware Access Macros
+    # 5. Intercept all global SDK Hardware Access Macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\)\s*\*.*', r'#define HW_REG(reg, type) *(volatile type *)BKA_TRANSLATE_ADDR(reg)', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\)\s*\*.*', r'#define IO_READ(addr) (*(vu32 *)BKA_TRANSLATE_ADDR(addr))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\)\s*\*.*', r'#define IO_WRITE(addr, data) (*(vu32 *)BKA_TRANSLATE_ADDR(addr) = (u32)(data))', content)
 
-    # Note: K1_TO_PHYS & K0 reverse operations safely map virtual boundaries back to local N64 physical boundaries 
-    # using Bitwise AND masks instead of host-space pointers.
     if filename == "os_convert.h":
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
