@@ -15,8 +15,11 @@
 #define N64_K1_PIF_BASE_ADDR 0xBFC00000
 #define N64_PIF_SPACE_SIZE 0x1000 // 4KB (Covers 0x1FC00000 to 0x1FC00FFF)
 
-uint32_t* gN64_Reg_Base = nullptr;
-uint32_t* gN64_PIF_Base = nullptr;
+// Enforce C-linkage to prevent C++ Name Mangling shadows
+extern "C" {
+    uint32_t* gN64_Reg_Base = nullptr;
+    uint32_t* gN64_PIF_Base = nullptr;
+}
 
 static void* aligned_malloc(size_t alignment, size_t size) {
     void* ptr = nullptr;
