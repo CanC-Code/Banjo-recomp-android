@@ -35,8 +35,6 @@ TOKEN_REPLACEMENTS = {
     r"\bvf64\b": "volatile f64",
 }
 COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
-
-SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
@@ -49,27 +47,12 @@ def inject_types_include(content, is_c_file=False):
     if is_c_file:
         content = re.sub(r'^[ \t]*#[ \t]*include[ \t]*[<"]n64_types\.h[">][ \t]*\n?', '', content, flags=re.MULTILINE)
     lines = content.split('\n')
-    if is_c_file:
-        last_idx = -1
-        for i, line in enumerate(lines):
-            if re.match(r'^#[ \t]*include\b', line.strip()): last_idx = i
-        lines.insert(last_idx + 1, '#include <n64_types.h>') if last_idx >= 0 else lines.insert(0, '#include <n64_types.h>')
-        return '\n'.join(lines)
-    
-    insert_idx = 0
+    last_inc = -1
     for i, line in enumerate(lines):
-        s = line.strip()
-        if not s or any(s.startswith(x) for x in ['//', '/*', '*']): continue
-        if re.match(r'^#[ \t]*pragma[ \t]+once\b', s):
-            insert_idx = i + 1; break
-        if re.match(r'^#[ \t]*if(?:ndef\b| !defined\b)', s):
-            for j in range(i+1, min(i+5, len(lines))):
-                if re.match(r'^#[ \t]*define\b', lines[j].strip()):
-                    insert_idx = j + 1; break
-            if insert_idx == 0: insert_idx = i + 1
-            break
-        insert_idx = i; break
-    lines.insert(insert_idx, '#include <n64_types.h>')
+        if re.match(r'^#[ \t]*include\b', line.strip()): last_inc = i
+    
+    if last_inc >= 0: lines.insert(last_inc + 1, '#include <n64_types.h>')
+    else: lines.insert(0, '#include <n64_types.h>')
     return '\n'.join(lines)
 
 def apply_android_memory_routing(content, filename):
@@ -89,18 +72,12 @@ extern void InitN64Registers(void);
 static inline unsigned int* BKA_GetSafeRegBase(void) {
     if (gN64_Reg_Base) return gN64_Reg_Base;
     InitN64Registers();
-    if (gN64_Reg_Base) return gN64_Reg_Base;
-    static unsigned int* dummy_reg = (unsigned int*)0;
-    if (!dummy_reg) dummy_reg = (unsigned int*)calloc(0x100000, 1);
-    return dummy_reg;
+    return gN64_Reg_Base ? gN64_Reg_Base : (unsigned int*)0;
 }
 static inline unsigned int* BKA_GetSafePifBase(void) {
     if (gN64_PIF_Base) return gN64_PIF_Base;
     InitN64Registers();
-    if (gN64_PIF_Base) return gN64_PIF_Base;
-    static unsigned int* dummy_pif = (unsigned int*)0;
-    if (!dummy_pif) dummy_pif = (unsigned int*)calloc(0x1000, 1);
-    return dummy_pif;
+    return gN64_PIF_Base ? gN64_PIF_Base : (unsigned int*)0;
 }
 #endif
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
@@ -123,23 +100,41 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     return content
 
 def fix_linkage_conflicts(content):
+    # 1. Resolve conflicts between 'extern' in headers and 'static' in .c files
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig, func_name = match.group(1), match.group(2)
         if re.search(r"^[ \t]*(?!static\b|typedef\b)[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE):
             content = content.replace("static " + full_sig, full_sig)
+
+    # 2. Automated Forward Declarations for all static functions
     sigs, added = [], set()
     clean = re.sub(r'("(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*)', ' ', content, flags=re.DOTALL)
-    existing = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
-    for match in re.finditer(r"^[ \t]*static\s+([\w\s\*]+\b(\w+)\s*\([^;{]*\))\s*\{", content, re.MULTILINE):
-        sig, name = match.group(1).strip(), match.group(2)
-        if name not in existing and name not in added:
-            sigs.append(f"static {sig};")
-            added.add(name)
+    existing_protos = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
+    
+    # Catch every static function definition to ensure visibility for calls made earlier in the file
+    for match in re.finditer(r"^[ \t]*static\s+([^{;]+)\s*\{", content, re.MULTILINE):
+        full_def_sig = match.group(1).strip()
+        name_match = re.search(r'(\w+)\s*\(', full_def_sig)
+        if name_match:
+            name = name_match.group(1)
+            if name not in existing_protos and name not in added:
+                sigs.append(f"static {full_def_sig};")
+                added.add(name)
+                
     if sigs:
-        block = "\n/* Automated Forward Decls */\n" + "\n".join(sigs) + "\n\n"
-        first = re.search(r"^[ \t]*(?:static\s+)?[\w\s\*]+\b\w+\s*\([^;{]*\)\s*\{", content, re.MULTILINE)
-        if first: content = content[:first.start()] + block + content[first.start():]
+        block = "\n/* Automated Forward Decls for Linkage Fix */\n" + "\n".join(sigs) + "\n\n"
+        lines = content.split('\n')
+        last_include_idx = -1
+        for i, line in enumerate(lines):
+            if re.match(r'^#[ \t]*include\b', line.strip()):
+                last_include_idx = i
+        
+        # Inject after includes so that types like n64_bool are already defined
+        if last_include_idx != -1: lines.insert(last_include_idx + 1, block)
+        else: lines.insert(0, block)
+        content = '\n'.join(lines)
+            
     return content
 
 def sanitize_codebase(root_path):
@@ -169,7 +164,6 @@ def sanitize_codebase(root_path):
                     if filename not in CORE_TYPE_HEADERS:
                         content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
                         content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
-                        # --- CRITICAL FIX: Redirect renamed conflicting headers ---
                         for ch in headers_to_redirect:
                             content = re.sub(rf'#include\s*[<"]{ch.replace(".", r"\.")}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
                     
@@ -186,9 +180,6 @@ def sanitize_codebase(root_path):
                         if filename.endswith('.c'):
                             content = fix_linkage_conflicts(content)
                             if filename not in CORE_TYPE_HEADERS: content = inject_types_include(content, True)
-                        if filename.endswith('.h') and filename not in CORE_TYPE_HEADERS:
-                            if not re.search(r'#include\s*[<"](?:n64_types\.h|ultra64\.h|ultratypes\.h)[">]', content):
-                                content = inject_types_include(content, False)
                     
                     if content != original_content:
                         with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
