@@ -181,6 +181,63 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
             parts[i] = code_chunk
     return "".join(parts)
 
+def apply_android_memory_routing(content, filename):
+    """
+    Hooks into the N64 memory virtualization macros. If an access occurs within the 16MB RCP 
+    space (0x04000000 - 0x04FFFFFF), it shifts the pointer to our dynamically allocated gN64_Reg_Base.
+    """
+    if filename not in ["os_convert.h", "R4300.h"]:
+        return content
+
+    if "gN64_Reg_Base" not in content:
+        content = "#ifdef __cplusplus\nextern \"C\" {\n#endif\nextern unsigned int* gN64_Reg_Base;\n#ifdef __cplusplus\n}\n#endif\n\n" + content
+
+    if filename == "os_convert.h":
+        content = re.sub(
+            r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
+            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0xA0000000)))',
+            content
+        )
+        content = re.sub(
+            r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*',
+            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0x80000000)))',
+            content
+        )
+        content = re.sub(
+            r'#define\s+OS_K1_TO_PHYSICAL\s*\(\s*x\s*\).*',
+            r'#define OS_K1_TO_PHYSICAL(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0xa0000000))',
+            content
+        )
+        content = re.sub(
+            r'#define\s+OS_K0_TO_PHYSICAL\s*\(\s*x\s*\).*',
+            r'#define OS_K0_TO_PHYSICAL(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0x80000000))',
+            content
+        )
+
+    if filename == "R4300.h":
+        content = re.sub(
+            r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*',
+            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0xA0000000))',
+            content
+        )
+        content = re.sub(
+            r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*',
+            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0x80000000))',
+            content
+        )
+        content = re.sub(
+            r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*',
+            r'#define K1_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0xa0000000))',
+            content
+        )
+        content = re.sub(
+            r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*',
+            r'#define K0_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0x80000000))',
+            content
+        )
+
+    return content
+
 def fix_decompiler_artifacts(content, filename):
     shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
     shadow_matches = shadow_pattern.findall(content)
@@ -209,7 +266,6 @@ def fix_struct_shadowing(content):
     """
     for shadow_type in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64']:
         # Match pattern `} u8;` accommodating varied spacing.
-        # Concatenation used here to avoid f-string single brace SyntaxError.
         pat = re.compile(r'\}\s*' + shadow_type + r'\s*;')
         if pat.search(content):
             # Rename definition (e.g. `} u8;` -> `} u8_struct;`)
@@ -350,6 +406,7 @@ def sanitize_codebase(root_path):
 
                     content = fix_decompiler_artifacts(content, filename)
                     content = fix_struct_shadowing(content)
+                    content = apply_android_memory_routing(content, filename)
 
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
