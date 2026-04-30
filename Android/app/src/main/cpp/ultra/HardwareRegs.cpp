@@ -34,55 +34,60 @@ static void aligned_free(void* ptr) {
 }
 
 extern "C" void InitN64Registers() {
-    if (gN64_Reg_Base != nullptr) {
+    // Prevent redundant allocations if already booted by another thread
+    if (gN64_Reg_Base != nullptr && gN64_PIF_Base != nullptr) {
         return;
     }
 
     // ==========================================
     // 1. RCP Registration Space Initialization
     // ==========================================
-    void* target_rcp_addr = (void*)N64_K1_RCP_BASE_ADDR;
-    gN64_Reg_Base = (uint32_t*)mmap(
-        target_rcp_addr, N64_RCP_SPACE_SIZE, 
-        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0
-    );
+    if (gN64_Reg_Base == nullptr) {
+        void* target_rcp_addr = (void*)N64_K1_RCP_BASE_ADDR;
+        gN64_Reg_Base = (uint32_t*)mmap(
+            target_rcp_addr, N64_RCP_SPACE_SIZE, 
+            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0
+        );
 
-    if (gN64_Reg_Base == MAP_FAILED) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
-            "MAP_FIXED failed for RCP at %p: %s. Switching to fallback.", target_rcp_addr, strerror(errno));
-        
-        gN64_Reg_Base = (uint32_t*)aligned_malloc(16, N64_RCP_SPACE_SIZE);
-        if (gN64_Reg_Base == nullptr) {
-            __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure for RCP.");
-            abort();
+        if (gN64_Reg_Base == MAP_FAILED) {
+            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
+                "MAP_FIXED failed for RCP at %p: %s. Switching to fallback.", target_rcp_addr, strerror(errno));
+            
+            gN64_Reg_Base = (uint32_t*)aligned_malloc(16, N64_RCP_SPACE_SIZE);
+            if (gN64_Reg_Base == nullptr) {
+                __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure for RCP.");
+                abort();
+            }
+        } else {
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Successfully mapped RCP space at fixed address %p", gN64_Reg_Base);
         }
-    } else {
-        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Successfully mapped RCP space at fixed address %p", gN64_Reg_Base);
+        memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
     }
-    memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
 
     // ==========================================
     // 2. PIF ROM/RAM Space Initialization
     // ==========================================
-    void* target_pif_addr = (void*)N64_K1_PIF_BASE_ADDR;
-    gN64_PIF_Base = (uint32_t*)mmap(
-        target_pif_addr, N64_PIF_SPACE_SIZE, 
-        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0
-    );
+    if (gN64_PIF_Base == nullptr) {
+        void* target_pif_addr = (void*)N64_K1_PIF_BASE_ADDR;
+        gN64_PIF_Base = (uint32_t*)mmap(
+            target_pif_addr, N64_PIF_SPACE_SIZE, 
+            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0
+        );
 
-    if (gN64_PIF_Base == MAP_FAILED) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
-            "MAP_FIXED failed for PIF at %p: %s. Switching to fallback.", target_pif_addr, strerror(errno));
-        
-        gN64_PIF_Base = (uint32_t*)aligned_malloc(16, N64_PIF_SPACE_SIZE);
-        if (gN64_PIF_Base == nullptr) {
-            __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure for PIF.");
-            abort();
+        if (gN64_PIF_Base == MAP_FAILED) {
+            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
+                "MAP_FIXED failed for PIF at %p: %s. Switching to fallback.", target_pif_addr, strerror(errno));
+            
+            gN64_PIF_Base = (uint32_t*)aligned_malloc(16, N64_PIF_SPACE_SIZE);
+            if (gN64_PIF_Base == nullptr) {
+                __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure for PIF.");
+                abort();
+            }
+        } else {
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Successfully mapped PIF space at fixed address %p", gN64_PIF_Base);
         }
-    } else {
-        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Successfully mapped PIF space at fixed address %p", gN64_PIF_Base);
+        memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
     }
-    memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
 }
 
 void HardwareRegs_Shutdown() {
