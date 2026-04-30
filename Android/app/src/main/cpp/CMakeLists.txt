@@ -5,7 +5,7 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(TARGET_VERSION "us.v10")
 
 # ============================================================
-# 1. Bridge Sources (The "Android Handshake" Logic)
+# 1. Bridge Sources
 # ============================================================
 set(BRIDGE_SOURCES
     ultra/NativeBridge.cpp
@@ -23,45 +23,44 @@ set(BRIDGE_SOURCES
     emulator/resource_mgr.cpp
     tools/rare_decompression.cpp
 
-    # Dead-stub fallbacks — must be last in this list
+    # Dead-stub fallbacks — must be last
     ultra/missing_stubs.c
 )
 
 # ============================================================
-# 2. Game Source Files (Filtered to prevent Shadowing)
+# 2. Game Source Files (Filtered to prevent Shadowing/Deadlock)
 # ============================================================
 option(EXCLUDE_GAME_SRC "Skip compiling the recompiled game source tree" OFF)
 
 set(GAME_SOURCES "")
 if(NOT EXCLUDE_GAME_SRC)
-    # 1. Find every .c file in the recompiled source tree
     file(GLOB_RECURSE ALL_C_FILES "${REPO_ROOT}/src/*.c")
 
-    # 2. Define the "Hardware Blacklist" 
-    # These files try to talk to N64 hardware. We MUST exclude them
-    # because we provide Android-compatible versions in 'emulator/'.
+    # The Hardware & OS Blacklist
+    # We exclude these because we provide Android-compatible HLE versions 
+    # in 'emulator/stubs.cpp' and 'emulator/pi_hle.cpp'
     set(EXCLUSION_LIST
-        "pirawdma.c"   # Overrides osPiRawStartDma
-        "epirawdma.c"  # Overrides osEPiStartDma
-        "pimgr.c"      # Overrides PI Manager logic
-        "piacs.c"      # Overrides PI Access logic
-        "vi.c"         # Overrides Video Interface (Android does this)
-        "vicurrent.c"  # Overrides VI tracking
-        "osYield.c"    # Overrides Scheduler yielding
+        "pirawdma.c"   # Shadows osPiRawStartDma
+        "epirawdma.c"  # Shadows osEPiStartDma
+        "pimgr.c"      # Shadows PI Manager
+        "piacs.c"      # Shadows PI Access
+        "vi.c"         # Shadows Video Interface
+        "vicurrent.c"  # Shadows VI tracking
+        "osYield.c"    # Shadows Scheduler
+        "recvmesg.c"   # NEW: Prevent deadlock in message queue
+        "sendmesg.c"   # NEW: Prevent deadlock in message queue
+        "jammesg.c"    # NEW: Prevent deadlock in message queue
     )
 
-    # 3. Perform the filter
     foreach(FILE_PATH ${ALL_C_FILES})
         get_filename_component(FILENAME ${FILE_PATH} NAME)
         list(FIND EXCLUSION_LIST ${FILENAME} INDEX)
         if(INDEX EQUAL -1)
             list(APPEND GAME_SOURCES ${FILE_PATH})
         else()
-            message(STATUS "BKA-BUILD: Excluding N64 hardware file: ${FILE_PATH}")
+            message(STATUS "BKA-BUILD: Excluding N64 OS/HW file: ${FILE_PATH}")
         endif()
     endforeach()
-else()
-    message(STATUS "EXCLUDE_GAME_SRC=ON: skipping game source tree")
 endif()
 
 # ============================================================
@@ -128,6 +127,4 @@ target_link_libraries(bkawrapper
     m
 )
 
-# We keep this just in case there are obscure internal symbols, 
-# but our filtering above does the heavy lifting.
 target_link_options(bkawrapper PRIVATE "-Wl,--allow-multiple-definition")
