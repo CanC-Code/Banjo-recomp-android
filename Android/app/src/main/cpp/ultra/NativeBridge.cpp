@@ -15,11 +15,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
 
-// ============================================================
-// GLOBAL HARDWARE REGISTER BASE (CRITICAL FIX)
-// ============================================================
-uint32_t* gN64_Reg_Base = nullptr;
-
 // -----------------------------------------------------------------------
 // Module-level state
 // -----------------------------------------------------------------------
@@ -31,22 +26,28 @@ static GLuint    g_quad_prog    = 0;
 static atomic_bool g_surface_ready  = ATOMIC_VAR_INIT(false);
 static atomic_bool g_globals_ready  = ATOMIC_VAR_INIT(false);
 
-// Extern declaration for bridge globals
+// -----------------------------------------------------------------------
+// External globals
+// -----------------------------------------------------------------------
 extern AndroidBridgeGlobals* gBridgeGlobals;
 
 extern "C" {
-    extern void initInterruptTables();
-    extern void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
-    extern void run_native_otr_generation_with_callback(
+    extern uint32_t* gN64_Reg_Base;
+
+    void InitN64Registers();
+
+    void initInterruptTables();
+    void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
+    void run_native_otr_generation_with_callback(
         JNIEnv* env, jobject callbackObj, jmethodID progressMid,
         int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
         const char* outDirPath);
-    extern void mainLoop();
+    void mainLoop();
 }
 
-// ============================================================
-// Ensure bridge globals
-// ============================================================
+// -----------------------------------------------------------------------
+// Bridge Globals Setup
+// -----------------------------------------------------------------------
 static void ensureBridgeGlobals() {
     if (gBridgeGlobals == nullptr) {
         void* ptr = nullptr;
@@ -61,10 +62,11 @@ static void ensureBridgeGlobals() {
     if (gBridgeGlobals->screenBuffer == nullptr) {
         gBridgeGlobals->screenBuffer = (uint32_t*)malloc(320u * 240u * sizeof(uint32_t));
         if (!gBridgeGlobals->screenBuffer) {
-            LOGE("screenBuffer malloc failed");
+            LOGE("ensureBridgeGlobals: screenBuffer malloc failed");
             return;
         }
 
+        // Fill with visible debug color (opaque red)
         for (int i = 0; i < 320 * 240; i++) {
             gBridgeGlobals->screenBuffer[i] = 0xFF0000FFu;
         }
@@ -73,9 +75,9 @@ static void ensureBridgeGlobals() {
     atomic_store(&g_globals_ready, true);
 }
 
-// ============================================================
-// SHADER HELPERS
-// ============================================================
+// -----------------------------------------------------------------------
+// OpenGL Helpers
+// -----------------------------------------------------------------------
 static GLuint compileShader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
@@ -111,8 +113,10 @@ static GLuint buildQuadProgram() {
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
+
     glBindAttribLocation(prog, 0, "aPos");
     glBindAttribLocation(prog, 1, "aUV");
+
     glLinkProgram(prog);
 
     GLint ok = 0;
@@ -125,47 +129,53 @@ static GLuint buildQuadProgram() {
 
     glDeleteShader(vs);
     glDeleteShader(fs);
+
     return prog;
 }
 
-// ============================================================
-// JNI ENTRY POINTS
-// ============================================================
+// -----------------------------------------------------------------------
+// JNI Entry Points
+// -----------------------------------------------------------------------
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject serviceObj) {
 
-    // ========================================================
-    // ALLOCATE HARDWARE REGISTER BUFFER (CRITICAL)
-    // ========================================================
-    if (!gN64_Reg_Base) {
-        gN64_Reg_Base = (uint32_t*)malloc(0x4000); // supports RI, VI, PI, SI (+ future)
-        if (!gN64_Reg_Base) {
-            LOGE("Failed to allocate gN64_Reg_Base");
-            return;
-        }
-        memset(gN64_Reg_Base, 0, 0x4000);
+    // ✅ MUST initialize registers BEFORE anything touches them
+    InitN64Registers();
 
-        LOGI("gN64_Reg_Base allocated at %p", gN64_Reg_Base);
+    if (!gN64_Reg_Base) {
+        LOGE("gN64_Reg_Base FAILED to initialize!");
+        return;
     }
 
-    if (g_service_ref) {
+    LOGI("gN64_Reg_Base = %p", gN64_Reg_Base);
+
+    // JNI setup
+    if (g_service_ref != nullptr) {
         env->DeleteGlobalRef(g_service_ref);
     }
 
     g_service_ref = env->NewGlobalRef(serviceObj);
+
     jclass cls = env->GetObjectClass(g_service_ref);
     g_progress_mid = env->GetMethodID(cls, "updateOtrProgress", "(ILjava/lang/String;)V");
 
+    if (!g_progress_mid) {
+        LOGW("updateOtrProgress method not found");
+    }
+
     ensureBridgeGlobals();
 
-    LOGI("nativeInit complete");
+    LOGI("nativeInit: Bridge + Registers initialized");
 }
 
-// ============================================================
-// OTR GENERATION
-// ============================================================
 extern "C" JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass, jint romFd, jobject assetManager, jstring outDir) {
+Java_com_bkawrapper_NativeBridge_runOtrGeneration(
+    JNIEnv* env, jclass, jint romFd, jobject assetManager, jstring outDir) {
+
+    if (!gN64_Reg_Base) {
+        LOGE("runOtrGeneration: gN64_Reg_Base is NULL!");
+        return;
+    }
 
     const char* nativeOutDir = env->GetStringUTFChars(outDir, nullptr);
 
@@ -174,23 +184,30 @@ Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass, jint romF
 
     if (asset) {
         run_native_otr_generation_with_callback(
-            env, g_service_ref, g_progress_mid,
+            env,
+            g_service_ref,
+            g_progress_mid,
             (int)romFd,
             (uint8_t*)AAsset_getBuffer(asset),
             (uint32_t)AAsset_getLength(asset),
-            nativeOutDir
-        );
+            nativeOutDir);
+
         AAsset_close(asset);
+    } else {
+        LOGW("manifest_us.bin not found");
     }
 
     env->ReleaseStringUTFChars(outDir, nativeOutDir);
 }
 
-// ============================================================
-// GAME BOOT
-// ============================================================
 extern "C" JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass, jstring otrPathJ, jobject assetManager) {
+Java_com_bkawrapper_NativeBridge_nativeGameBoot(
+    JNIEnv* env, jclass, jstring otrPathJ, jobject assetManager) {
+
+    if (!gN64_Reg_Base) {
+        LOGE("nativeGameBoot: gN64_Reg_Base is NULL!");
+        return;
+    }
 
     ensureBridgeGlobals();
     initInterruptTables();
@@ -204,8 +221,8 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass, jstring otr
         ResourceMgr_Init(
             assetDir,
             (uint8_t*)AAsset_getBuffer(manifestAsset),
-            (uint32_t)AAsset_getLength(manifestAsset)
-        );
+            (uint32_t)AAsset_getLength(manifestAsset));
+
         AAsset_close(manifestAsset);
     } else {
         ResourceMgr_Init(assetDir, nullptr, 0);
@@ -213,13 +230,10 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass, jstring otr
 
     env->ReleaseStringUTFChars(otrPathJ, assetDir);
 
-    LOGI("Starting mainLoop()");
+    // ⚠️ This enters the main game loop (blocking)
     mainLoop();
 }
 
-// ============================================================
-// SURFACE / RENDERING
-// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv*, jclass, jint, jint) {
 
@@ -237,14 +251,20 @@ Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv*, jclass, jint, jint) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 320, 240, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        320,
+        240,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        nullptr);
 
     atomic_store(&g_surface_ready, true);
 }
 
-// ============================================================
-// FRAME UPDATE
-// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv*, jclass, jint) {
 
@@ -255,10 +275,15 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv*, jclass, jint) {
     glBindTexture(GL_TEXTURE_2D, g_fb_texture);
 
     glTexSubImage2D(
-        GL_TEXTURE_2D, 0, 0, 0, 320, 240,
-        GL_RGBA, GL_UNSIGNED_BYTE,
-        gBridgeGlobals->screenBuffer
-    );
+        GL_TEXTURE_2D,
+        0,
+        0,
+        0,
+        320,
+        240,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        gBridgeGlobals->screenBuffer);
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -280,8 +305,8 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv*, jclass, jint) {
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
-// ============================================================
-// INPUT (stub)
-// ============================================================
 extern "C" JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv*, jclass, jint, jfloat, jfloat) {}
+Java_com_bkawrapper_NativeBridge_nativeUpdateInput(
+    JNIEnv*, jclass, jint, jfloat, jfloat) {
+    // Input bridge not yet implemented
+}
