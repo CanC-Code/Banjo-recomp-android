@@ -1,16 +1,25 @@
 #include <cstdint>
 #include <cstring>
-#include "n64_types.h" // Structures are now inherited from here
+#include "n64_types.h" // CPUState and OSThread should be defined here
+
+// Usually, OSIntMask is defined in PR/os_system.h as an unsigned int.
+// We include the header or use the exact type to prevent redefinition errors.
+#include <PR/os_internal.h> 
 
 extern "C" {
 
-// Global Scheduler Symbols (Keep these exported for the game to find)
+// Global Scheduler Symbols
 OSThread* __osRunningThread = nullptr;
 OSThread* __osRunQueue = nullptr;
 OSThread* __osFaultedThread = nullptr;
+
+// 1. CPUState is now recognized because it's in n64_types.h
 CPUState __osThreadSave; 
 
-volatile uint32_t __OSGlobalIntMask = 0xFFFFFFFF;
+// 2. FIX: Use OSIntMask to match the declaration in os_system.h
+// The SDK defines this as: extern OSIntMask __OSGlobalIntMask;
+OSIntMask __OSGlobalIntMask = 0xFFFFFFFF;
+
 uintptr_t __osHwIntTable[5] = {0};
 uint8_t   __osIntOffTable[32] = {0};
 
@@ -39,11 +48,13 @@ OSThread* __osPopThread(OSThread** queue) {
 // Switch context to the next thread in the queue
 void __osDispatchThread() {
     __osRunningThread = __osPopThread(&__osRunQueue);
+    
+    if (__osRunningThread == nullptr) return;
 
-    // N64 logic: Status register bit 0 is the global interrupt enable (IE)
-    // We simulate "enabling interrupts" when a thread starts.
-    // Cast the context array (long long[67]) to a uint32_t pointer to set the status bit.
-    *(reinterpret_cast<uint32_t*>(__osRunningThread->context)) |= 0x0001; 
+    // 3. FIX: Take the address of the context before casting.
+    // __osRunningThread->context is the struct/array itself. 
+    // We need its memory address (&) to cast it to a uint32_t pointer.
+    *(reinterpret_cast<uint32_t*>(&__osRunningThread->context)) |= 0x0001; 
 }
 
 void __osEnqueueAndYield(OSThread** queue) {
@@ -64,7 +75,6 @@ void redispatch() {
 
 // The RCP handler maps hardware signals (VI, SP, DP) to software events
 void handleRCP() {
-    // Logic: In an Android port, this is triggered by the Graphics/Audio loop
     redispatch();
 }
 
