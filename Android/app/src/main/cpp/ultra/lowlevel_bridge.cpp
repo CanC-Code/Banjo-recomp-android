@@ -1,56 +1,62 @@
+#include "HardwareRegs.h"
+#include <sys/mman.h>
+#include <errno.h>
 #include <android/log.h>
+#include <cstdlib>
 #include <cstring>
 
-extern "C" {
-#include <PR/os_pi.h>
+#define LOG_TAG "BKA_MEM"
+#define RECOMP_BASE_ADDR 0xa0000000 
+#define N64_REG_SPACE_SIZE 0x1000000 // 16MB
+
+// Define the global pointer
+uint32_t* gN64_Reg_Base = nullptr;
+
+extern "C" void InitN64Registers() {
+    if (gN64_Reg_Base != nullptr) {
+        return;
+    }
+
+    void* fixed_addr = (void*)RECOMP_BASE_ADDR;
+    
+    // Attempt to map exactly at 0xa0000000 to satisfy hardcoded recompilation pointers
+    gN64_Reg_Base = (uint32_t*)mmap(
+        fixed_addr, 
+        N64_REG_SPACE_SIZE, 
+        PROT_READ | PROT_WRITE, 
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, 
+        -1, 0
+    );
+
+    if (gN64_Reg_Base == MAP_FAILED) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
+            "MAP_FIXED failed at %p: %s. Switching to fallback.", fixed_addr, strerror(errno));
+        
+        // Fallback: Allocate memory anywhere in the heap if the fixed address is blocked
+        gN64_Reg_Base = (uint32_t*)malloc(N64_REG_SPACE_SIZE);
+        
+        if (gN64_Reg_Base == nullptr) {
+            __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure.");
+            abort();
+        }
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, 
+            "Successfully mapped N64 space at fixed address %p", gN64_Reg_Base);
+    }
+
+    // Always zero out the register space on initialization
+    memset(gN64_Reg_Base, 0, N64_REG_SPACE_SIZE);
 }
 
-#define LOG_TAG "BKA_LOWLEVEL"
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
-
-/* =========================
-   PI Access (REAL SIGNATURES)
-========================= */
-
-extern "C" {
-
-s32 osPiReadIo(u32 addr, u32* data) {
-    if (data) *data = 0;
-    return 0;
-}
-
-s32 osPiWriteIo(u32 addr, u32 value) {
-    return 0;
-}
-
-/* =========================
-   Memory
-========================= */
-
-void* n64_memcpy(void* dst, const void* src, size_t size) {
-    return memcpy(dst, src, size);
-}
-
-void* n64_memset(void* dst, int val, size_t size) {
-    return memset(dst, val, size);
-}
-
-/* =========================
-   Unknown Core Functions
-========================= */
-
-int func_8025A6EC(...) {
-    LOGW("func_8025A6EC stub");
-    return 0;
-}
-
-int func_8025B1C0(...) {
-    LOGW("func_8025B1C0 stub");
-    return 0;
-}
-
-void func_8025C3F0(...) {
-    LOGW("func_8025C3F0 stub");
-}
-
+void HardwareRegs_Shutdown() {
+    if (gN64_Reg_Base != nullptr) {
+        // Check if it was an mmap or a malloc
+        // Note: For simplicity, if RECOMP_BASE_ADDR is consistent, we munmap
+        if ((uintptr_t)gN64_Reg_Base == RECOMP_BASE_ADDR) {
+            munmap(gN64_Reg_Base, N64_REG_SPACE_SIZE);
+        } else {
+            free(gN64_Reg_Base);
+        }
+        gN64_Reg_Base = nullptr;
+    }
 }
