@@ -12,50 +12,57 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-#include <PR/os_vi.h>
+// Note: We avoid including PR/os_vi.h if it causes conflicts with our stubs
+}
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 
-/* ============================================================
-   MISSING OS GLOBALS (Linker Fixes)
-   These provide the symbols previously found in pirawdma.c, etc.
-   ============================================================ */
-
-OSPiHandle __osPiTable[2];             // For osCartRomInit
-OSDevMgr   __osPiDevMgr;               // For osPiGetCmdQueue
-OSViContext *__osViNext = nullptr;     // For osViBlack
-OSViContext *__osViCurr = nullptr;     // For osViGetCurrentContext
-int         __osViInit  = 0;           // For osCreateViManager
+extern "C" {
 
 /* ============================================================
-   MISSING OS FUNCTIONS (Linker Fixes)
+   FIX 1: __osPiTable Type Mismatch
+   The header expects a pointer, so we provide a pool and point to it.
    ============================================================ */
+static OSPiHandle  sPiTablePool[2];
+OSPiHandle* __osPiTable = sPiTablePool;
 
-/**
- * The game calls this to start the PI Manager. Since we handle
- * DMA via HLE, we just log and return 0.
- */
-s32 osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
+/* ============================================================
+   FIX 2: OSViContext and VI Globals
+   The compiler didn't recognize 'OSViContext', so we'll treat 
+   it as a void pointer for the stubs.
+   ============================================================ */
+void* __osViNext = nullptr; 
+void* __osViCurr = nullptr;
+
+/* ============================================================
+   FIX 3: osCreatePiManager Return Type
+   The header defines this as 'void', but our stub used 's32'.
+   ============================================================ */
+void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
     LOGI("osCreatePiManager: HLE bridge active");
-    return 0;
 }
 
-/**
- * Redirect Raw EPi DMA to our HLE Raw DMA function
- */
+/* ============================================================
+   FIX 4: __osViInit Name Conflict
+   Removed the 'int' variable to prevent conflict with the function name.
+   ============================================================ */
+void __osViInit(void) {
+    LOGI("__osViInit: HLE bridge active");
+}
+
+/* ============================================================
+   FIX 5: osEPiRawStartDma 
+   Redirecting to our HLE DMA implementation.
+   ============================================================ */
 extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size);
 s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramAddr, u32 size) {
     return osPiRawStartDma(direction, devAddr, dramAddr, size);
 }
 
-/**
- * Internal VI init stub
- */
-void __osViInit(void) {
-    LOGI("__osViInit: HLE bridge active");
-}
+// Global for the PI device manager
+OSDevMgr __osPiDevMgr;
 
 /* ============================================================
    Engine Entry & Main Loop
@@ -63,19 +70,13 @@ void __osViInit(void) {
 
 AndroidBridgeGlobals* gBridgeGlobals = nullptr;
 
-// Forward declarations for game subsystems
 extern void core1_reset(void);
 extern void core1_stepCPU(void);
 extern void core2_stepFrame(void);
 
-void initInterruptTables(void) {
-    // Implementation is in exceptasm.cpp
-}
-
 void mainLoop(void) {
     LOGI("mainLoop: starting game loop");
 
-    // Initialize the game's internal OS structures
     core1_reset();
 
     static const uint32_t TARGET_FRAME_US = 33333u; // 30 fps
@@ -85,7 +86,6 @@ void mainLoop(void) {
         struct timespec ts_start, ts_end;
         clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
-        // --- Simulate one N64 frame ---
         core1_stepCPU();    
         core2_stepFrame();  
 
@@ -93,7 +93,6 @@ void mainLoop(void) {
             gBridgeGlobals->frameCount++;
         }
 
-        // --- Pacing ---
         clock_gettime(CLOCK_MONOTONIC, &ts_end);
         uint32_t elapsed_us = (uint32_t)(
             (uint64_t)(ts_end.tv_sec  - ts_start.tv_sec)  * 1000000u +
@@ -110,15 +109,15 @@ void mainLoop(void) {
     }
 }
 
-/* ============================================================
-   Legacy & Misc Stubs
-   ============================================================ */
-
+/* =========================
+   Generic Fallbacks
+========================= */
 void core1_loadOTR(uint8_t* data, size_t size) {
-    LOGI("core1_loadOTR: %zu bytes (HLE bridge active)", size);
+    LOGI("core1_loadOTR: legacy path ignored");
 }
 
 int func_80258A4C(void) { return 0; }
 void func_8025A123(void) {}
+void initInterruptTables(void) {}
 
 } // extern "C"
