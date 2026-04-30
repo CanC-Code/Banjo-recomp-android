@@ -336,13 +336,20 @@ def fix_linkage_conflicts(content):
     clean_content = re.sub(r'".*?"', repl, clean_content)
     clean_content = re.sub(r"'.*?'", repl, clean_content)
 
-    static_def_pattern = re.compile(r"^[ \t]*(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
+    # Allow nested parentheses inside function arguments by switching from [^)]* to [^;{]*
+    static_def_pattern = re.compile(
+        r"^[ \t]*(static\s+((?:[A-Za-z_]\w*[ \t\n\*]+)+\b(\w+)\s*\([^;{]*\)))\s*\{", 
+        re.MULTILINE
+    )
     
     for match in static_def_pattern.finditer(clean_content):
         full_match = match.group(1)
         func_name = match.group(3)
 
-        proto_pattern = re.compile(rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b|static\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^)]*\)\s*;", re.MULTILINE)
+        proto_pattern = re.compile(
+            rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b|static\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", 
+            re.MULTILINE
+        )
         has_non_static_proto = bool(proto_pattern.search(clean_content))
 
         if has_non_static_proto:
@@ -358,7 +365,10 @@ def fix_linkage_conflicts(content):
         sig_no_brace = match.group(2).strip()
         func_name = match.group(3)
         
-        proto_pattern = re.compile(rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^)]*\)\s*;", re.MULTILINE)
+        proto_pattern = re.compile(
+            rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", 
+            re.MULTILINE
+        )
         has_prototype = bool(proto_pattern.search(clean_content))
         
         if not has_prototype and func_name not in added_funcs:
@@ -368,7 +378,12 @@ def fix_linkage_conflicts(content):
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        any_func_pattern = re.compile(r"^[ \t]*(?:static\s+)?(?:inline\s+)?(?:[A-Za-z_]\w*[ \t\n\*]+)+\b\w+\s*\([^)]*\)\s*\{", re.MULTILINE)
+        # Robustly anchors the injection index by accounting for __attribute__ decorated functions 
+        # and safely stepping over function pointers and standard array constraints.
+        any_func_pattern = re.compile(
+            r"^[ \t]*(?:__attribute__\s*\(\([^)]*\)\)\s*)?(?:static\s+)?(?:inline\s+)?(?:(?!(?:if|while|for|switch|return)\b)[A-Za-z_]\w*[ \t\n\*]+)+\b(?!(?:if|while|for|switch)\b)\w+\s*\([^;{]*\)\s*\{", 
+            re.MULTILINE
+        )
         first_func_match = any_func_pattern.search(clean_content)
         
         if first_func_match:
