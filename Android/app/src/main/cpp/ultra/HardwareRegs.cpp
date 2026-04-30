@@ -1,38 +1,48 @@
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <android/log.h>
+#include "HardwareRegs.h"
+#include <cstdlib>
+#include <cstring>
 
-#define TAG "BKA-HardwareRegs"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define N64_REG_SPACE_SIZE 0x10000
 
-// -----------------------------------------------------------------------
-// N64 Hardware Register Base (GLOBAL DEFINITION)
-// -----------------------------------------------------------------------
+uint32_t* gN64_Reg_Base = nullptr;
 
-extern "C" {
-    uint32_t* gN64_Reg_Base = nullptr;
+static void* aligned_malloc(size_t alignment, size_t size) {
+    void* ptr = nullptr;
+
+    // alignment must be multiple of sizeof(void*)
+    if (alignment < sizeof(void*)) {
+        alignment = sizeof(void*);
+    }
+
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        return nullptr;
+    }
+
+    return ptr;
 }
 
-// Size: enough to cover full register space safely
-// (you can tighten later if needed)
-#define N64_REG_SPACE_SIZE (0x10000 / sizeof(uint32_t))
+static void aligned_free(void* ptr) {
+    free(ptr);
+}
 
-extern "C" void InitN64Registers() {
+void HardwareRegs_Init() {
     if (gN64_Reg_Base != nullptr) {
-        LOGI("gN64_Reg_Base already initialized");
         return;
     }
 
-    gN64_Reg_Base = (uint32_t*)aligned_alloc(16, N64_REG_SPACE_SIZE * sizeof(uint32_t));
+    gN64_Reg_Base = (uint32_t*)aligned_malloc(16, N64_REG_SPACE_SIZE * sizeof(uint32_t));
 
     if (!gN64_Reg_Base) {
-        LOGE("Failed to allocate gN64_Reg_Base!");
-        return;
+        // Hard fail — this should never happen
+        abort();
     }
 
     memset(gN64_Reg_Base, 0, N64_REG_SPACE_SIZE * sizeof(uint32_t));
+}
 
-    LOGI("gN64_Reg_Base allocated at %p", gN64_Reg_Base);
+void HardwareRegs_Shutdown() {
+    if (gN64_Reg_Base) {
+        aligned_free(gN64_Reg_Base);
+        gN64_Reg_Base = nullptr;
+    }
 }
