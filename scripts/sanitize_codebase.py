@@ -182,24 +182,23 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
 def apply_android_memory_routing(content, filename):
     """
     Hooks into the N64 memory virtualization macros and regex-replaces global hardcoded 
-    addresses to ensure the Android OS ASLR mappings cover the complete hardware space.
-    Integrates lazy initialization to guarantee pointers are fully mapped prior to GameThread use.
+    addresses using uintptr_t to prevent 64-bit pointer truncation on Android ARM64 architectures.
     """
     if "BKA_GET_REG_BASE" not in content and filename.endswith(('.c', '.h')):
-        header = """#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n\n"""
+        header = """#include <stdint.h>\n#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n\n"""
         content = header + content
 
     def route_hardcoded_pointers(match):
         hex_str = match.group(0)
         val = int(hex_str, 16)
-        # Route PIF RAM Virtual Addresses (0xBFC00000 to 0xBFC00FFF)
+        # Route PIF RAM Virtual Addresses (0xBFC00000 to 0xBFC00FFF) using uintptr_t
         if 0xBFC00000 <= val < 0xBFC01000:
             offset = val - 0xBFC00000
-            return f"((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + 0x{offset:X}))"
-        # Route RCP Virtual Addresses (0xA4000000 to 0xA4FFFFFF)
+            return f"((uintptr_t)((unsigned char*)BKA_GET_PIF_BASE() + 0x{offset:X}))"
+        # Route RCP Virtual Addresses (0xA4000000 to 0xA4FFFFFF) using uintptr_t
         if 0xA4000000 <= val < 0xA5000000:
             offset = val - 0xA4000000
-            return f"((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + 0x{offset:X}))"
+            return f"((uintptr_t)((unsigned char*)BKA_GET_REG_BASE() + 0x{offset:X}))"
         return hex_str
 
     # Find and route all raw hardcoded Hex memory addresses
@@ -208,44 +207,44 @@ def apply_android_memory_routing(content, filename):
     if filename == "os_convert.h":
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000))))',
+            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned char*)((uintptr_t)(x)|0xA0000000)))))',
             content
         )
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000))))',
+            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned char*)((uintptr_t)(x)|0x80000000)))))',
             content
         )
         content = re.sub(
             r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define OS_K1_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0xa0000000)))',
+            r'#define OS_K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0xa0000000)))',
             content
         )
         content = re.sub(
             r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define OS_K0_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0x80000000)))',
+            r'#define OS_K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0x80000000)))',
             content
         )
 
     if filename == "R4300.h":
         content = re.sub(
             r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000)))',
+            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (uintptr_t)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (uintptr_t)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((uintptr_t)(x)|0xA0000000)))',
             content
         )
         content = re.sub(
             r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000)))',
+            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (uintptr_t)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (uintptr_t)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((uintptr_t)(x)|0x80000000)))',
             content
         )
         content = re.sub(
             r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K1_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0xa0000000)))',
+            r'#define K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0xa0000000)))',
             content
         )
         content = re.sub(
             r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K0_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0x80000000)))',
+            r'#define K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0x80000000)))',
             content
         )
 
@@ -327,7 +326,6 @@ def fix_linkage_conflicts(content):
 
         if first_func_match:
             pos = first_func_match.start()
-
             clean_pre_text = clean_content[:pos]
 
             last_semi = clean_pre_text.rfind(';')
