@@ -6,8 +6,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <unistd.h>
+#include <time.h>
+#include <stdatomic.h>   // atomic_bool, atomic_store, atomic_load
 
 #include "n64_types.h"
 
@@ -21,55 +22,150 @@
 // -----------------------------------------------------------------------
 extern "C" {
     extern AndroidBridgeGlobals* gBridgeGlobals;
-
-    // From exceptasm.cpp
     extern void initInterruptTables();
-
-    // From resource_mgr.cpp
     extern void ResourceMgr_Init(const char* assetDir,
                                  uint8_t*    manifestBuf,
                                  uint32_t    manifestSize);
-
-    // From otr_builder.cpp
     extern void run_native_otr_generation_with_callback(
         JNIEnv* env, jobject callbackObj, jmethodID progressMid,
         int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
         const char* outDirPath);
-
-    // From stubs.cpp — the real game loop driver
     extern void mainLoop();
 }
 
 // -----------------------------------------------------------------------
 // Module-level state
 // -----------------------------------------------------------------------
-static jobject    g_service_ref   = nullptr;
-static jmethodID  g_progress_mid  = nullptr;
+static jobject   g_service_ref  = nullptr;
+static jmethodID g_progress_mid = nullptr;
 
-// GL texture that we write the N64 framebuffer into each frame
-static GLuint     g_fb_texture    = 0;
+static GLuint        g_fb_texture   = 0;
+static GLuint        g_quad_prog    = 0;
 
-// Flag so the game loop thread knows the GL surface is ready
-static volatile bool g_surface_ready = false;
+// Atomic flags — written from game thread, read from GL thread (and vice versa).
+// Using C11 stdatomic so both C and C++ translation units can share them.
+static atomic_bool g_surface_ready  = ATOMIC_VAR_INIT(0);
+static atomic_bool g_globals_ready  = ATOMIC_VAR_INIT(0);
 
 // -----------------------------------------------------------------------
-// nativeInit – called from Java before runOtrGeneration
+// Internal helpers
 // -----------------------------------------------------------------------
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass /*clazz*/, jobject serviceObj) {
-    if (g_service_ref != nullptr) env->DeleteGlobalRef(g_service_ref);
-    g_service_ref = env->NewGlobalRef(serviceObj);
 
-    jclass serviceClass = env->GetObjectClass(g_service_ref);
-    g_progress_mid = env->GetMethodID(serviceClass,
-                                      "updateOtrProgress",
-                                      "(ILjava/lang/String;)V");
-    LOGI("nativeInit: JNI bridge ready");
+/** Allocates gBridgeGlobals and its screenBuffer exactly once. */
+static void ensureBridgeGlobals() {
+    if (gBridgeGlobals == nullptr) {
+        void* ptr = nullptr;
+        if (posix_memalign(&ptr, 16, sizeof(AndroidBridgeGlobals)) != 0) {
+            LOGE("ensureBridgeGlobals: posix_memalign failed");
+            return;
+        }
+        memset(ptr, 0, sizeof(AndroidBridgeGlobals));
+        gBridgeGlobals = (AndroidBridgeGlobals*)ptr;
+    }
+
+    if (gBridgeGlobals->screenBuffer == nullptr) {
+        gBridgeGlobals->screenBuffer =
+            (uint32_t*)malloc(320u * 240u * sizeof(uint32_t));
+        if (!gBridgeGlobals->screenBuffer) {
+            LOGE("ensureBridgeGlobals: screenBuffer malloc failed");
+            return;
+        }
+        // Fill with a visible colour on first frame so we can confirm
+        // rendering is working even before the game writes anything.
+        // 0xFF0000FF = opaque red in RGBA8 — easy to spot vs black.
+        uint32_t* buf = gBridgeGlobals->screenBuffer;
+        for (int i = 0; i < 320 * 240; i++) buf[i] = 0xFF0000FFu;
+    }
+
+    atomic_store(&g_globals_ready, 1);
+    LOGI("ensureBridgeGlobals: ready (screenBuffer=%p)", gBridgeGlobals->screenBuffer);
+}
+
+/** Compile one GLSL shader stage. Returns 0 on failure. */
+static GLuint compileShader(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    GLint ok = 0;
+    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char buf[512];
+        glGetShaderInfoLog(s, sizeof(buf), nullptr, buf);
+        LOGE("Shader compile error: %s", buf);
+        glDeleteShader(s);
+        return 0;
+    }
+    return s;
+}
+
+/** Build the fullscreen-quad shader program exactly once on the GL thread. */
+static GLuint buildQuadProgram() {
+    const char* vsrc =
+        "#version 300 es\n"
+        "in vec2 aPos;\n"
+        "in vec2 aUV;\n"
+        "out vec2 vUV;\n"
+        "void main() { gl_Position = vec4(aPos, 0.0, 1.0); vUV = aUV; }\n";
+
+    const char* fsrc =
+        "#version 300 es\n"
+        "precision mediump float;\n"
+        "in vec2 vUV;\n"
+        "uniform sampler2D uTex;\n"
+        "out vec4 fragColor;\n"
+        "void main() { fragColor = texture(uTex, vUV); }\n";
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   vsrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsrc);
+    if (!vs || !fs) { glDeleteShader(vs); glDeleteShader(fs); return 0; }
+
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glBindAttribLocation(prog, 0, "aPos");
+    glBindAttribLocation(prog, 1, "aUV");
+    glLinkProgram(prog);
+
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char buf[512];
+        glGetProgramInfoLog(prog, sizeof(buf), nullptr, buf);
+        LOGE("Program link error: %s", buf);
+        glDeleteProgram(prog);
+        prog = 0;
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return prog;
 }
 
 // -----------------------------------------------------------------------
-// runOtrGeneration – extracts ROM assets into getFilesDir()
+// nativeInit
+// Called from Java BEFORE runOtrGeneration.
+// We allocate gBridgeGlobals here so it is guaranteed to exist before the
+// GL thread calls surfaceReady.
+// -----------------------------------------------------------------------
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass /*clazz*/,
+                                             jobject serviceObj) {
+    if (g_service_ref != nullptr) env->DeleteGlobalRef(g_service_ref);
+    g_service_ref = env->NewGlobalRef(serviceObj);
+
+    jclass cls = env->GetObjectClass(g_service_ref);
+    g_progress_mid = env->GetMethodID(cls, "updateOtrProgress",
+                                      "(ILjava/lang/String;)V");
+
+    // Allocate bridge globals early so the GL thread never races against
+    // nativeGameBoot for the gBridgeGlobals pointer.
+    ensureBridgeGlobals();
+
+    LOGI("nativeInit: JNI bridge ready, globals allocated");
+}
+
+// -----------------------------------------------------------------------
+// runOtrGeneration
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
@@ -79,35 +175,31 @@ Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv*  env,
                                                    jobject  assetManager,
                                                    jstring  outDir) {
     const char* nativeOutDir = env->GetStringUTFChars(outDir, nullptr);
-    AAssetManager* nativeMgr = AAssetManager_fromJava(env, assetManager);
+    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
-    AAsset* asset = AAssetManager_open(nativeMgr, "manifest_us.bin",
+    AAsset* asset = AAssetManager_open(mgr, "manifest_us.bin",
                                        AASSET_MODE_BUFFER);
     if (asset == nullptr) {
-        LOGE("runOtrGeneration: manifest_us.bin not found in APK assets!");
+        LOGE("runOtrGeneration: manifest_us.bin not found in APK assets");
         env->ReleaseStringUTFChars(outDir, nativeOutDir);
         return;
     }
 
-    uint8_t* manifestBuf  = (uint8_t*)AAsset_getBuffer(asset);
-    uint32_t manifestSize = (uint32_t)AAsset_getLength(asset);
+    uint8_t* buf  = (uint8_t*)AAsset_getBuffer(asset);
+    uint32_t size = (uint32_t)AAsset_getLength(asset);
 
-    run_native_otr_generation_with_callback(env, g_service_ref, g_progress_mid,
-                                            (int)romFd, manifestBuf, manifestSize,
-                                            nativeOutDir);
+    run_native_otr_generation_with_callback(
+        env, g_service_ref, g_progress_mid,
+        (int)romFd, buf, size, nativeOutDir);
+
     AAsset_close(asset);
     env->ReleaseStringUTFChars(outDir, nativeOutDir);
 }
 
 // -----------------------------------------------------------------------
 // nativeGameBoot
-//
-// Called from the Java background thread after extraction is confirmed.
-// Steps:
-//   1. Allocate AndroidBridgeGlobals (screenBuffer = 320×240 RGBA8)
-//   2. Init interrupt tables
-//   3. Load the manifest and init ResourceMgr with the asset directory
-//   4. Start the game loop (blocking — runs for the lifetime of the session)
+// Called on a dedicated background thread from MainActivity.bootGameEngine().
+// Initialises the engine then enters mainLoop (does not return).
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
@@ -115,101 +207,101 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env,
                                                  jclass  /*clazz*/,
                                                  jstring otrPathJ,
                                                  jobject assetManager) {
-    // --- 1. Allocate bridge globals and framebuffer ---
-    if (gBridgeGlobals == nullptr) {
-        void* ptr = nullptr;
-        if (posix_memalign(&ptr, 16, sizeof(AndroidBridgeGlobals)) != 0) {
-            LOGE("nativeGameBoot: failed to allocate AndroidBridgeGlobals");
-            return;
-        }
-        memset(ptr, 0, sizeof(AndroidBridgeGlobals));
-        gBridgeGlobals = (AndroidBridgeGlobals*)ptr;
-    }
+    // Ensure globals exist (nativeInit should have done this already,
+    // but guard in case bootGameEngine is called on a fresh-install path
+    // where nativeInit was not called).
+    ensureBridgeGlobals();
 
-    // N64 framebuffer: 320×240, 4 bytes per pixel (RGBA8)
-    if (gBridgeGlobals->screenBuffer == nullptr) {
-        gBridgeGlobals->screenBuffer =
-            (uint32_t*)malloc(320 * 240 * sizeof(uint32_t));
-        if (!gBridgeGlobals->screenBuffer) {
-            LOGE("nativeGameBoot: failed to allocate screenBuffer");
-            return;
-        }
-        memset(gBridgeGlobals->screenBuffer, 0,
-               320 * 240 * sizeof(uint32_t));
-    }
-
-    // --- 2. Init interrupt / exception tables ---
     initInterruptTables();
     LOGI("nativeGameBoot: interrupt tables initialised");
 
-    // --- 3. Init ResourceMgr with the asset directory and manifest ---
     const char* assetDir = env->GetStringUTFChars(otrPathJ, nullptr);
+    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
-    AAssetManager* nativeMgr = AAssetManager_fromJava(env, assetManager);
-    AAsset* manifestAsset = AAssetManager_open(nativeMgr, "manifest_us.bin",
+    AAsset* manifestAsset = AAssetManager_open(mgr, "manifest_us.bin",
                                                AASSET_MODE_BUFFER);
     if (manifestAsset != nullptr) {
-        uint8_t* manifestBuf  = (uint8_t*)AAsset_getBuffer(manifestAsset);
-        uint32_t manifestSize = (uint32_t)AAsset_getLength(manifestAsset);
-
-        ResourceMgr_Init(assetDir, manifestBuf, manifestSize);
+        uint8_t* buf  = (uint8_t*)AAsset_getBuffer(manifestAsset);
+        uint32_t size = (uint32_t)AAsset_getLength(manifestAsset);
+        ResourceMgr_Init(assetDir, buf, size);
         AAsset_close(manifestAsset);
-        LOGI("nativeGameBoot: ResourceMgr initialised with dir='%s'", assetDir);
+        LOGI("nativeGameBoot: ResourceMgr initialised, dir='%s'", assetDir);
     } else {
-        LOGE("nativeGameBoot: manifest_us.bin missing — DMA will zero-fill!");
-        // Still call Init so the dir is set; DMA will warn-and-zero-fill
+        LOGE("nativeGameBoot: manifest_us.bin missing — DMA will zero-fill");
         ResourceMgr_Init(assetDir, nullptr, 0);
     }
 
     env->ReleaseStringUTFChars(otrPathJ, assetDir);
 
-    // --- 4. Enter the game loop (this call does not return) ---
     LOGI("nativeGameBoot: entering mainLoop");
     mainLoop();
-
-    LOGW("nativeGameBoot: mainLoop returned unexpectedly");
+    LOGW("nativeGameBoot: mainLoop returned");
 }
 
 // -----------------------------------------------------------------------
-// surfaceReady – called from GLRenderer.onSurfaceCreated
-// Signals that the GL context exists and we can upload textures.
+// surfaceReady
+// Called from GLRenderer.onSurfaceCreated on the GL thread.
+// Allocates the framebuffer texture and builds the quad shader.
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* /*env*/, jclass /*clazz*/,
                                                jint width, jint height) {
-    // Allocate the fullscreen framebuffer texture once
-    if (g_fb_texture == 0) {
-        glGenTextures(1, &g_fb_texture);
-        glBindTexture(GL_TEXTURE_2D, g_fb_texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        // Allocate storage: 320×240 RGBA8
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 320, 240, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        LOGI("surfaceReady: framebuffer texture allocated (id=%u)", g_fb_texture);
+    LOGI("surfaceReady: %d x %d", width, height);
+
+    // Build quad shader program
+    if (g_quad_prog == 0) {
+        g_quad_prog = buildQuadProgram();
+        if (g_quad_prog == 0) {
+            LOGE("surfaceReady: shader compilation failed");
+            return;
+        }
+        LOGI("surfaceReady: quad shader ready (prog=%u)", g_quad_prog);
     }
-    g_surface_ready = true;
-    (void)width; (void)height;
+
+    // Allocate / re-allocate the framebuffer texture
+    if (g_fb_texture != 0) {
+        glDeleteTextures(1, &g_fb_texture);
+        g_fb_texture = 0;
+    }
+    glGenTextures(1, &g_fb_texture);
+    glBindTexture(GL_TEXTURE_2D, g_fb_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // If globals are ready, upload the initial red frame immediately so we
+    // get a visible colour on the very first draw call.
+    void* initialData = nullptr;
+    if (atomic_load(&g_globals_ready) && gBridgeGlobals != nullptr) {
+        initialData = gBridgeGlobals->screenBuffer;
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 320, 240, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, initialData);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    LOGI("surfaceReady: texture allocated (id=%u)", g_fb_texture);
+    atomic_store(&g_surface_ready, 1);
 }
 
 // -----------------------------------------------------------------------
-// updateTexture – called every frame from GLRenderer.onDrawFrame
-//
-// Uploads the N64 RGBA8 framebuffer to the GL texture, then draws a
-// fullscreen quad so the texture fills the entire display.
+// updateTexture
+// Called every frame from GLRenderer.onDrawFrame on the GL thread.
+// Uploads screenBuffer and draws it as a fullscreen quad.
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* /*env*/, jclass /*clazz*/,
                                                 jint /*unused*/) {
-    if (!g_surface_ready || g_fb_texture == 0) return;
-    if (gBridgeGlobals == nullptr || gBridgeGlobals->screenBuffer == nullptr) return;
+    if (!atomic_load(&g_surface_ready))  return;
+    if (!atomic_load(&g_globals_ready))  return;
+    if (g_fb_texture == 0)               return;
+    if (g_quad_prog  == 0)               return;
+    if (gBridgeGlobals == nullptr)       return;
+    if (gBridgeGlobals->screenBuffer == nullptr) return;
 
-    // --- Upload framebuffer ---
+    // Upload current N64 framebuffer
     glBindTexture(GL_TEXTURE_2D, g_fb_texture);
     glTexSubImage2D(GL_TEXTURE_2D, 0,
                     0, 0, 320, 240,
@@ -217,59 +309,27 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* /*env*/, jclass /*clazz*/
                     gBridgeGlobals->screenBuffer);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    // --- Draw fullscreen quad using fixed-function GLES2 path ---
-    // Vertex positions (NDC) and UV coordinates for a fullscreen quad
-    static const float kQuadVerts[] = {
-    //  X      Y     U     V
-       -1.0f, -1.0f, 0.0f, 1.0f,   // bottom-left  (UV flipped Y for GL)
-        1.0f, -1.0f, 1.0f, 1.0f,   // bottom-right
-       -1.0f,  1.0f, 0.0f, 0.0f,   // top-left
-        1.0f,  1.0f, 1.0f, 0.0f,   // top-right
+    // Draw fullscreen quad
+    // Positions (NDC) + UVs — UV Y is flipped for GL convention
+    static const float kVerts[] = {
+    //   X      Y     U     V
+       -1.0f, -1.0f, 0.0f, 1.0f,
+        1.0f, -1.0f, 1.0f, 1.0f,
+       -1.0f,  1.0f, 0.0f, 0.0f,
+        1.0f,  1.0f, 1.0f, 0.0f,
     };
 
-    // Minimal inline GLSL shader — compiled once, cached in static locals
-    static GLuint s_prog = 0;
-    if (s_prog == 0) {
-        const char* vsrc =
-            "attribute vec2 aPos;\n"
-            "attribute vec2 aUV;\n"
-            "varying vec2 vUV;\n"
-            "void main() { gl_Position = vec4(aPos,0,1); vUV = aUV; }\n";
-        const char* fsrc =
-            "precision mediump float;\n"
-            "varying vec2 vUV;\n"
-            "uniform sampler2D uTex;\n"
-            "void main() { gl_FragColor = texture2D(uTex,vUV); }\n";
-
-        auto compile = [](GLenum type, const char* src) -> GLuint {
-            GLuint s = glCreateShader(type);
-            glShaderSource(s, 1, &src, nullptr);
-            glCompileShader(s);
-            return s;
-        };
-
-        GLuint vs = compile(GL_VERTEX_SHADER,   vsrc);
-        GLuint fs = compile(GL_FRAGMENT_SHADER, fsrc);
-        s_prog = glCreateProgram();
-        glAttachShader(s_prog, vs);
-        glAttachShader(s_prog, fs);
-        glBindAttribLocation(s_prog, 0, "aPos");
-        glBindAttribLocation(s_prog, 1, "aUV");
-        glLinkProgram(s_prog);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-        LOGI("updateTexture: fullscreen quad shader compiled (prog=%u)", s_prog);
-    }
-
     glClear(GL_COLOR_BUFFER_BIT);
-    glUseProgram(s_prog);
+    glUseProgram(g_quad_prog);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_fb_texture);
-    glUniform1i(glGetUniformLocation(s_prog, "uTex"), 0);
+    glUniform1i(glGetUniformLocation(g_quad_prog, "uTex"), 0);
 
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), kQuadVerts);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), kQuadVerts + 2);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
+                          4 * sizeof(float), kVerts);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+                          4 * sizeof(float), kVerts + 2);
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
 
@@ -290,6 +350,5 @@ Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* /*env*/, jclass /*cla
                                                     jint    buttonMask,
                                                     jfloat  stickX,
                                                     jfloat  stickY) {
-    // TODO: feed into the N64 controller emulation layer
     (void)buttonMask; (void)stickX; (void)stickY;
 }
