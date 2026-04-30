@@ -230,19 +230,19 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
-    
+
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\((?:[^)(]+|\([^)(]*\))*\))',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
-    
+
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)(?!\s*\()',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
-    
+
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*\(\s*([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)\s*\+\s*(0x[0-9a-fA-F]+|\d+)\s*\)',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2 + \3)',
@@ -336,16 +336,20 @@ def fix_linkage_conflicts(content):
     clean_content = re.sub(r'".*?"', repl, clean_content)
     clean_content = re.sub(r"'.*?'", repl, clean_content)
 
-    # Allow nested parentheses inside function arguments by switching from [^)]* to [^;{]*
+    # 1. Identify all static definitions
     static_def_pattern = re.compile(
-        r"^[ \t]*(static\s+((?:[A-Za-z_]\w*[ \t\n\*]+)+\b(\w+)\s*\([^;{]*\)))\s*\{", 
+        r"^[ \t]*static\s+((?:[A-Za-z_]\w*[ \t\n\*]+)+\b(\w+)\s*\([^;{]*\))\s*\{", 
         re.MULTILINE
     )
-    
-    for match in static_def_pattern.finditer(clean_content):
-        full_match = match.group(1)
-        func_name = match.group(3)
 
+    signatures = []
+    added_funcs = set()
+
+    for match in static_def_pattern.finditer(clean_content):
+        sig_no_brace = match.group(1).strip()
+        func_name = match.group(2)
+
+        # 2. Check for non-static prototypes that might conflict
         proto_pattern = re.compile(
             rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b|static\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", 
             re.MULTILINE
@@ -353,49 +357,28 @@ def fix_linkage_conflicts(content):
         has_non_static_proto = bool(proto_pattern.search(clean_content))
 
         if has_non_static_proto:
-            original_match = content[match.start(1):match.end(1)]
-            new_def = re.sub(r"^static\s+", "", original_match, count=1)
+            # Resolve the conflict by making the function global (matching the prototype)
+            original_match = content[match.start(0):match.end(1)]
+            new_def = re.sub(r"^[ \t]*static\s+", "", original_match, count=1)
             content = content.replace(original_match, new_def)
-            clean_content = clean_content[:match.start(1)] + new_def + clean_content[match.end(1):]
-
-    signatures = []
-    added_funcs = set()
-    
-    for match in static_def_pattern.finditer(clean_content):
-        sig_no_brace = match.group(2).strip()
-        func_name = match.group(3)
-        
-        proto_pattern = re.compile(
-            rf"^[ \t]*(?!return\b|if\b|while\b|for\b|switch\b)(?:[A-Za-z_]\w*[ \t\n\*]+)+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", 
-            re.MULTILINE
-        )
-        has_prototype = bool(proto_pattern.search(clean_content))
-        
-        if not has_prototype and func_name not in added_funcs:
-            signatures.append(f"static {sig_no_brace};")
-            added_funcs.add(func_name)
-
-    if signatures:
-        header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
-        
-        # Robustly anchors the injection index by accounting for __attribute__ decorated functions 
-        # and safely stepping over function pointers and standard array constraints.
-        any_func_pattern = re.compile(
-            r"^[ \t]*(?:__attribute__\s*\(\([^)]*\)\)\s*)?(?:static\s+)?(?:inline\s+)?(?:(?!(?:if|while|for|switch|return)\b)[A-Za-z_]\w*[ \t\n\*]+)+\b(?!(?:if|while|for|switch)\b)\w+\s*\([^;{]*\)\s*\{", 
-            re.MULTILINE
-        )
-        first_func_match = any_func_pattern.search(clean_content)
-        
-        if first_func_match:
-            insert_idx = first_func_match.start()
-            content = content[:insert_idx] + header_block + content[insert_idx:]
         else:
-            last_include_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_content, re.MULTILINE))
-            if last_include_match:
-                insert_idx = last_include_match[-1].end()
-                content = content[:insert_idx] + "\n" + header_block + content[insert_idx:]
-            else:
-                content = header_block + content
+            # No conflict, but add a static forward declaration to prevent "implicit declaration" errors
+            if func_name not in added_funcs:
+                signatures.append(f"static {sig_no_brace};")
+                added_funcs.add(func_name)
+
+    # 3. Inject the Automated Forward Declarations
+    if signatures:
+        header_block = "\n/* Automated Forward Decls (Fix for static-follows-non-static) */\n" + "\n".join(signatures) + "\n\n"
+
+        # Find the best injection point: after the last include
+        last_include_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', content, re.MULTILINE))
+        if last_include_match:
+            insert_idx = last_include_match[-1].end()
+            content = content[:insert_idx] + "\n" + header_block + content[insert_idx:]
+        else:
+            # No includes? Put it at the very top.
+            content = header_block + content
 
     return content
 
