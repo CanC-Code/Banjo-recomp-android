@@ -180,10 +180,6 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
     return "".join(parts)
 
 def apply_android_memory_routing(content, filename):
-    """
-    Implements Just-In-Time Pointer Translation with AArch64 sign-extension mitigation
-    and safe dynamic fallbacks for null engine initialization.
-    """
     if "BKA_TRANSLATE_ADDR" not in content and filename.endswith(('.c', '.h')):
         header = """#include <stdint.h>
 #ifndef BKA_SAFE_BASE_INCLUDED
@@ -229,35 +225,30 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
 )\n\n"""
         content = header + content
 
-    # 1. Match specific literal dereferences: (vu32 *)0xHEX
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
     
-    # 2. Match function-like macros or variables with parentheses: (vu32 *)MACRO(ARGS)
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\((?:[^)(]+|\([^)(]*\))*\))',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
     
-    # 3. Match standard variable dereferences with struct and array support: (vu32 *)var->field[i].offset
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)(?!\s*\()',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
     
-    # 4. Match explicit offset dereferences with struct and array support: (vu32 *)(var->field + offset)
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*\(\s*([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)\s*\+\s*(0x[0-9a-fA-F]+|\d+)\s*\)',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2 + \3)',
         content
     )
 
-    # 5. Intercept all global SDK Hardware Access Macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\)\s*\*.*', r'#define HW_REG(reg, type) *(volatile type *)BKA_TRANSLATE_ADDR(reg)', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\)\s*\*.*', r'#define IO_READ(addr) (*(vu32 *)BKA_TRANSLATE_ADDR(addr))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\)\s*\*.*', r'#define IO_WRITE(addr, data) (*(vu32 *)BKA_TRANSLATE_ADDR(addr) = (u32)(data))', content)
@@ -339,10 +330,11 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
-    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
+    # 1. Resolve explicit non-static prototypes for static definitions
+    static_def_pattern = re.compile(r"^(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1)
-        func_name = match.group(2)
+        func_name = match.group(3)
 
         proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
@@ -353,59 +345,50 @@ def fix_linkage_conflicts(content):
                 break
 
         if has_non_static_proto:
-            content = content.replace("static " + full_sig, full_sig)
+            sig_without_static = re.sub(r"^static\s+", "", full_sig, count=1)
+            content = content.replace(full_sig, sig_without_static)
 
-    static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
-    matches = static_func_pattern.findall(content)
-    if not matches: return content
-
+    # 2. Inject missing prototypes for static functions used before definition
     signatures = []
     added_funcs = set()
-
-    for full_sig, func_name in matches:
-        has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
+    
+    static_func_pattern = re.compile(r"^(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
+    for match in static_func_pattern.finditer(content):
+        sig_without_brace = match.group(2).strip()
+        func_name = match.group(3)
+        
+        has_prototype = bool(re.search(rf"^[ \t]*(static\s+)?[\w\s\*]*\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content, re.MULTILINE))
+        
         if not has_prototype and func_name not in added_funcs:
-            decl = f"{full_sig.strip()};"
-            signatures.append(decl)
-            added_funcs.add(func_name)
+            ref_matches = list(re.finditer(rf"\b{re.escape(func_name)}\b", content))
+            if ref_matches and ref_matches[0].start() < match.start():
+                signatures.append(f"static {sig_without_brace};")
+                added_funcs.add(func_name)
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
-
+        
         def repl(m): return ' ' * len(m.group(0))
         clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
         clean_content = re.sub(r'//.*', repl, clean_content)
         clean_content = re.sub(r'".*?"', repl, clean_content)
         clean_content = re.sub(r"'.*?'", repl, clean_content)
-
-        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
-
-        first_func_match = func_def_pattern.search(clean_content)
-
+        
+        any_func_pattern = re.compile(r"^[ \t]*(?:static\s+)?(?:inline\s+)?(?:[\w\s\*]+?)\b\w+\s*\([^)]*\)\s*\{", re.MULTILINE)
+        first_func_match = any_func_pattern.search(clean_content)
+        
         if first_func_match:
-            pos = first_func_match.start()
-            clean_pre_text = clean_content[:pos]
-
-            last_semi = clean_pre_text.rfind(';')
-            last_semi_pos = last_semi + 1 if last_semi != -1 else 0
-
-            last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_pre_text, re.MULTILINE))
-            last_inc_pos = last_inc_match[-1].end() if last_inc_match else 0
-
-            last_macro_match = list(re.finditer(r'^[ \t]*#[ \t]*define[^\n]*', clean_pre_text, re.MULTILINE))
-            last_macro_pos = last_macro_match[-1].end() if last_macro_match else 0
-
-            insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
-
-            if insert_idx > 0:
-                while insert_idx < pos and content[insert_idx] in ' \t\r\n':
-                    insert_idx += 1
-            else:
-                insert_idx = 0
-
+            insert_idx = first_func_match.start()
+            while insert_idx > 0 and content[insert_idx - 1] not in '\n\r':
+                insert_idx -= 1
             content = content[:insert_idx] + header_block + content[insert_idx:]
         else:
-            content = content + "\n" + header_block
+            last_include_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_content, re.MULTILINE))
+            if last_include_match:
+                insert_idx = last_include_match[-1].end()
+                content = content[:insert_idx] + header_block + content[insert_idx:]
+            else:
+                content = header_block + content
 
     return content
 
