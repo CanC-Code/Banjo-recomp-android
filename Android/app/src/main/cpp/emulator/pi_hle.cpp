@@ -15,18 +15,26 @@ s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
     return 0;
 }
 
+/**
+ * High level PI DMA
+ * Corrected to use direct members for the message queue.
+ */
 s32 osPiStartDma(OSIoMesg *mb, s32 priority, s32 direction, 
                  u32 devAddr, void *dramAddr, u32 size, OSMesgQueue *mq) {
     
     osPiRawStartDma(direction, devAddr, dramAddr, size);
 
-    // CRITICAL: Notify the game that DMA is finished
+    // Notify the game that DMA is finished
     if (mq != nullptr) {
         osSendMesg(mq, (OSMesg)mb, 0); // 0 = OS_MESG_NOBLOCK
     }
     return 0;
 }
 
+/**
+ * Extended PI Start DMA
+ * Corrected to remove .hdr nesting.
+ */
 s32 osEPiStartDma(OSPiHandle *handle, OSIoMesg *mb, s32 direction) {
     if (mb != nullptr && direction == 0) {
         u32 devAddr    = mb->devAddr;
@@ -35,9 +43,9 @@ s32 osEPiStartDma(OSPiHandle *handle, OSIoMesg *mb, s32 direction) {
 
         ResourceMgr_HandleDma(dramAddr, devAddr, size);
 
-        // CRITICAL: Rare games check the return queue inside the OSIoMesg header
-        if (mb->hdr.retQueue != nullptr) {
-            osSendMesg(mb->hdr.retQueue, mb->hdr.retMsg, 0);
+        // Notify the game that DMA is finished so the thread wakes up
+        if (mb->retQueue != nullptr) {
+            osSendMesg(mb->retQueue, mb->retMsg, 0);
         }
     }
     return 0; 
