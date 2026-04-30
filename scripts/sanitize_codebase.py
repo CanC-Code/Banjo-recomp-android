@@ -114,25 +114,20 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     (unsigned long)(addr) \\
 )\n\n"""
     content = header + content
-    # Only translate if line is indented (likely inside a function, avoiding global initializers)
     ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
     content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
     content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\([^)(]*\))', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
-    
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\)\s*\*.*', r'#define HW_REG(reg, type) *(volatile type *)BKA_TRANSLATE_ADDR(reg)', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\)\s*\*.*', r'#define IO_READ(addr) (*(vu32 *)BKA_TRANSLATE_ADDR(addr))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\)\s*\*.*', r'#define IO_WRITE(addr, data) (*(vu32 *)BKA_TRANSLATE_ADDR(addr) = (u32)(data))', content)
     return content
 
 def fix_linkage_conflicts(content):
-    # Restore logic from "old working file" for basic static resolution
     static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig, func_name = match.group(1), match.group(2)
         if re.search(r"^[ \t]*(?!static\b|typedef\b)[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE):
             content = content.replace("static " + full_sig, full_sig)
-
-    # Keep forward declaration logic for missing prototypes (essential for code_F0.c)
     sigs, added = [], set()
     clean = re.sub(r'("(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*)', ' ', content, flags=re.DOTALL)
     existing = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
@@ -174,6 +169,9 @@ def sanitize_codebase(root_path):
                     if filename not in CORE_TYPE_HEADERS:
                         content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
                         content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+                        # --- CRITICAL FIX: Redirect renamed conflicting headers ---
+                        for ch in headers_to_redirect:
+                            content = re.sub(rf'#include\s*[<"]{ch.replace(".", r"\.")}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
                     
                     if not is_wrapper:
                         tokens = [(re.compile(r"\bbool\b"), "n64_bool"), (re.compile(r"\btrue\b"), "TRUE"), (re.compile(r"\bfalse\b"), "FALSE")] if filename in CORE_TYPE_HEADERS else COMPILED_TOKENS
@@ -181,12 +179,9 @@ def sanitize_codebase(root_path):
                         for i in range(0, len(parts), 2):
                             for pat, repl in tokens: parts[i] = pat.sub(repl, parts[i])
                         content = "".join(parts)
-
-                        # Fix decompiler artifacts (leafboat.c fix included)
                         content = re.sub(r'^([ \t]+)([a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;{"]+)\s*;', 
                                          lambda m: f"{m.group(1)}{m.group(2)} {m.group(3)}[{m.group(4)}];\n{m.group(1)}n64_memcpy({m.group(3)}, {m.group(5).strip()}, {m.group(4)} * sizeof({m.group(2)}));", 
                                          content, flags=re.MULTILINE)
-
                         content = apply_android_memory_routing(content, filename)
                         if filename.endswith('.c'):
                             content = fix_linkage_conflicts(content)
