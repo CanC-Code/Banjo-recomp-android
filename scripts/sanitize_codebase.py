@@ -65,8 +65,6 @@ def needs_types_injection(content):
 
 def inject_types_include(content, is_c_file=False):
     if is_c_file:
-        # Strip existing n64_types.h so it can be moved to the end of the include block.
-        # This ensures the file is "modified" if it was previously at the top.
         content = re.sub(r'^[ \t]*#[ \t]*include[ \t]*[<"]n64_types\.h[">][ \t]*\n?', '', content, flags=re.MULTILINE)
 
     lines = content.split('\n')
@@ -183,56 +181,70 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
 
 def apply_android_memory_routing(content, filename):
     """
-    Hooks into the N64 memory virtualization macros. If an access occurs within the 16MB RCP 
-    space (0x04000000 - 0x04FFFFFF), it shifts the pointer to our dynamically allocated gN64_Reg_Base.
+    Hooks into the N64 memory virtualization macros and regex-replaces global hardcoded 
+    addresses to ensure the Android OS ASLR mappings cover the complete hardware space.
     """
-    if filename not in ["os_convert.h", "R4300.h"]:
-        return content
+    if "gN64_Reg_Base" not in content and filename.endswith(('.c', '.h')):
+        header = """#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\n#ifdef __cplusplus\n}\n#endif\n\n"""
+        content = header + content
 
-    if "gN64_Reg_Base" not in content:
-        content = "#ifdef __cplusplus\nextern \"C\" {\n#endif\nextern unsigned int* gN64_Reg_Base;\n#ifdef __cplusplus\n}\n#endif\n\n" + content
+    def route_hardcoded_pointers(match):
+        hex_str = match.group(0)
+        val = int(hex_str, 16)
+        # Route PIF RAM Virtual Addresses (0xBFC00000 to 0xBFC00FFF)
+        if 0xBFC00000 <= val < 0xBFC01000:
+            offset = val - 0xBFC00000
+            return f"((unsigned int)((unsigned char*)gN64_PIF_Base + 0x{offset:X}))"
+        # Route RCP Virtual Addresses (0xA4000000 to 0xA4FFFFFF)
+        if 0xA4000000 <= val < 0xA5000000:
+            offset = val - 0xA4000000
+            return f"((unsigned int)((unsigned char*)gN64_Reg_Base + 0x{offset:X}))"
+        return hex_str
+
+    # Find and route all raw hardcoded Hex memory addresses
+    content = re.sub(r'0x[A-Fa-f0-9]{8}\b', route_hardcoded_pointers, content)
 
     if filename == "os_convert.h":
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0xA0000000)))',
+            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000))))',
             content
         )
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0x80000000)))',
+            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000))))',
             content
         )
         content = re.sub(
-            r'#define\s+OS_K1_TO_PHYSICAL\s*\(\s*x\s*\).*',
-            r'#define OS_K1_TO_PHYSICAL(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0xa0000000))',
+            r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*',
+            r'#define OS_K1_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0xa0000000)))',
             content
         )
         content = re.sub(
-            r'#define\s+OS_K0_TO_PHYSICAL\s*\(\s*x\s*\).*',
-            r'#define OS_K0_TO_PHYSICAL(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0x80000000))',
+            r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*',
+            r'#define OS_K0_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0x80000000)))',
             content
         )
 
     if filename == "R4300.h":
         content = re.sub(
             r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0xA0000000))',
+            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000)))',
             content
         )
         content = re.sub(
             r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x)|0x80000000))',
+            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000)))',
             content
         )
         content = re.sub(
             r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K1_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0xa0000000))',
+            r'#define K1_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0xa0000000)))',
             content
         )
         content = re.sub(
             r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K0_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (unsigned int)((char *)(x)-0x80000000))',
+            r'#define K0_TO_PHYS(x) (gN64_Reg_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_Reg_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_Reg_Base + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_Reg_Base) + 0x04000000) : (gN64_PIF_Base && ((unsigned char*)(x) >= (unsigned char*)gN64_PIF_Base) && ((unsigned char*)(x) < ((unsigned char*)gN64_PIF_Base + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)gN64_PIF_Base) + 0x1FC00000) : (unsigned int)((char *)(x)-0x80000000)))',
             content
         )
 
@@ -260,17 +272,10 @@ def fix_decompiler_artifacts(content, filename):
     return content
 
 def fix_struct_shadowing(content):
-    """
-    Fixes compiler shadowing issues where a struct/union member is explicitly named 
-    'u8', 's8', etc., hiding the actual global typedefs from Clang.
-    """
     for shadow_type in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64']:
-        # Match pattern `} u8;` accommodating varied spacing.
         pat = re.compile(r'\}\s*' + shadow_type + r'\s*;')
         if pat.search(content):
-            # Rename definition (e.g. `} u8;` -> `} u8_struct;`)
             content = pat.sub(f'}} {shadow_type}_struct;', content)
-            # Rename accessors (e.g. `.u8.` -> `.u8_struct.`)
             content = content.replace(f".{shadow_type}.", f".{shadow_type}_struct.")
             content = content.replace(f"->{shadow_type}.", f"->{shadow_type}_struct.")
     return content
@@ -321,7 +326,6 @@ def fix_linkage_conflicts(content):
 
         if first_func_match:
             pos = first_func_match.start()
-
             clean_pre_text = clean_content[:pos]
 
             last_semi = clean_pre_text.rfind(';')
@@ -411,7 +415,6 @@ def sanitize_codebase(root_path):
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
                         if filename not in CORE_TYPE_HEADERS:
-                            # C files always get n64_types.h appended after the include block
                             content = inject_types_include(content, is_c_file=True)
 
                     if filename.endswith('.h'):
