@@ -24,7 +24,7 @@ extern "C" {
     extern AndroidBridgeGlobals* gBridgeGlobals;
     extern void initInterruptTables();
     extern void ResourceMgr_Init(const char* assetDir,
-                                 uint8_t*    manifestBuf,
+                                 uint8_t* manifestBuf,
                                  uint32_t    manifestSize);
     extern void run_native_otr_generation_with_callback(
         JNIEnv* env, jobject callbackObj, jmethodID progressMid,
@@ -44,8 +44,8 @@ static GLuint        g_quad_prog    = 0;
 
 // Atomic flags — written from game thread, read from GL thread (and vice versa).
 // Using C11 stdatomic so both C and C++ translation units can share them.
-static atomic_bool g_surface_ready  = ATOMIC_VAR_INIT(0);
-static atomic_bool g_globals_ready  = ATOMIC_VAR_INIT(0);
+static atomic_bool g_surface_ready  = ATOMIC_VAR_INIT(false);
+static atomic_bool g_globals_ready  = ATOMIC_VAR_INIT(false);
 
 // -----------------------------------------------------------------------
 // Internal helpers
@@ -77,7 +77,8 @@ static void ensureBridgeGlobals() {
         for (int i = 0; i < 320 * 240; i++) buf[i] = 0xFF0000FFu;
     }
 
-    atomic_store(&g_globals_ready, 1);
+    // FIX: Using boolean literal 'true' to match atomic_bool type
+    atomic_store(&g_globals_ready, true);
     LOGI("ensureBridgeGlobals: ready (screenBuffer=%p)", gBridgeGlobals->screenBuffer);
 }
 
@@ -142,9 +143,6 @@ static GLuint buildQuadProgram() {
 
 // -----------------------------------------------------------------------
 // nativeInit
-// Called from Java BEFORE runOtrGeneration.
-// We allocate gBridgeGlobals here so it is guaranteed to exist before the
-// GL thread calls surfaceReady.
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
@@ -157,8 +155,6 @@ Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass /*clazz*/,
     g_progress_mid = env->GetMethodID(cls, "updateOtrProgress",
                                       "(ILjava/lang/String;)V");
 
-    // Allocate bridge globals early so the GL thread never races against
-    // nativeGameBoot for the gBridgeGlobals pointer.
     ensureBridgeGlobals();
 
     LOGI("nativeInit: JNI bridge ready, globals allocated");
@@ -169,7 +165,7 @@ Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass /*clazz*/,
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv*  env,
+Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env,
                                                    jclass   /*clazz*/,
                                                    jint     romFd,
                                                    jobject  assetManager,
@@ -198,8 +194,6 @@ Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv*  env,
 
 // -----------------------------------------------------------------------
 // nativeGameBoot
-// Called on a dedicated background thread from MainActivity.bootGameEngine().
-// Initialises the engine then enters mainLoop (does not return).
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
@@ -207,9 +201,6 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env,
                                                  jclass  /*clazz*/,
                                                  jstring otrPathJ,
                                                  jobject assetManager) {
-    // Ensure globals exist (nativeInit should have done this already,
-    // but guard in case bootGameEngine is called on a fresh-install path
-    // where nativeInit was not called).
     ensureBridgeGlobals();
 
     initInterruptTables();
@@ -240,8 +231,6 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env,
 
 // -----------------------------------------------------------------------
 // surfaceReady
-// Called from GLRenderer.onSurfaceCreated on the GL thread.
-// Allocates the framebuffer texture and builds the quad shader.
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
@@ -249,7 +238,6 @@ Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* /*env*/, jclass /*clazz*/,
                                                jint width, jint height) {
     LOGI("surfaceReady: %d x %d", width, height);
 
-    // Build quad shader program
     if (g_quad_prog == 0) {
         g_quad_prog = buildQuadProgram();
         if (g_quad_prog == 0) {
@@ -259,7 +247,6 @@ Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* /*env*/, jclass /*clazz*/,
         LOGI("surfaceReady: quad shader ready (prog=%u)", g_quad_prog);
     }
 
-    // Allocate / re-allocate the framebuffer texture
     if (g_fb_texture != 0) {
         glDeleteTextures(1, &g_fb_texture);
         g_fb_texture = 0;
@@ -271,8 +258,6 @@ Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* /*env*/, jclass /*clazz*/,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // If globals are ready, upload the initial red frame immediately so we
-    // get a visible colour on the very first draw call.
     void* initialData = nullptr;
     if (atomic_load(&g_globals_ready) && gBridgeGlobals != nullptr) {
         initialData = gBridgeGlobals->screenBuffer;
@@ -282,13 +267,13 @@ Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* /*env*/, jclass /*clazz*/,
     glBindTexture(GL_TEXTURE_2D, 0);
 
     LOGI("surfaceReady: texture allocated (id=%u)", g_fb_texture);
-    atomic_store(&g_surface_ready, 1);
+    
+    // FIX: Using boolean literal 'true' to match atomic_bool type
+    atomic_store(&g_surface_ready, true);
 }
 
 // -----------------------------------------------------------------------
 // updateTexture
-// Called every frame from GLRenderer.onDrawFrame on the GL thread.
-// Uploads screenBuffer and draws it as a fullscreen quad.
 // -----------------------------------------------------------------------
 extern "C"
 JNIEXPORT void JNICALL
@@ -301,7 +286,6 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* /*env*/, jclass /*clazz*/
     if (gBridgeGlobals == nullptr)       return;
     if (gBridgeGlobals->screenBuffer == nullptr) return;
 
-    // Upload current N64 framebuffer
     glBindTexture(GL_TEXTURE_2D, g_fb_texture);
     glTexSubImage2D(GL_TEXTURE_2D, 0,
                     0, 0, 320, 240,
@@ -309,10 +293,7 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* /*env*/, jclass /*clazz*/
                     gBridgeGlobals->screenBuffer);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    // Draw fullscreen quad
-    // Positions (NDC) + UVs — UV Y is flipped for GL convention
     static const float kVerts[] = {
-    //   X      Y     U     V
        -1.0f, -1.0f, 0.0f, 1.0f,
         1.0f, -1.0f, 1.0f, 1.0f,
        -1.0f,  1.0f, 0.0f, 0.0f,
