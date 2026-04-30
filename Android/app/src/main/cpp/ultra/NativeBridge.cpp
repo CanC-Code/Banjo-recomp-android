@@ -15,6 +15,11 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
 
+// ============================================================
+// GLOBAL HARDWARE REGISTER BASE (CRITICAL FIX)
+// ============================================================
+uint32_t* gN64_Reg_Base = nullptr;
+
 // -----------------------------------------------------------------------
 // Module-level state
 // -----------------------------------------------------------------------
@@ -26,13 +31,10 @@ static GLuint    g_quad_prog    = 0;
 static atomic_bool g_surface_ready  = ATOMIC_VAR_INIT(false);
 static atomic_bool g_globals_ready  = ATOMIC_VAR_INIT(false);
 
-// Extern declaration for gBridgeGlobals (defined elsewhere)
+// Extern declaration for bridge globals
 extern AndroidBridgeGlobals* gBridgeGlobals;
 
 extern "C" {
-    // Exported for LinkerSymbols.cpp
-    extern uint32_t* gN64_Reg_Base; // Defined in File 1
-
     extern void initInterruptTables();
     extern void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
     extern void run_native_otr_generation_with_callback(
@@ -42,6 +44,9 @@ extern "C" {
     extern void mainLoop();
 }
 
+// ============================================================
+// Ensure bridge globals
+// ============================================================
 static void ensureBridgeGlobals() {
     if (gBridgeGlobals == nullptr) {
         void* ptr = nullptr;
@@ -56,21 +61,26 @@ static void ensureBridgeGlobals() {
     if (gBridgeGlobals->screenBuffer == nullptr) {
         gBridgeGlobals->screenBuffer = (uint32_t*)malloc(320u * 240u * sizeof(uint32_t));
         if (!gBridgeGlobals->screenBuffer) {
-            LOGE("ensureBridgeGlobals: screenBuffer malloc failed");
+            LOGE("screenBuffer malloc failed");
             return;
         }
-        // Fill with opaque red for initial rendering check
+
         for (int i = 0; i < 320 * 240; i++) {
             gBridgeGlobals->screenBuffer[i] = 0xFF0000FFu;
         }
     }
+
     atomic_store(&g_globals_ready, true);
 }
 
+// ============================================================
+// SHADER HELPERS
+// ============================================================
 static GLuint compileShader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
     glCompileShader(s);
+
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
@@ -84,135 +94,194 @@ static GLuint compileShader(GLenum type, const char* src) {
 }
 
 static GLuint buildQuadProgram() {
-    const char* vsrc = "#version 300 es\n"
+    const char* vsrc =
+        "#version 300 es\n"
         "in vec2 aPos; in vec2 aUV; out vec2 vUV;\n"
         "void main() { gl_Position = vec4(aPos, 0.0, 1.0); vUV = aUV; }\n";
 
-    const char* fsrc = "#version 300 es\n"
+    const char* fsrc =
+        "#version 300 es\n"
         "precision mediump float; in vec2 vUV; uniform sampler2D uTex; out vec4 fragColor;\n"
         "void main() { fragColor = texture(uTex, vUV); }\n";
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   vsrc);
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vsrc);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsrc);
     if (!vs || !fs) return 0;
 
     GLuint prog = glCreateProgram();
-    glAttachShader(prog, vs); glAttachShader(prog, fs);
-    glBindAttribLocation(prog, 0, "aPos"); glBindAttribLocation(prog, 1, "aUV");
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glBindAttribLocation(prog, 0, "aPos");
+    glBindAttribLocation(prog, 1, "aUV");
     glLinkProgram(prog);
 
     GLint ok = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) { glDeleteProgram(prog); return 0; }
-    glDeleteShader(vs); glDeleteShader(fs);
+    if (!ok) {
+        LOGE("Program link failed");
+        glDeleteProgram(prog);
+        return 0;
+    }
+
+    glDeleteShader(vs);
+    glDeleteShader(fs);
     return prog;
 }
 
+// ============================================================
+// JNI ENTRY POINTS
+// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject serviceObj) {
-    // Check if gN64_Reg_Base is initialized
-    if (!gN64_Reg_Base) {
-        LOGE("gN64_Reg_Base is NULL! Cannot initialize registers.");
-        return;
-    }
-    LOGI("gN64_Reg_Base = %p", gN64_Reg_Base);
 
-    if (g_service_ref != nullptr) {
+    // ========================================================
+    // ALLOCATE HARDWARE REGISTER BUFFER (CRITICAL)
+    // ========================================================
+    if (!gN64_Reg_Base) {
+        gN64_Reg_Base = (uint32_t*)malloc(0x4000); // supports RI, VI, PI, SI (+ future)
+        if (!gN64_Reg_Base) {
+            LOGE("Failed to allocate gN64_Reg_Base");
+            return;
+        }
+        memset(gN64_Reg_Base, 0, 0x4000);
+
+        LOGI("gN64_Reg_Base allocated at %p", gN64_Reg_Base);
+    }
+
+    if (g_service_ref) {
         env->DeleteGlobalRef(g_service_ref);
     }
+
     g_service_ref = env->NewGlobalRef(serviceObj);
     jclass cls = env->GetObjectClass(g_service_ref);
     g_progress_mid = env->GetMethodID(cls, "updateOtrProgress", "(ILjava/lang/String;)V");
 
     ensureBridgeGlobals();
-    LOGI("nativeInit: Bridge and Hardware Traps ready");
+
+    LOGI("nativeInit complete");
 }
 
+// ============================================================
+// OTR GENERATION
+// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass, jint romFd, jobject assetManager, jstring outDir) {
-    if (!gN64_Reg_Base) {
-        LOGE("gN64_Reg_Base is NULL in runOtrGeneration!");
-        return;
-    }
 
     const char* nativeOutDir = env->GetStringUTFChars(outDir, nullptr);
+
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
     AAsset* asset = AAssetManager_open(mgr, "manifest_us.bin", AASSET_MODE_BUFFER);
+
     if (asset) {
         run_native_otr_generation_with_callback(
-            env, g_service_ref, g_progress_mid, (int)romFd,
-            (uint8_t*)AAsset_getBuffer(asset), (uint32_t)AAsset_getLength(asset),
-            nativeOutDir);
+            env, g_service_ref, g_progress_mid,
+            (int)romFd,
+            (uint8_t*)AAsset_getBuffer(asset),
+            (uint32_t)AAsset_getLength(asset),
+            nativeOutDir
+        );
         AAsset_close(asset);
     }
+
     env->ReleaseStringUTFChars(outDir, nativeOutDir);
 }
 
+// ============================================================
+// GAME BOOT
+// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass, jstring otrPathJ, jobject assetManager) {
-    if (!gN64_Reg_Base) {
-        LOGE("gN64_Reg_Base is NULL in nativeGameBoot!");
-        return;
-    }
 
     ensureBridgeGlobals();
     initInterruptTables();
 
     const char* assetDir = env->GetStringUTFChars(otrPathJ, nullptr);
+
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
     AAsset* manifestAsset = AAssetManager_open(mgr, "manifest_us.bin", AASSET_MODE_BUFFER);
+
     if (manifestAsset) {
         ResourceMgr_Init(
             assetDir,
             (uint8_t*)AAsset_getBuffer(manifestAsset),
-            (uint32_t)AAsset_getLength(manifestAsset));
+            (uint32_t)AAsset_getLength(manifestAsset)
+        );
         AAsset_close(manifestAsset);
     } else {
         ResourceMgr_Init(assetDir, nullptr, 0);
     }
+
     env->ReleaseStringUTFChars(otrPathJ, assetDir);
+
+    LOGI("Starting mainLoop()");
     mainLoop();
 }
 
+// ============================================================
+// SURFACE / RENDERING
+// ============================================================
 extern "C" JNIEXPORT void JNICALL
-Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv*, jclass, jint width, jint height) {
+Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv*, jclass, jint, jint) {
+
     if (g_quad_prog == 0) {
         g_quad_prog = buildQuadProgram();
     }
+
     if (g_fb_texture != 0) {
         glDeleteTextures(1, &g_fb_texture);
     }
+
     glGenTextures(1, &g_fb_texture);
     glBindTexture(GL_TEXTURE_2D, g_fb_texture);
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 320, 240, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
     atomic_store(&g_surface_ready, true);
 }
 
+// ============================================================
+// FRAME UPDATE
+// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv*, jclass, jint) {
+
     if (!atomic_load(&g_surface_ready) || !atomic_load(&g_globals_ready)) {
         return;
     }
+
     glBindTexture(GL_TEXTURE_2D, g_fb_texture);
+
     glTexSubImage2D(
         GL_TEXTURE_2D, 0, 0, 0, 320, 240,
-        GL_RGBA, GL_UNSIGNED_BYTE, gBridgeGlobals->screenBuffer);
+        GL_RGBA, GL_UNSIGNED_BYTE,
+        gBridgeGlobals->screenBuffer
+    );
+
     glClear(GL_COLOR_BUFFER_BIT);
+
     glUseProgram(g_quad_prog);
+
     static const float kVerts[] = {
         -1.f, -1.f, 0.f, 1.f,
          1.f, -1.f, 1.f, 1.f,
         -1.f,  1.f, 0.f, 0.f,
          1.f,  1.f, 1.f, 0.f
     };
+
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, kVerts);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, kVerts + 2);
+
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
+
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
+// ============================================================
+// INPUT (stub)
+// ============================================================
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv*, jclass, jint, jfloat, jfloat) {}
