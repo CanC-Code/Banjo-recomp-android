@@ -12,87 +12,111 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-// Note: We avoid including PR/os_vi.h if it causes conflicts with our stubs
-}
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 
-extern "C" {
-
 /* ============================================================
-   FIX 1: __osPiTable Type Mismatch
-   The header expects a pointer, so we provide a pool and point to it.
+   1. OS GLOBALS (Linker Fixes)
+   These satisfy the requirements of the recompiled game code
+   after we filtered out the original hardware-specific .c files.
    ============================================================ */
-static OSPiHandle  sPiTablePool[2];
+
+// The header expects OSPiHandle*, so we provide memory and point to it.
+static OSPiHandle sPiTablePool[2];
 OSPiHandle* __osPiTable = sPiTablePool;
 
-/* ============================================================
-   FIX 2: OSViContext and VI Globals
-   The compiler didn't recognize 'OSViContext', so we'll treat 
-   it as a void pointer for the stubs.
-   ============================================================ */
+// Treat VI Contexts as void pointers to avoid "unknown type" errors.
 void* __osViNext = nullptr; 
 void* __osViCurr = nullptr;
 
+// Global Peripheral Interface (PI) Manager status
+OSDevMgr __osPiDevMgr;
+
 /* ============================================================
-   FIX 3: osCreatePiManager Return Type
-   The header defines this as 'void', but our stub used 's32'.
+   2. HLE OS FUNCTIONS
+   These replace N64 hardware routines with safe Android stubs.
    ============================================================ */
+
+/**
+ * Match the header: extern void osCreatePiManager(...)
+ */
 void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
-    LOGI("osCreatePiManager: HLE bridge active");
+    LOGI("BKA-HLE: osCreatePiManager initialized.");
 }
 
-/* ============================================================
-   FIX 4: __osViInit Name Conflict
-   Removed the 'int' variable to prevent conflict with the function name.
-   ============================================================ */
+/**
+ * Internal Video Interface initialization
+ */
 void __osViInit(void) {
-    LOGI("__osViInit: HLE bridge active");
+    LOGI("BKA-HLE: __osViInit executed.");
 }
 
-/* ============================================================
-   FIX 5: osEPiRawStartDma 
-   Redirecting to our HLE DMA implementation.
-   ============================================================ */
+/**
+ * Redirect Extended PI DMA to our Android-compatible HLE DMA.
+ */
 extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size);
 s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramAddr, u32 size) {
     return osPiRawStartDma(direction, devAddr, dramAddr, size);
 }
 
-// Global for the PI device manager
-OSDevMgr __osPiDevMgr;
-
 /* ============================================================
-   Engine Entry & Main Loop
+   3. GAME ENTRY POINTS & ENGINE DRIVER
    ============================================================ */
 
+// The recompiled Entry Point found in bk_boot_1050.c
+extern void func_80000450(int32_t arg0); 
+
+// Global bridge pointer for screen buffers and frame counts
 AndroidBridgeGlobals* gBridgeGlobals = nullptr;
 
-extern void core1_reset(void);
-extern void core1_stepCPU(void);
-extern void core2_stepFrame(void);
+// Subsystem forward declarations
+void core1_reset(void) {
+    LOGI("BKA-CORE: System Reset.");
+}
 
+/**
+ * This function triggers the recompiled game logic.
+ */
+void core1_stepCPU(void) {
+    static bool engine_ignited = false;
+    
+    if (!engine_ignited) {
+        LOGI("BKA-STUBS: >>> IGNITING ENGINE (func_80000450) <<<");
+        engine_ignited = true;
+        
+        // This is the "Big Bang" for the game logic.
+        // arg 0 = 0 is the default N64 boot mode.
+        func_80000450(0); 
+    }
+}
+
+/**
+ * mainLoop
+ * Targeted at 30 FPS. This drives the whole app.
+ */
 void mainLoop(void) {
-    LOGI("mainLoop: starting game loop");
-
+    LOGI("BKA-STUBS: mainLoop starting.");
+    
     core1_reset();
 
-    static const uint32_t TARGET_FRAME_US = 33333u; // 30 fps
+    static const uint32_t TARGET_FRAME_US = 33333u; // ~30.0 fps
     uint32_t frameCount = 0;
 
     while (true) {
         struct timespec ts_start, ts_end;
         clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
+        // 1. Run the recompiled game logic
         core1_stepCPU();    
-        core2_stepFrame();  
-
+        
+        // 2. Notify the Renderer that a frame has passed
         if (gBridgeGlobals != nullptr) {
             gBridgeGlobals->frameCount++;
         }
 
+        // 3. Pace the loop
         clock_gettime(CLOCK_MONOTONIC, &ts_end);
         uint32_t elapsed_us = (uint32_t)(
             (uint64_t)(ts_end.tv_sec  - ts_start.tv_sec)  * 1000000u +
@@ -103,20 +127,20 @@ void mainLoop(void) {
             usleep(TARGET_FRAME_US - elapsed_us);
         }
 
+        // Log progress every 10 seconds (300 frames)
         if ((++frameCount % 300) == 0) {
-            LOGI("mainLoop: %u frames rendered", frameCount);
+            LOGI("BKA-STUBS: %u frames processed", frameCount);
         }
     }
 }
 
-/* =========================
-   Generic Fallbacks
-========================= */
-void core1_loadOTR(uint8_t* data, size_t size) {
-    LOGI("core1_loadOTR: legacy path ignored");
-}
+/* ============================================================
+   4. MISCELLANEOUS FALLBACKS
+   Required to satisfy the linker for Rare-specific calls.
+   ============================================================ */
 
-int func_80258A4C(void) { return 0; }
+void core1_loadOTR(uint8_t* data, size_t size) {}
+int  func_80258A4C(void) { return 0; }
 void func_8025A123(void) {}
 void initInterruptTables(void) {}
 
