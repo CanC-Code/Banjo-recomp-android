@@ -195,24 +195,22 @@ def apply_android_memory_routing(content, filename):
     )
     
     # 2. Match function-like macros or variables with parentheses: (vu32 *)MACRO(ARGS)
-    # This prevents truncating calls like PHYS_TO_K1(0x284)
     content = re.sub(
         r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\((?:[^)(]+|\([^)(]*\))*\))',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
     
-    # 3. Match standard variable dereferences: (vu32 *)var 
-    # The negative lookahead (?!\s*\() guarantees this regex does not accidentally slice a macro.
+    # 3. Match standard variable dereferences with struct and array support: (vu32 *)var->field[i].offset
     content = re.sub(
-        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+)(?!\s*\()',
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)(?!\s*\()',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
         content
     )
     
-    # 4. Match explicit offset dereferences: (vu32 *)(var + offset)
+    # 4. Match explicit offset dereferences with struct and array support: (vu32 *)(var->field + offset)
     content = re.sub(
-        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*\(\s*([a-zA-Z0-9_]+)\s*\+\s*(0x[0-9a-fA-F]+|\d+)\s*\)',
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*\(\s*([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)\s*\+\s*(0x[0-9a-fA-F]+|\d+)\s*\)',
         r'(\1 *)BKA_TRANSLATE_ADDR(\2 + \3)',
         content
     )
