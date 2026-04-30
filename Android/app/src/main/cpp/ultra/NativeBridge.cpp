@@ -20,8 +20,7 @@
 // -----------------------------------------------------------------------
 // N64 Hardware Register Trap
 // -----------------------------------------------------------------------
-// We allocate 1MB of memory to catch any direct hardware access (SP, DP, VI, PI, RI, etc.)
-// This prevents SIGSEGV when the game tries to write to 0xA4800000.
+// Buffer to catch any direct hardware access (SP, DP, VI, PI, RI, etc.)
 uint32_t gN64_Hardware_Registers[0x100000 / 4]; 
 
 extern "C" {
@@ -30,9 +29,7 @@ extern "C" {
 
     extern AndroidBridgeGlobals* gBridgeGlobals;
     extern void initInterruptTables();
-    extern void ResourceMgr_Init(const char* assetDir,
-                                 uint8_t* manifestBuf,
-                                 uint32_t    manifestSize);
+    extern void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
     extern void run_native_otr_generation_with_callback(
         JNIEnv* env, jobject callbackObj, jmethodID progressMid,
         int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
@@ -45,16 +42,11 @@ extern "C" {
 // -----------------------------------------------------------------------
 static jobject   g_service_ref  = nullptr;
 static jmethodID g_progress_mid = nullptr;
-
-static GLuint        g_fb_texture   = 0;
-static GLuint        g_quad_prog    = 0;
+static GLuint    g_fb_texture   = 0;
+static GLuint    g_quad_prog    = 0;
 
 static atomic_bool g_surface_ready  = ATOMIC_VAR_INIT(false);
 static atomic_bool g_globals_ready  = ATOMIC_VAR_INIT(false);
-
-// -----------------------------------------------------------------------
-// Internal helpers
-// -----------------------------------------------------------------------
 
 static void ensureBridgeGlobals() {
     if (gBridgeGlobals == nullptr) {
@@ -68,16 +60,14 @@ static void ensureBridgeGlobals() {
     }
 
     if (gBridgeGlobals->screenBuffer == nullptr) {
-        gBridgeGlobals->screenBuffer =
-            (uint32_t*)malloc(320u * 240u * sizeof(uint32_t));
+        gBridgeGlobals->screenBuffer = (uint32_t*)malloc(320u * 240u * sizeof(uint32_t));
         if (!gBridgeGlobals->screenBuffer) {
             LOGE("ensureBridgeGlobals: screenBuffer malloc failed");
             return;
         }
-        uint32_t* buf = gBridgeGlobals->screenBuffer;
-        for (int i = 0; i < 320 * 240; i++) buf[i] = 0xFF0000FFu; // Red debug fill
+        // Fill with opaque red for initial rendering check
+        for (int i = 0; i < 320 * 240; i++) gBridgeGlobals->screenBuffer[i] = 0xFF0000FFu;
     }
-
     atomic_store(&g_globals_ready, true);
 }
 
@@ -98,46 +88,29 @@ static GLuint compileShader(GLenum type, const char* src) {
 }
 
 static GLuint buildQuadProgram() {
-    const char* vsrc =
-        "#version 300 es\n"
-        "in vec2 aPos;\n"
-        "in vec2 aUV;\n"
-        "out vec2 vUV;\n"
+    const char* vsrc = "#version 300 es\n"
+        "in vec2 aPos; in vec2 aUV; out vec2 vUV;\n"
         "void main() { gl_Position = vec4(aPos, 0.0, 1.0); vUV = aUV; }\n";
 
-    const char* fsrc =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "in vec2 vUV;\n"
-        "uniform sampler2D uTex;\n"
-        "out vec4 fragColor;\n"
+    const char* fsrc = "#version 300 es\n"
+        "precision mediump float; in vec2 vUV; uniform sampler2D uTex; out vec4 fragColor;\n"
         "void main() { fragColor = texture(uTex, vUV); }\n";
 
     GLuint vs = compileShader(GL_VERTEX_SHADER,   vsrc);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsrc);
-    if (!vs || !fs) { return 0; }
+    if (!vs || !fs) return 0;
 
     GLuint prog = glCreateProgram();
-    glAttachShader(prog, vs);
-    glAttachShader(prog, fs);
-    glBindAttribLocation(prog, 0, "aPos");
-    glBindAttribLocation(prog, 1, "aUV");
+    glAttachShader(prog, vs); glAttachShader(prog, fs);
+    glBindAttribLocation(prog, 0, "aPos"); glBindAttribLocation(prog, 1, "aUV");
     glLinkProgram(prog);
 
     GLint ok = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        glDeleteProgram(prog);
-        return 0;
-    }
-    glDeleteShader(vs);
-    glDeleteShader(fs);
+    if (!ok) { glDeleteProgram(prog); return 0; }
+    glDeleteShader(vs); glDeleteShader(fs);
     return prog;
 }
-
-// -----------------------------------------------------------------------
-// JNI Exports
-// -----------------------------------------------------------------------
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject serviceObj) {
