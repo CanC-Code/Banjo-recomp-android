@@ -181,10 +181,52 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
 
 def apply_android_memory_routing(content, filename):
     """
-    Implements Just-In-Time Pointer Translation. 
+    Implements Just-In-Time Pointer Translation with AArch64 sign-extension mitigation
+    and safe dynamic fallbacks for null engine initialization.
     """
     if "BKA_TRANSLATE_ADDR" not in content and filename.endswith(('.c', '.h')):
-        header = """#include <stdint.h>\n#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n#define BKA_TRANSLATE_ADDR(addr) ( \\\n    (((uintptr_t)(addr) >= 0x04000000) && ((uintptr_t)(addr) < 0x05000000)) ? ((uintptr_t)BKA_GET_REG_BASE() + ((uintptr_t)(addr) - 0x04000000)) : \\\n    (((uintptr_t)(addr) >= 0x1FC00000) && ((uintptr_t)(addr) < 0x1FC01000)) ? ((uintptr_t)BKA_GET_PIF_BASE() + ((uintptr_t)(addr) - 0x1FC00000)) : \\\n    (((uintptr_t)(addr) >= 0xA4000000) && ((uintptr_t)(addr) < 0xA5000000)) ? ((uintptr_t)BKA_GET_REG_BASE() + ((uintptr_t)(addr) - 0xA4000000)) : \\\n    (((uintptr_t)(addr) >= 0xBFC00000) && ((uintptr_t)(addr) < 0xBFC01000)) ? ((uintptr_t)BKA_GET_PIF_BASE() + ((uintptr_t)(addr) - 0xBFC00000)) : \\\n    (uintptr_t)(addr) \\\n)\n\n"""
+        header = """#include <stdint.h>
+#ifndef BKA_SAFE_BASE_INCLUDED
+#define BKA_SAFE_BASE_INCLUDED
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern void* calloc(unsigned long, unsigned long);
+extern unsigned int* gN64_Reg_Base;
+extern unsigned int* gN64_PIF_Base;
+extern void InitN64Registers(void);
+#ifdef __cplusplus
+}
+#endif
+static inline unsigned int* BKA_GetSafeRegBase(void) {
+    if (gN64_Reg_Base) return gN64_Reg_Base;
+    InitN64Registers();
+    if (gN64_Reg_Base) return gN64_Reg_Base;
+    static unsigned int* dummy_reg = (unsigned int*)0;
+    if (!dummy_reg) dummy_reg = (unsigned int*)calloc(0x100000, 1);
+    return dummy_reg;
+}
+static inline unsigned int* BKA_GetSafePifBase(void) {
+    if (gN64_PIF_Base) return gN64_PIF_Base;
+    InitN64Registers();
+    if (gN64_PIF_Base) return gN64_PIF_Base;
+    static unsigned int* dummy_pif = (unsigned int*)0;
+    if (!dummy_pif) dummy_pif = (unsigned int*)calloc(0x1000, 1);
+    return dummy_pif;
+}
+#endif
+
+#define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
+#define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
+#define BKA_MASK32(a) ((uintptr_t)(a) & 0xFFFFFFFF)
+
+#define BKA_TRANSLATE_ADDR(addr) ( \\
+    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((uintptr_t)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000)) : \\
+    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((uintptr_t)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000)) : \\
+    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((uintptr_t)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000)) : \\
+    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((uintptr_t)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000)) : \\
+    (uintptr_t)(addr) \\
+)\n\n"""
         content = header + content
 
     # 1. Match specific literal dereferences: (vu32 *)0xHEX
@@ -223,44 +265,44 @@ def apply_android_memory_routing(content, filename):
     if filename == "os_convert.h":
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0xA0000000))',
+            r'#define OS_PHYSICAL_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR(BKA_MASK32(x) | 0xA0000000))',
             content
         )
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0x80000000))',
+            r'#define OS_PHYSICAL_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR(BKA_MASK32(x) | 0x80000000))',
             content
         )
         content = re.sub(
             r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define OS_K1_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
+            r'#define OS_K1_TO_PHYS(x) (BKA_MASK32(x) & 0x1FFFFFFF)',
             content
         )
         content = re.sub(
             r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define OS_K0_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
+            r'#define OS_K0_TO_PHYS(x) (BKA_MASK32(x) & 0x1FFFFFFF)',
             content
         )
 
     if filename == "R4300.h":
         content = re.sub(
             r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K1(x) ((uintptr_t)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0xA0000000))',
+            r'#define PHYS_TO_K1(x) ((uintptr_t)BKA_TRANSLATE_ADDR(BKA_MASK32(x) | 0xA0000000))',
             content
         )
         content = re.sub(
             r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K0(x) ((uintptr_t)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0x80000000))',
+            r'#define PHYS_TO_K0(x) ((uintptr_t)BKA_TRANSLATE_ADDR(BKA_MASK32(x) | 0x80000000))',
             content
         )
         content = re.sub(
             r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K1_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
+            r'#define K1_TO_PHYS(x) (BKA_MASK32(x) & 0x1FFFFFFF)',
             content
         )
         content = re.sub(
             r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K0_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
+            r'#define K0_TO_PHYS(x) (BKA_MASK32(x) & 0x1FFFFFFF)',
             content
         )
 
