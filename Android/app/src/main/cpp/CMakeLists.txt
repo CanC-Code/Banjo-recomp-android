@@ -44,7 +44,7 @@ if(NOT EXCLUDE_GAME_SRC)
         "pirawdma.c"   # Shadows osPiRawStartDma
         "epirawdma.c"  # Shadows osEPiStartDma
         "pimgr.c"      # Shadows PI Manager
-        "piacs.c"      # Shadows PI Access
+        # "piacs.c"    <-- REMOVED: Required for __osPiGetAccess and __osPiRelAccess
         "vi.c"         # Shadows Video Interface
         "vicurrent.c"  # Shadows VI tracking
         "osYield.c"    # Shadows Scheduler
