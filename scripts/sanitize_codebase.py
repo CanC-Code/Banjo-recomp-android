@@ -330,63 +330,65 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
+    # Create a comment-free version for reliable searching
+    def repl(m): return ' ' * len(m.group(0))
+    clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
+    clean_content = re.sub(r'//.*', repl, clean_content)
+    clean_content = re.sub(r'".*?"', repl, clean_content)
+    clean_content = re.sub(r"'.*?'", repl, clean_content)
+
     # 1. Resolve explicit non-static prototypes for static definitions
-    static_def_pattern = re.compile(r"^(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
-    for match in static_def_pattern.finditer(content):
-        full_sig = match.group(1)
+    static_def_pattern = re.compile(r"^[ \t]*(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
+    
+    for match in static_def_pattern.finditer(clean_content):
+        full_match = match.group(1)
         func_name = match.group(3)
 
         proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
-        for p_match in proto_pattern.finditer(content):
+        for p_match in proto_pattern.finditer(clean_content):
             proto_line = p_match.group(0)
             if "static" not in proto_line and "typedef" not in proto_line:
                 has_non_static_proto = True
                 break
 
         if has_non_static_proto:
-            sig_without_static = re.sub(r"^static\s+", "", full_sig, count=1)
-            content = content.replace(full_sig, sig_without_static)
+            # Safely string-replace the matched static signature
+            original_match = content[match.start(1):match.end(1)]
+            new_def = re.sub(r"^static\s+", "", original_match, count=1)
+            content = content.replace(original_match, new_def)
+            # Update clean_content to reflect the removed 'static' modifier
+            clean_content = clean_content[:match.start(1)] + new_def + clean_content[match.end(1):]
 
-    # 2. Inject missing prototypes for static functions used before definition
+    # 2. Unconditionally inject missing prototypes for all static functions
     signatures = []
     added_funcs = set()
     
-    static_func_pattern = re.compile(r"^(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
-    for match in static_func_pattern.finditer(content):
-        sig_without_brace = match.group(2).strip()
+    for match in static_def_pattern.finditer(clean_content):
+        sig_no_brace = match.group(2).strip()
         func_name = match.group(3)
         
-        has_prototype = bool(re.search(rf"^[ \t]*(static\s+)?[\w\s\*]*\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content, re.MULTILINE))
+        has_prototype = bool(re.search(rf"^[ \t]*(?:static\s+)?[\w\s\*]*\b{re.escape(func_name)}\s*\([^)]*\)\s*;", clean_content, re.MULTILINE))
         
         if not has_prototype and func_name not in added_funcs:
-            ref_matches = list(re.finditer(rf"\b{re.escape(func_name)}\b", content))
-            if ref_matches and ref_matches[0].start() < match.start():
-                signatures.append(f"static {sig_without_brace};")
-                added_funcs.add(func_name)
+            signatures.append(f"static {sig_no_brace};")
+            added_funcs.add(func_name)
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        def repl(m): return ' ' * len(m.group(0))
-        clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
-        clean_content = re.sub(r'//.*', repl, clean_content)
-        clean_content = re.sub(r'".*?"', repl, clean_content)
-        clean_content = re.sub(r"'.*?'", repl, clean_content)
-        
+        # Locate the highest point to insert prototypes, avoiding header logic
         any_func_pattern = re.compile(r"^[ \t]*(?:static\s+)?(?:inline\s+)?(?:[\w\s\*]+?)\b\w+\s*\([^)]*\)\s*\{", re.MULTILINE)
         first_func_match = any_func_pattern.search(clean_content)
         
         if first_func_match:
             insert_idx = first_func_match.start()
-            while insert_idx > 0 and content[insert_idx - 1] not in '\n\r':
-                insert_idx -= 1
             content = content[:insert_idx] + header_block + content[insert_idx:]
         else:
             last_include_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_content, re.MULTILINE))
             if last_include_match:
                 insert_idx = last_include_match[-1].end()
-                content = content[:insert_idx] + header_block + content[insert_idx:]
+                content = content[:insert_idx] + "\n" + header_block + content[insert_idx:]
             else:
                 content = header_block + content
 
