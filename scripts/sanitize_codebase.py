@@ -181,70 +181,83 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
 
 def apply_android_memory_routing(content, filename):
     """
-    Hooks into the N64 memory virtualization macros and regex-replaces global hardcoded 
-    addresses using uintptr_t to prevent 64-bit pointer truncation on Android ARM64 architectures.
+    Implements Just-In-Time Pointer Translation. Instead of eagerly converting hex addresses to 64-bit host
+    pointers (which breaks when the original code stores them in 32-bit `u32` integers), we inject
+    BKA_TRANSLATE_ADDR globally into all N64 dereference casts.
     """
-    if "BKA_GET_REG_BASE" not in content and filename.endswith(('.c', '.h')):
-        header = """#include <stdint.h>\n#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n\n"""
+    if "BKA_TRANSLATE_ADDR" not in content and filename.endswith(('.c', '.h')):
+        header = """#include <stdint.h>\n#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n#define BKA_TRANSLATE_ADDR(addr) ( \\\n    (((uintptr_t)(addr) >= 0x04000000) && ((uintptr_t)(addr) < 0x05000000)) ? ((uintptr_t)BKA_GET_REG_BASE() + ((uintptr_t)(addr) - 0x04000000)) : \\\n    (((uintptr_t)(addr) >= 0x1FC00000) && ((uintptr_t)(addr) < 0x1FC01000)) ? ((uintptr_t)BKA_GET_PIF_BASE() + ((uintptr_t)(addr) - 0x1FC00000)) : \\\n    (((uintptr_t)(addr) >= 0xA4000000) && ((uintptr_t)(addr) < 0xA5000000)) ? ((uintptr_t)BKA_GET_REG_BASE() + ((uintptr_t)(addr) - 0xA4000000)) : \\\n    (((uintptr_t)(addr) >= 0xBFC00000) && ((uintptr_t)(addr) < 0xBFC01000)) ? ((uintptr_t)BKA_GET_PIF_BASE() + ((uintptr_t)(addr) - 0xBFC00000)) : \\\n    (uintptr_t)(addr) \\\n)\n\n"""
         content = header + content
 
-    def route_hardcoded_pointers(match):
-        hex_str = match.group(0)
-        val = int(hex_str, 16)
-        # Route PIF RAM Virtual Addresses (0xBFC00000 to 0xBFC00FFF) using uintptr_t
-        if 0xBFC00000 <= val < 0xBFC01000:
-            offset = val - 0xBFC00000
-            return f"((uintptr_t)((unsigned char*)BKA_GET_PIF_BASE() + 0x{offset:X}))"
-        # Route RCP Virtual Addresses (0xA4000000 to 0xA4FFFFFF) using uintptr_t
-        if 0xA4000000 <= val < 0xA5000000:
-            offset = val - 0xA4000000
-            return f"((uintptr_t)((unsigned char*)BKA_GET_REG_BASE() + 0x{offset:X}))"
-        return hex_str
+    # 1. Match specific literal dereferences: (vu32 *)0xHEX
+    content = re.sub(
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)',
+        r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
+        content
+    )
+    
+    # 2. Match standard variable dereferences: (vu32 *)var
+    content = re.sub(
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+)',
+        r'(\1 *)BKA_TRANSLATE_ADDR(\2)',
+        content
+    )
+    
+    # 3. Match explicit offset dereferences: (vu32 *)(var + offset)
+    content = re.sub(
+        r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*\(\s*([a-zA-Z0-9_]+)\s*\+\s*(0x[0-9a-fA-F]+|\d+)\s*\)',
+        r'(\1 *)BKA_TRANSLATE_ADDR(\2 + \3)',
+        content
+    )
 
-    # Find and route all raw hardcoded Hex memory addresses
-    content = re.sub(r'0x[A-Fa-f0-9]{8}\b', route_hardcoded_pointers, content)
+    # 4. Intercept all global SDK Hardware Access Macros
+    content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\)\s*\*.*', r'#define HW_REG(reg, type) *(volatile type *)BKA_TRANSLATE_ADDR(reg)', content)
+    content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\)\s*\*.*', r'#define IO_READ(addr) (*(vu32 *)BKA_TRANSLATE_ADDR(addr))', content)
+    content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\)\s*\*.*', r'#define IO_WRITE(addr, data) (*(vu32 *)BKA_TRANSLATE_ADDR(addr) = (u32)(data))', content)
 
+    # Note: K1_TO_PHYS & K0 reverse operations safely map virtual boundaries back to local N64 physical boundaries 
+    # using Bitwise AND masks instead of host-space pointers.
     if filename == "os_convert.h":
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned char*)((uintptr_t)(x)|0xA0000000)))))',
+            r'#define OS_PHYSICAL_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0xA0000000))',
             content
         )
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned char*)((uintptr_t)(x)|0x80000000)))))',
+            r'#define OS_PHYSICAL_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0x80000000))',
             content
         )
         content = re.sub(
             r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define OS_K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0xa0000000)))',
+            r'#define OS_K1_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
             content
         )
         content = re.sub(
             r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define OS_K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0x80000000)))',
+            r'#define OS_K0_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
             content
         )
 
     if filename == "R4300.h":
         content = re.sub(
             r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (uintptr_t)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (uintptr_t)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((uintptr_t)(x)|0xA0000000)))',
+            r'#define PHYS_TO_K1(x) ((uintptr_t)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0xA0000000))',
             content
         )
         content = re.sub(
             r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (uintptr_t)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (uintptr_t)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((uintptr_t)(x)|0x80000000)))',
+            r'#define PHYS_TO_K0(x) ((uintptr_t)BKA_TRANSLATE_ADDR((uintptr_t)(x)|0x80000000))',
             content
         )
         content = re.sub(
             r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0xa0000000)))',
+            r'#define K1_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
             content
         )
         content = re.sub(
             r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*',
-            r'#define K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_REG_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_REG_BASE() + 0x01000000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_REG_BASE()) + 0x04000000) : (BKA_GET_PIF_BASE() && ((unsigned char*)(x) >= (unsigned char*)BKA_GET_PIF_BASE()) && ((unsigned char*)(x) < ((unsigned char*)BKA_GET_PIF_BASE() + 0x1000)) ? (unsigned int)(((unsigned char*)(x) - (unsigned char*)BKA_GET_PIF_BASE()) + 0x1FC00000) : (unsigned int)((uintptr_t)(x)-0x80000000)))',
+            r'#define K0_TO_PHYS(x) ((uintptr_t)(x) & 0x1FFFFFFF)',
             content
         )
 
