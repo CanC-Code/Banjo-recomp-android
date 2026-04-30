@@ -37,8 +37,6 @@ TOKEN_REPLACEMENTS = {
 COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
-
-TYPES_INCLUDE_RE = re.compile(r'#include\s*[<"](?:n64_types\.h|ultra64\.h|PR/ultra64\.h|2\.0L/ultra64\.h|ultratypes\.h|PR/ultratypes\.h)[">]')
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
@@ -76,8 +74,7 @@ def inject_types_include(content, is_c_file=False):
 
 def apply_android_memory_routing(content, filename):
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.h')): return content
-    header = """#include <stdint.h>
-#ifndef BKA_SAFE_BASE_INCLUDED
+    header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #ifdef __cplusplus
 extern "C" {
@@ -108,50 +105,46 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
 #endif
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
-#define BKA_MASK32(a) ((uintptr_t)(a) & 0xFFFFFFFF)
+#define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
 #define BKA_TRANSLATE_ADDR(addr) ( \\
-    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((uintptr_t)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000)) : \\
-    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((uintptr_t)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000)) : \\
-    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((uintptr_t)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000)) : \\
-    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((uintptr_t)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000)) : \\
-    (uintptr_t)(addr) \\
+    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000)) : \\
+    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000)) : \\
+    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000)) : \\
+    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000)) : \\
+    (unsigned long)(addr) \\
 )\n\n"""
     content = header + content
-    ptr_pat = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
-    content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
-    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\([^)(]*\))', r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
-    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+(?:\s*(?:->|\.)\s*[a-zA-Z0-9_]+|\s*\[[^\]]+\])*)(?!\s*\()', r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
+    # Only translate if line is indented (likely inside a function, avoiding global initializers)
+    ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
+    content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
+    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z0-9_]+\s*\([^)(]*\))', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
+    
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\)\s*\*.*', r'#define HW_REG(reg, type) *(volatile type *)BKA_TRANSLATE_ADDR(reg)', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\)\s*\*.*', r'#define IO_READ(addr) (*(vu32 *)BKA_TRANSLATE_ADDR(addr))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\)\s*\*.*', r'#define IO_WRITE(addr, data) (*(vu32 *)BKA_TRANSLATE_ADDR(addr) = (u32)(data))', content)
     return content
 
 def fix_linkage_conflicts(content):
-    def strip(t): return re.sub(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*)', lambda m: ' '*len(m.group(0)), t, flags=re.DOTALL)
-    clean = strip(content)
-    
-    # 1. Resolve 'static' followed by non-static conflicts
-    static_def_pattern = re.compile(r"^[ \t]*(static\s+([\w\s\*]+\b(\w+)\s*\([^;{]*\)))\s*\{", re.MULTILINE)
-    for match in static_def_pattern.finditer(clean):
-        full_def, sig_no_brace, func_name = match.groups()
-        if re.search(rf"^[ \t]*(?!static\b|typedef\b)[\w\s\*]+\b{re.escape(func_name)}\s*\([^;{{]*\)\s*;", clean, re.MULTILINE):
-            content = content.replace(full_def, sig_no_brace)
+    # Restore logic from "old working file" for basic static resolution
+    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
+    for match in static_def_pattern.finditer(content):
+        full_sig, func_name = match.group(1), match.group(2)
+        if re.search(r"^[ \t]*(?!static\b|typedef\b)[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE):
+            content = content.replace("static " + full_sig, full_sig)
 
-    # 2. Inject missing forward declarations for static functions
+    # Keep forward declaration logic for missing prototypes (essential for code_F0.c)
     sigs, added = [], set()
-    existing_protos = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
-    for match in static_def_pattern.finditer(clean):
-        sig, name = match.group(2).strip(), match.group(3)
-        if name not in existing_protos and name not in added and "enum " not in sig:
+    clean = re.sub(r'("(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*)', ' ', content, flags=re.DOTALL)
+    existing = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
+    for match in re.finditer(r"^[ \t]*static\s+([\w\s\*]+\b(\w+)\s*\([^;{]*\))\s*\{", content, re.MULTILINE):
+        sig, name = match.group(1).strip(), match.group(2)
+        if name not in existing and name not in added:
             sigs.append(f"static {sig};")
             added.add(name)
-            
     if sigs:
-        block = "\n/* Automated Forward Decls (Safety Fix) */\n" + "\n".join(sigs) + "\n\n"
-        # Find where to insert (after includes/macros)
-        last_inc = list(re.finditer(r'^[ \t]*#[ \t]*(?:include|define|ifndef|endif)\b[^\n]*', clean, re.MULTILINE))
-        idx = last_inc[-1].end() if last_inc else 0
-        content = content[:idx] + block + content[idx:]
+        block = "\n/* Automated Forward Decls */\n" + "\n".join(sigs) + "\n\n"
+        first = re.search(r"^[ \t]*(?:static\s+)?[\w\s\*]+\b\w+\s*\([^;{]*\)\s*\{", content, re.MULTILINE)
+        if first: content = content[:first.start()] + block + content[first.start():]
     return content
 
 def sanitize_codebase(root_path):
@@ -181,33 +174,26 @@ def sanitize_codebase(root_path):
                     if filename not in CORE_TYPE_HEADERS:
                         content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
                         content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
-                        if not is_wrapper:
-                            for ch in headers_to_redirect:
-                                content = re.sub(rf'#include\s*[<"]{ch.replace(".", r"\.")}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
                     
                     if not is_wrapper:
-                        # Token replacements
                         tokens = [(re.compile(r"\bbool\b"), "n64_bool"), (re.compile(r"\btrue\b"), "TRUE"), (re.compile(r"\bfalse\b"), "FALSE")] if filename in CORE_TYPE_HEADERS else COMPILED_TOKENS
                         parts = re.split(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*)', content, flags=re.DOTALL)
                         for i in range(0, len(parts), 2):
                             for pat, repl in tokens: parts[i] = pat.sub(repl, parts[i])
                         content = "".join(parts)
 
-                        # Fix decompiler/shadowing artifacts
-                        shadow_pat = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
-                        for indent, tname, var, size in shadow_pat.findall(content):
-                            content = re.sub(rf'{indent}{tname}\s+{var}\s*\[', f'{indent}{tname} buffer_{var}[', content)
-                        
-                        # Array initializers fix (leafboat.c fix)
-                        assign_pattern = re.compile(r'^([ \t]+)([a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;{"]+)\s*;', re.MULTILINE)
-                        content = assign_pattern.sub(lambda m: f"{m.group(1)}{m.group(2)} {m.group(3)}[{m.group(4)}];\n{m.group(1)}n64_memcpy({m.group(3)}, {m.group(5).strip()}, {m.group(4)} * sizeof({m.group(2)}));", content)
+                        # Fix decompiler artifacts (leafboat.c fix included)
+                        content = re.sub(r'^([ \t]+)([a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;{"]+)\s*;', 
+                                         lambda m: f"{m.group(1)}{m.group(2)} {m.group(3)}[{m.group(4)}];\n{m.group(1)}n64_memcpy({m.group(3)}, {m.group(5).strip()}, {m.group(4)} * sizeof({m.group(2)}));", 
+                                         content, flags=re.MULTILINE)
 
                         content = apply_android_memory_routing(content, filename)
                         if filename.endswith('.c'):
                             content = fix_linkage_conflicts(content)
                             if filename not in CORE_TYPE_HEADERS: content = inject_types_include(content, True)
-                        if filename.endswith('.h') and filename not in CORE_TYPE_HEADERS and not TYPES_INCLUDE_RE.search(content):
-                            content = inject_types_include(content, False)
+                        if filename.endswith('.h') and filename not in CORE_TYPE_HEADERS:
+                            if not re.search(r'#include\s*[<"](?:n64_types\.h|ultra64\.h|ultratypes\.h)[">]', content):
+                                content = inject_types_include(content, False)
                     
                     if content != original_content:
                         with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
