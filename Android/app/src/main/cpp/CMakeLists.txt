@@ -22,6 +22,7 @@ set(BRIDGE_SOURCES
     emulator/pi_hle.cpp
     emulator/resource_mgr.cpp
     tools/rare_decompression.cpp
+    ultra/HardwareRegs.cpp
 
     # Dead-stub fallbacks — must be last
     ultra/missing_stubs.c
