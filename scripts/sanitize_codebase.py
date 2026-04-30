@@ -330,67 +330,111 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
-    # Create a comment-free version for reliable searching
+    # Strip comments and string constants predictably for parsing scope boundaries
     def repl(m): return ' ' * len(m.group(0))
     clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
     clean_content = re.sub(r'//.*', repl, clean_content)
     clean_content = re.sub(r'".*?"', repl, clean_content)
     clean_content = re.sub(r"'.*?'", repl, clean_content)
 
-    # 1. Resolve explicit non-static prototypes for static definitions
+    # 1. Structural parse of the file to determine true brace scope.
+    scope_levels = []
+    current_scope = 0
+    for char in clean_content:
+        scope_levels.append(current_scope)
+        if char == '{':
+            current_scope += 1
+        elif char == '}':
+            current_scope -= 1
+
     static_def_pattern = re.compile(r"^[ \t]*(static\s+([\w\s\*]+?\b(\w+)\s*\([^)]*\))\s*\{)", re.MULTILINE)
     
-    for match in static_def_pattern.finditer(clean_content):
-        full_match = match.group(1)
-        func_name = match.group(3)
-
-        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
-        has_non_static_proto = False
-        for p_match in proto_pattern.finditer(clean_content):
-            proto_line = p_match.group(0)
-            if "static" not in proto_line and "typedef" not in proto_line:
-                has_non_static_proto = True
-                break
-
-        if has_non_static_proto:
-            # Safely string-replace the matched static signature
-            original_match = content[match.start(1):match.end(1)]
-            new_def = re.sub(r"^static\s+", "", original_match, count=1)
-            content = content.replace(original_match, new_def)
-            # Update clean_content to reflect the removed 'static' modifier
-            clean_content = clean_content[:match.start(1)] + new_def + clean_content[match.end(1):]
-
-    # 2. Unconditionally inject missing prototypes for all static functions
     signatures = []
     added_funcs = set()
     
     for match in static_def_pattern.finditer(clean_content):
+        full_match = match.group(1)
         sig_no_brace = match.group(2).strip()
         func_name = match.group(3)
+        start_idx = match.start(1)
         
-        has_prototype = bool(re.search(rf"^[ \t]*(?:static\s+)?[\w\s\*]*\b{re.escape(func_name)}\s*\([^)]*\)\s*;", clean_content, re.MULTILINE))
+        # Make sure the definition is at file scope to avoid matching edge-case internals
+        if scope_levels[start_idx] > 0:
+            continue
+
+        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
+        has_static_proto = False
+        has_non_static_proto = False
         
-        if not has_prototype and func_name not in added_funcs:
+        for p_match in proto_pattern.finditer(clean_content):
+            p_start = p_match.start(0)
+            # Only consider it a prototype if it was found at file scope (scope == 0).
+            # This isolates real prototypes from implicit invocations matching standard signatures.
+            if scope_levels[p_start] == 0:
+                proto_line = p_match.group(0)
+                if "static" in proto_line:
+                    has_static_proto = True
+                elif "typedef" not in proto_line:
+                    has_non_static_proto = True
+
+        if has_non_static_proto:
+            original_match = content[match.start(1):match.end(1)]
+            new_def = re.sub(r"^static\s+", "", original_match, count=1)
+            content = content.replace(original_match, new_def)
+        elif not has_static_proto and func_name not in added_funcs:
             signatures.append(f"static {sig_no_brace};")
             added_funcs.add(func_name)
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
         
-        # Locate the highest point to insert prototypes, avoiding header logic
-        any_func_pattern = re.compile(r"^[ \t]*(?:static\s+)?(?:inline\s+)?(?:[\w\s\*]+?)\b\w+\s*\([^)]*\)\s*\{", re.MULTILINE)
-        first_func_match = any_func_pattern.search(clean_content)
+        # 2. Find the absolutely earliest invocation of ANY generated signature
+        first_ref_idx = len(content)
+        for func_name in added_funcs:
+            for m in re.finditer(rf"\b{re.escape(func_name)}\b", clean_content):
+                if m.start() < first_ref_idx:
+                    first_ref_idx = m.start()
+                    break # finditer returns chronologically, the first match per function is earliest
         
-        if first_func_match:
-            insert_idx = first_func_match.start()
-            content = content[:insert_idx] + header_block + content[insert_idx:]
-        else:
-            last_include_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_content, re.MULTILINE))
-            if last_include_match:
-                insert_idx = last_include_match[-1].end()
-                content = content[:insert_idx] + "\n" + header_block + content[insert_idx:]
+        # 3. Compile safely guaranteed file-scope indices spanning the code
+        file_scope_indices = [0]
+        scope = 0
+        in_macro = False
+        for i, char in enumerate(clean_content):
+            if char == '{':
+                scope += 1
+            elif char == '}':
+                scope -= 1
+            elif char == '\n':
+                prev = i - 1
+                while prev >= 0 and clean_content[prev] in ' \t\r':
+                    prev -= 1
+                # Check line continuations
+                if prev >= 0 and clean_content[prev] == '\\':
+                    in_macro = True
+                else:
+                    in_macro = False
+                    
+                if scope == 0 and not in_macro:
+                    file_scope_indices.append(i + 1)
+        
+        # 4. Filter the highest safe file-scope insertion point existing before the first invocation
+        insert_idx = 0
+        for idx in file_scope_indices:
+            if idx <= first_ref_idx:
+                insert_idx = idx
             else:
-                content = header_block + content
+                break
+                
+        # Fallback to appending right under the last macro / include block if insertion defaulted
+        if insert_idx == 0:
+            last_inc = list(re.finditer(r'^[ \t]*#[ \t]*(?:include|define)[^\n]*', clean_content, re.MULTILINE))
+            if last_inc:
+                insert_idx = last_inc[-1].end()
+                while insert_idx < len(content) and content[insert_idx] in '\r\n':
+                    insert_idx += 1
+        
+        content = content[:insert_idx] + "\n" + header_block + content[insert_idx:]
 
     return content
 
