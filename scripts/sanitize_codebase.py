@@ -183,9 +183,10 @@ def apply_android_memory_routing(content, filename):
     """
     Hooks into the N64 memory virtualization macros and regex-replaces global hardcoded 
     addresses to ensure the Android OS ASLR mappings cover the complete hardware space.
+    Integrates lazy initialization to guarantee pointers are fully mapped prior to GameThread use.
     """
-    if "gN64_Reg_Base" not in content and filename.endswith(('.c', '.h')):
-        header = """#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\n#ifdef __cplusplus\n}\n#endif\n\n"""
+    if "BKA_GET_REG_BASE" not in content and filename.endswith(('.c', '.h')):
+        header = """#ifdef __cplusplus\nextern "C" {\n#endif\nextern unsigned int* gN64_Reg_Base;\nextern unsigned int* gN64_PIF_Base;\nextern void InitN64Registers(void);\n#ifdef __cplusplus\n}\n#endif\n#define BKA_GET_REG_BASE() (gN64_Reg_Base ? gN64_Reg_Base : (InitN64Registers(), gN64_Reg_Base))\n#define BKA_GET_PIF_BASE() (gN64_PIF_Base ? gN64_PIF_Base : (InitN64Registers(), gN64_PIF_Base))\n\n"""
         content = header + content
 
     def route_hardcoded_pointers(match):
@@ -194,11 +195,11 @@ def apply_android_memory_routing(content, filename):
         # Route PIF RAM Virtual Addresses (0xBFC00000 to 0xBFC00FFF)
         if 0xBFC00000 <= val < 0xBFC01000:
             offset = val - 0xBFC00000
-            return f"((unsigned int)((unsigned char*)gN64_PIF_Base + 0x{offset:X}))"
+            return f"((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + 0x{offset:X}))"
         # Route RCP Virtual Addresses (0xA4000000 to 0xA4FFFFFF)
         if 0xA4000000 <= val < 0xA5000000:
             offset = val - 0xA4000000
-            return f"((unsigned int)((unsigned char*)gN64_Reg_Base + 0x{offset:X}))"
+            return f"((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + 0x{offset:X}))"
         return hex_str
 
     # Find and route all raw hardcoded Hex memory addresses
@@ -207,12 +208,12 @@ def apply_android_memory_routing(content, filename):
     if filename == "os_convert.h":
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000))))',
+            r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000))))',
             content
         )
         content = re.sub(
             r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*',
-            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000))))',
+            r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? ((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000))))',
             content
         )
         content = re.sub(
@@ -229,12 +230,12 @@ def apply_android_memory_routing(content, filename):
     if filename == "R4300.h":
         content = re.sub(
             r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000)))',
+            r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0xA0000000)))',
             content
         )
         content = re.sub(
             r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*',
-            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)gN64_Reg_Base + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)gN64_PIF_Base + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000)))',
+            r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? (unsigned int)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : (((unsigned int)(x) >= 0x1FC00000 && (unsigned int)(x) < 0x1FC01000) ? (unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + ((unsigned int)(x) - 0x1FC00000)) : ((unsigned int)(x)|0x80000000)))',
             content
         )
         content = re.sub(
@@ -326,6 +327,7 @@ def fix_linkage_conflicts(content):
 
         if first_func_match:
             pos = first_func_match.start()
+
             clean_pre_text = clean_content[:pos]
 
             last_semi = clean_pre_text.rfind(';')
