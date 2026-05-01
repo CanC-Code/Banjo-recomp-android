@@ -321,6 +321,7 @@ def sanitize_codebase(root_path):
         "include",
         os.path.join("include", "2.0L"),
         os.path.join("include", "2.0L", "PR"),
+        os.path.join("include", "core2"),
     ]
 
     for ch in headers_to_redirect:
@@ -388,5 +389,19 @@ def sanitize_codebase(root_path):
     print(f"\nSanitization Complete: {patch_count} native files, {wrapper_count} wrappers patched.")
 
 if __name__ == "__main__":
-    src_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
-    sanitize_codebase(src_dir)
+    # Get the root of the Banjo-recomp-android repository
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Define all directories that need sanitization
+    target_dirs = [
+        os.path.join(repo_root, "src"),
+        os.path.join(repo_root, "include"),
+        os.path.join(repo_root, "Android", "app", "src", "main", "cpp")
+    ]
+    
+    for t_dir in target_dirs:
+        if os.path.exists(t_dir):
+            print(f"--- Processing directory: {t_dir} ---")
+            sanitize_codebase(t_dir)
+        else:
+            print(f"Warning: Target directory not found: {t_dir}")
