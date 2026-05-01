@@ -106,11 +106,14 @@ def fix_linkage_conflicts(content):
         if re.search(r"^[ \t]*(?!static\b|typedef\b)[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE):
             content = content.replace("static " + full_sig, full_sig)
 
-    # 2. Automated Forward Declarations for Static Functions with Type Handling
+    # 2. Automated Forward Declarations for Static Functions
     sigs, added = [], set()
     custom_types = set()
-    standard_types = {'static', 'void', 'int', 'char', 'short', 'long', 'float', 'double', 'unsigned', 'signed', 
-                      's8', 'u8', 's16', 'u16', 's32', 'u32', 's64', 'u64', 'f32', 'f64', 'n64_bool'}
+    # List of types that are already defined in project headers and must not be re-typedef'd
+    KNOWN_GLOBALS = {
+        'Actor', 'ActorMarker', 'Marker', 'Gfx', 'Vtx', 'Mtx', 'Light', 'LookAt', 'Hilite',
+        'u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'f32', 'f64', 'n64_bool'
+    }
 
     clean = re.sub(r'("(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*)', ' ', content, flags=re.DOTALL)
     existing_protos = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
@@ -123,13 +126,19 @@ def fix_linkage_conflicts(content):
             if name not in existing_protos and name not in added:
                 sigs.append(f"static {full_def_sig};")
                 added.add(name)
-                # Find identifiers used as pointers to forward declare them as structs
+                # Extract type names used as pointers
                 found_ptr_types = re.findall(r'\b([a-zA-Z_]\w*)\s*\*+', full_def_sig)
                 for t in found_ptr_types:
-                    if t not in standard_types: custom_types.add(t)
+                    # HEURISTIC: Skip if it's a known global, or if it looks like a standard typedef (Capitalized)
+                    # We only want to re-declare decompiler locals which usually have lowercase prefixes like 'sCh'
+                    if t in KNOWN_GLOBALS: continue
+                    if t[0].isupper() and not (len(t) > 1 and t[0] == 's' and t[1].isupper()):
+                        continue
+                    # Also skip if the file itself already defines this type
+                    if re.search(rf'\btypedef\s+[^;]+\b{t}\s*;', content): continue
+                    custom_types.add(t)
 
     if sigs:
-        # Pre-declare types to prevent "unknown type" errors in prototypes
         type_decls = [f"typedef struct {t} {t};" for t in sorted(custom_types)]
         block = "\n/* Automated Forward Decls for Linkage Fix */\n"
         if type_decls: block += "\n".join(type_decls) + "\n"
