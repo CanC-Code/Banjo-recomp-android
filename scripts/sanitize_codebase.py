@@ -1,21 +1,39 @@
-#!/usr/bin/env python3
 import os
 import re
+import sys
 import traceback
 
-# === CONFIGURATION ===
-# Replaced tokens for standardization
+TARGET_DIRS = ["src", "include", "lib", "libultra", "Android/app/src/main/cpp"]
+CONFLICTING_HEADERS = ["string.h", "time.h", "math.h", "stdlib.h", "stdio.h", "stdarg.h", "stdint.h", "bool.h"]
+
 TOKEN_REPLACEMENTS = {
     r"\bbool\b": "n64_bool",
     r"\btrue\b": "TRUE",
-    r"\bfalse\b": "FALSE"
+    r"\bfalse\b": "FALSE",
+    r"\bstrcat\b": "n64_strcat",
+    r"\bstrcpy\b": "n64_strcpy",
+    r"\bstrlen\b": "n64_strlen",
+    r"\bmemcpy\b": "n64_memcpy",
+    r"\bmemmove\b": "n64_memmove",
+    r"\bmalloc\b": "n64_malloc",
+    r"\bfree\b": "n64_free",
+    r"\brealloc\b": "n64_realloc",
+    r"\bcalloc\b": "n64_calloc",
+    r"\bsprintf\b": "n64_sprintf",
+    r"\bprintf\b": "n64_printf",
+    r"\bsin\b": "n64_sin",
+    r"\bcos\b": "n64_cos",
+    r"\bvu8\b": "volatile u8",
+    r"\bvs8\b": "volatile s8",
+    r"\bvu16\b": "volatile u16",
+    r"\bvs16\b": "volatile s16",
+    r"\bvu32\b": "volatile u32",
+    r"\bvs32\b": "volatile s32",
+    r"\bvu64\b": "volatile u64",
+    r"\bvs64\b": "volatile s64",
+    r"\bvf32\b": "volatile f32",
+    r"\bvf64\b": "volatile f64",
 }
-
-CORE_TYPE_HEADERS = [
-    'n64_types.h', 'ultra64.h', 'ultratypes.h',
-    'types.h', 'n64_types_compat.h'
-]
-
 COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
 SHADOW_TYPES = r'\b(?:u8|s8|u16|s16|u32|s32|f32|int|char|short|long|float|double)\b'
@@ -30,12 +48,12 @@ TYPES_INCLUDE_PATTERNS = [
 ]
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 
-# === HELPER FUNCTIONS ===
+CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
-    path_lower = filepath.lower()
     if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
         return True
+    path_lower = filepath.replace('\\', '/').lower()
     if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
     if re.search(r'#include\s*[<"]jni\.h[">]', content) or re.search(r'#include\s*[<"]android/', content):
@@ -46,18 +64,18 @@ def needs_types_injection(content):
     return not bool(TYPES_INCLUDE_RE.search(content))
 
 def inject_types_include(content, is_c_file=False):
-    if not needs_types_injection(content):
-        return content
+    if is_c_file:
+        content = re.sub(r'^[ \t]*#[ \t]*include[ \t]*[<"]n64_types\.h[">][ \t]*\n?', '', content, flags=re.MULTILINE)
 
     lines = content.split('\n')
-    
+
     if is_c_file:
         last_include_idx = -1
         for i, line in enumerate(lines):
             s = line.strip()
             if re.match(r'^#[ \t]*include\b', s):
                 last_include_idx = i
-                
+
         if last_include_idx >= 0:
             lines.insert(last_include_idx + 1, '#include <n64_types.h>')
         else:
@@ -67,12 +85,12 @@ def inject_types_include(content, is_c_file=False):
     insert_idx = 0
     for i, line in enumerate(lines):
         s = line.strip()
-        if not s or s.startswith('//') or s.startswith('/*'):
+        if not s or s.startswith('//') or s.startswith('/*') or s.startswith('*'):
             continue
         if re.match(r'^#[ \t]*pragma[ \t]+once\b', s):
             insert_idx = i + 1
             break
-        if re.match(r'^#[ \t]*ifndef\b', s) or re.match(r'^#[ \t]*define\b', s):
+        if re.match(r'^#[ \t]*ifndef\b', s) or re.match(r'^#[ \t]*if[ \t]+!defined\b', s):
             for j in range(i+1, min(i+5, len(lines))):
                 if re.match(r'^#[ \t]*define\b', lines[j].strip()):
                     insert_idx = j + 1
@@ -82,7 +100,7 @@ def inject_types_include(content, is_c_file=False):
             break
         insert_idx = i
         break
-        
+
     lines.insert(insert_idx, '#include <n64_types.h>')
     return '\n'.join(lines)
 
@@ -103,37 +121,37 @@ def inject_extern_c(content, filename):
         else:
             new_lines.append(line)
 
-    result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n#ifdef __cplusplus\n}\n#endif"
-    
-    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\n#ifdef __cplusplus\n\}\n#endif\n', re.MULTILINE)
+    result = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n" + '\n'.join(new_lines) + "\n\n#ifdef __cplusplus\n}\n#endif\n"
+
+    empty_block_pattern = re.compile(r'#ifdef __cplusplus\nextern "C" \{\n#endif\s*#ifdef __cplusplus\n\}\n#endif\s*', re.MULTILINE)
     result = empty_block_pattern.sub('', result)
-    
-    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\n#ifdef __cplusplus\nextern "C" \{\n#endif\n', re.MULTILINE)
+
+    merge_pattern = re.compile(r'#ifdef __cplusplus\n\}\n#endif\s*#ifdef __cplusplus\nextern "C" \{\n#endif\s*', re.MULTILINE)
     result = merge_pattern.sub('\n', result)
-    
+
     return result.strip() + '\n'
 
-def redirect_legacy_includes(content, headers_to_redirect, is_wrapper, filename):
+def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
     if filename not in CORE_TYPE_HEADERS:
-        content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '#include <n64_types.h>', content)
-        content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '#include <n64_types.h>', content)
+        content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+        content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
 
     if not is_wrapper:
         for ch in headers_to_redirect:
             escaped_ch = ch.replace('.', r'\.')
-            content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'#include <n64_{ch}>', content)
+            content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
 
     sdk_headers = [
         'libaudio.h', 'n_libaudio.h', 'os.h', 'rcp.h', 'sptask.h', 'gu.h',
-        'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h',
-        'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_pi.h',
-        'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_vi.h',
-        'os_internal.h', 'os_cont.h', 'os_cache.h', 'os_debug.h',
-        'os_error.h', 'os_exception.h', 'os_gbpak.h', 'os_gio.h',
-        'os_rdp.h', 'os_reg.h', 'os_rsp.h', 'os_system.h', 'os_tlb.h',
-        'os_voice.h', 'PRimage.h', 'R4300.h', 'gs2dex.h', 'gu_hal.h',
-        'leoappli.h', 'ramrom.h', 'rdb.h', 'rmon.h', 'ucode.h', 'ultrahost.h',
-        'ultraerror.h', 'uportals.h', 'n_abi.h', 'n_libaudio_s_sn.h',
+        'mbi.h', 'gbi.h', 'abi.h', 'ultralog.h', 'sp.h', 'region.h', 'sched.h',
+        'os_message.h', 'os_libc.h', 'os_thread.h', 'os_si.h', 'os_vi.h',
+        'os_pi.h', 'os_ai.h', 'os_pfs.h', 'os_motor.h', 'os_time.h', 'os_flash.h',
+        'os_internal.h', 'os_cont.h', 'os_cache.h', 'os_debug.h', 'os_eeprom.h',
+        'os_error.h', 'os_exception.h', 'os_gbpak.h', 'os_gio.h', 'os_host.h',
+        'os_rdp.h', 'os_reg.h', 'os_rsp.h', 'os_system.h', 'os_tlb.h', 'os_version.h',
+        'os_voice.h', 'PRimage.h', 'R4300.h', 'gs2dex.h', 'gt.h', 'leo.h',
+        'leoappli.h', 'ramrom.h', 'rdb.h', 'rmon.h', 'ucode.h', 'ucode_debug.h',
+        'ultraerror.h', 'uportals.h', 'n_abi.h', 'n_libaudio_s_to_n.h',
         'os_internal_debug.h', 'os_internal_error.h', 'os_internal_exception.h',
         'os_internal_gio.h', 'os_internal_host.h', 'os_internal_reg.h',
         'os_internal_rsp.h', 'os_internal_si.h', 'os_internal_thread.h',
@@ -144,10 +162,10 @@ def redirect_legacy_includes(content, headers_to_redirect, is_wrapper, filename)
         content = re.sub(rf'#include\s*<(?![pP][rR]/){header}>', f'#include <PR/{header}>', content)
         content = re.sub(rf'#include\s*"(?![pP][rR]/){header}"', f'#include "PR/{header}"', content)
 
-    content = re.sub(r'#include\s*[<"]PR/n_synth\.h[">]', '#include <n64_n_synth.h>', content)
-    content = re.sub(r'#include\s*[<"]PR/n_synthInternals\.h[">]', '#include <n64_n_synthInternals.h>', content)
-    content = re.sub(r'#include\s*[<"]PR/synthInternals\.h[">]', '#include <n64_synthInternals.h>', content)
-    content = re.sub(r'#include\s*[<"]PR/n_libaudio_sn\.h[">]', '#include <n64_n_libaudio_sn.h>', content)
+    content = re.sub(r'#include\s*[<"]PR/n_synth\.h[">]', '#include "n_synth.h"', content)
+    content = re.sub(r'#include\s*[<"]PR/n_synthInternals\.h[">]', '#include "n_synthInternals.h"', content)
+    content = re.sub(r'#include\s*[<"]PR/synthInternals\.h[">]', '#include "synthInternals.h"', content)
+    content = re.sub(r'#include\s*[<"]PR/n_libaudio_sn\.h[">]', '#include "n_libaudio_sn.h"', content)
 
     return content
 
@@ -160,6 +178,108 @@ def safe_token_replacement(content, tokens=COMPILED_TOKENS):
                 code_chunk = pat.sub(repl, code_chunk)
             parts[i] = code_chunk
     return "".join(parts)
+
+def fix_decompiler_artifacts(content, filename):
+    shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+(\2)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*;', re.MULTILINE)
+    shadow_matches = shadow_pattern.findall(content)
+
+    for indent, type_name, var_name, size in shadow_matches:
+        decl_line = rf'{indent}{type_name}\s+{var_name}\s*\['
+        content = re.sub(decl_line, f'{indent}{type_name} buffer_{var_name}[', content)
+        content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buffer_{var_name}[', content)
+
+    assign_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z0-9_]+)\s*\[\s*([a-zA-Z0-9_]+)\s*\]\s*=\s*([^;]+)\s*;', re.MULTILINE)
+
+    def array_to_memcpy(match):
+        indent, dtype, name, size, src = match.groups()
+        src = src.strip()
+        if src.startswith('{') or src.startswith('"') or src.startswith("'"):
+            return match.group(0)
+        return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
+
+    content = assign_pattern.sub(array_to_memcpy, content)
+    return content
+
+def fix_struct_shadowing(content):
+    for shadow_type in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64']:
+        pat = re.compile(r'\}\s*' + shadow_type + r'\s*;')
+        if pat.search(content):
+            content = pat.sub(f'}} {shadow_type}_struct;', content)
+            content = content.replace(f".{shadow_type}.", f".{shadow_type}_struct.")
+            content = content.replace(f"->{shadow_type}.", f"->{shadow_type}_struct.")
+    return content
+
+def fix_linkage_conflicts(content):
+    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
+    for match in static_def_pattern.finditer(content):
+        full_sig = match.group(1)
+        func_name = match.group(2)
+
+        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
+        has_non_static_proto = False
+        for p_match in proto_pattern.finditer(content):
+            proto_line = p_match.group(0)
+            if "static" not in proto_line and "typedef" not in proto_line:
+                has_non_static_proto = True
+                break
+
+        if has_non_static_proto:
+            content = content.replace("static " + full_sig, full_sig)
+
+    static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
+    matches = static_func_pattern.findall(content)
+    if not matches: return content
+
+    signatures = []
+    added_funcs = set()
+
+    for full_sig, func_name in matches:
+        has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
+        if not has_prototype and func_name not in added_funcs:
+            decl = f"{full_sig.strip()};"
+            signatures.append(decl)
+            added_funcs.add(func_name)
+
+    if signatures:
+        header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
+
+        def repl(m): return ' ' * len(m.group(0))
+        clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
+        clean_content = re.sub(r'//.*', repl, clean_content)
+        clean_content = re.sub(r'".*?"', repl, clean_content)
+        clean_content = re.sub(r"'.*?'", repl, clean_content)
+
+        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
+
+        first_func_match = func_def_pattern.search(clean_content)
+
+        if first_func_match:
+            pos = first_func_match.start()
+
+            clean_pre_text = clean_content[:pos]
+
+            last_semi = clean_pre_text.rfind(';')
+            last_semi_pos = last_semi + 1 if last_semi != -1 else 0
+
+            last_inc_match = list(re.finditer(r'^[ \t]*#[ \t]*include[^\n]*', clean_pre_text, re.MULTILINE))
+            last_inc_pos = last_inc_match[-1].end() if last_inc_match else 0
+
+            last_macro_match = list(re.finditer(r'^[ \t]*#[ \t]*define[^\n]*', clean_pre_text, re.MULTILINE))
+            last_macro_pos = last_macro_match[-1].end() if last_macro_match else 0
+
+            insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
+
+            if insert_idx > 0:
+                while insert_idx < pos and content[insert_idx] in ' \t\r\n':
+                    insert_idx += 1
+            else:
+                insert_idx = 0
+
+            content = content[:insert_idx] + header_block + content[insert_idx:]
+        else:
+            content = content + "\n" + header_block
+
+    return content
 
 def apply_android_memory_routing(content, filename):
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
@@ -198,6 +318,13 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
     (unsigned long)(addr) \\
 )\n\n"""
+    
+    has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
+    has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
+    
+    if not (has_memory_access or has_hardcoded_ptrs):
+        return content
+
     content = header + content
     ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
     content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
@@ -220,135 +347,62 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
 
     return content
 
-def fix_decompiler_artifacts(content, filename):
-    shadow_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z_]\w*)\s*\[\s*([^\]]+)\s*\]\s*;\s*', re.MULTILINE)
-    shadow_matches = shadow_pattern.findall(content)
-
-    for indent, type_name, var_name, size in shadow_matches:
-        decl_line = rf'{indent}{type_name}\s+{var_name}\s*\[\s*{re.escape(size)}\s*\]\s*;'
-        content = re.sub(decl_line, f'{indent}{type_name} buf_{var_name}[{size}];\n{indent}{type_name}* {var_name} = buf_{var_name};', content)
-        content = re.sub(rf'\b{var_name}\s*\[(?!\s*\])', f'buf_{var_name}[', content)
-
-    # Re-integrated memcpy generation for array assignments
-    assign_pattern = re.compile(rf'^([ \t]+)({SHADOW_TYPES})\s+([a-zA-Z_]\w*)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+)\s*;', re.MULTILINE)
-    
-    def array_to_memcpy(match):
-        indent, dtype, name, size, src = match.groups()
-        src = src.strip()
-        if src.startswith('{') or src.startswith('"') or src.startswith('\''):
-            return match.group(0)
-        return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
-
-    content = assign_pattern.sub(array_to_memcpy, content)
-    return content
-
-def fix_struct_shadowing(content):
-    for shadow_type in ['u8', 's8', 'u16', 's16', 'u32', 's32', 'f32']:
-        pat = re.compile(r'\}\s*' + shadow_type + r'\s*;')
-        if pat.search(content):
-            content = pat.sub(f'}} {shadow_type}_struct;', content)
-            content = content.replace(f".{shadow_type}.", f".{shadow_type}_struct.")
-            content = content.replace(f"->{shadow_type}.", f"->{shadow_type}_struct.")
-    return content
-
-def fix_linkage_conflicts(content):
-    # 1. Extern vs Static conflict resolution
-    extern_pattern = re.compile(r"^[ \t]*extern\s+((?:[\w\s\*]+?)\s+([a-zA-Z_]\w*)\s*\([^;]*\));", re.MULTILINE)
-    for match in extern_pattern.finditer(content):
-        full_sig, func_name = match.group(1), match.group(2)
-        if re.search(r"^[ \t]*(?!static\b|typedef\b)[\w\s\*]*\b" + re.escape(func_name) + r"\b\s*\(", content, re.MULTILINE):
-            continue
-            
-        static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?\b" + re.escape(func_name) + r"\b\s*\([^;]+?\))\s*\{", re.MULTILINE)
-        if static_func_pattern.search(content):
-             content = content.replace(match.group(0), f"/* Removed conflicting extern: {match.group(0)} */")
-
-    # 2. Automated Forward Declarations for Static Functions
-    sigs, added = [], set()
-    custom_types = set()
-    KNOWN_GLOBALS = {
-        'Actor', 'ActorMarker', 'Marker', 'Gfx', 'Vtx', 'Mtx', 'OSMesg',
-        'u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'f32', 'f64'
-    }
-
-    clean = re.sub(r'("(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*)', '', content, flags=re.DOTALL)
-    existing_protos = set(re.findall(r'\b(\w+)\s*\([^;{]*\)\s*;', clean))
-
-    for match in re.finditer(r"^[ \t]*static\s+([^{;]+)\s*\{", content, re.MULTILINE):
-        full_def_sig = match.group(1).strip()
-        name_match = re.search(r'(\w+)\s*\(', full_def_sig)
-        if name_match:
-            name = name_match.group(1)
-            if name not in existing_protos and name not in added:
-                sigs.append(f"static {full_def_sig};")
-                added.add(name)
-                found_ptr_types = re.findall(r'\b([a-zA-Z_]\w*)\s*\*', full_def_sig)
-                for t in found_ptr_types:
-                    if t in KNOWN_GLOBALS: continue
-                    if t[0].isupper() and not (len(t) > 1 and t[1].isupper()):
-                        continue
-                    if re.search(rf'\btypedef\s+[^;]+\b{t}\s*;', content): continue
-                    custom_types.add(t)
-
-    if sigs:
-        type_decls = [f"typedef struct {t} {t};" for t in sorted(custom_types)]
-        block = "\n/* Automated Forward Decls for Linkage Fix */\n"
-        if type_decls: block += "\n".join(type_decls) + "\n"
-        block += "\n".join(sigs) + "\n\n"
-
-        lines = content.split('\n')
-        last_include_idx = -1
-        for i, line in enumerate(lines):
-            if re.match(r'^#[ \t]*include\b', line.strip()):
-                last_include_idx = i
-        if last_include_idx != -1: lines.insert(last_include_idx + 1, block)
-        else: lines.insert(0, block)
-        content = '\n'.join(lines)
-        
-    return content
-
-# === MAIN LOGIC ===
-
 def sanitize_codebase(root_path):
-    print("Starting Deep Codebase Sanitization for Android Recompilation...")
-    
-    headers_to_redirect = [
-        'types.h', 'math.h', 'memory.h', 'string.h',
-        'stdarg.h', 'stddef.h', 'stdlib.h', 'assert.h'
-    ]
-    
+    print(f"🧹 Scanning for sanitization: {root_path}")
+
     include_search_dirs = [
         "include",
         os.path.join("include", "2.0L"),
         os.path.join("include", "2.0L", "PR"),
-        os.path.join("include", "core2"),
     ]
 
-    for ch in headers_to_redirect:
+    headers_to_redirect = set()
+
+    for ch in CONFLICTING_HEADERS:
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
+            
+            # Identify if either the old or new header currently exists to flag code parsing
             if os.path.exists(old_path) or os.path.exists(new_path):
-                if os.path.exists(old_path) and not os.path.exists(new_path):
+                headers_to_redirect.add(ch)
+                
+                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed to avoid shadowing NDK paths.
+                # The crucial fix here enforces the removal of stale n64_* files from previous dirty builds, 
+                # ensuring the checked-in header can always be renamed safely without failing an `exists()` block.
+                if os.path.exists(old_path):
+                    if os.path.exists(new_path):
+                        os.remove(new_path)
                     os.rename(old_path, new_path)
-                    print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch}")
+                    print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
     wrapper_count = 0
 
-    for subdir, _, files in os.walk(root_path):
-        if '/build/' in subdir.replace('\\', '/') or '/.git/' in subdir.replace('\\', '/'):
-            continue
+    for dir_name in TARGET_DIRS:
+        dir_path = os.path.join(root_path, dir_name)
+        if not os.path.exists(dir_path): continue
 
-        for filename in files:
-            if filename.endswith(('.h', '.c', '.cpp', '.hpp')):
-                filepath = os.path.join(subdir, filename)
+        for root, _, files in os.walk(dir_path):
+            for filename in files:
+                if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
+                filepath = os.path.join(root, filename)
+
                 try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
+                    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
 
                     is_wrapper = is_modern_wrapper(filepath, original_content)
                     content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
+
+                    if is_wrapper:
+                        content = apply_android_memory_routing(content, filename)
+                        
+                        if content != original_content:
+                            with open(filepath, 'w', encoding='utf-8') as f:
+                                f.write(content)
+                            wrapper_count += 1
+                        continue
 
                     if filename in CORE_TYPE_HEADERS:
                         bool_tokens = [
@@ -367,41 +421,23 @@ def sanitize_codebase(root_path):
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
                         if filename not in CORE_TYPE_HEADERS:
-                            content = inject_types_include(content, True)
+                            content = inject_types_include(content, is_c_file=True)
 
                     if filename.endswith('.h'):
-                        if filename not in CORE_TYPE_HEADERS and not is_wrapper:
-                            content = inject_types_include(content, False)
+                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
+                            content = inject_types_include(content, is_c_file=False)
                         content = inject_extern_c(content, filename)
 
                     if content != original_content:
                         with open(filepath, 'w', encoding='utf-8') as f:
                             f.write(content)
-                        if is_wrapper:
-                            wrapper_count += 1
-                        else:
-                            patch_count += 1
+                        patch_count += 1
 
                 except Exception as e:
                     print(f"❌ CRITICAL EXCEPTION in {filepath}:\n{traceback.format_exc()}")
                     continue
 
-    print(f"\nSanitization Complete: {patch_count} native files, {wrapper_count} wrappers patched.")
+    print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers aligned.")
 
 if __name__ == "__main__":
-    # Get the root of the Banjo-recomp-android repository
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Define all directories that need sanitization
-    target_dirs = [
-        os.path.join(repo_root, "src"),
-        os.path.join(repo_root, "include"),
-        os.path.join(repo_root, "Android", "app", "src", "main", "cpp")
-    ]
-    
-    for t_dir in target_dirs:
-        if os.path.exists(t_dir):
-            print(f"--- Processing directory: {t_dir} ---")
-            sanitize_codebase(t_dir)
-        else:
-            print(f"Warning: Target directory not found: {t_dir}")
+    sanitize_codebase(sys.argv[1] if len(sys.argv) > 1 else ".")
