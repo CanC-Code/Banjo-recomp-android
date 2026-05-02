@@ -29,19 +29,18 @@ static jobject   g_otrService  = nullptr;  // global ref to OtrService instance
 static jmethodID g_progressMid = nullptr;  // OtrService.updateOtrProgress(int, String)
 
 // ============================================================
-// Forward declarations for engine functions implemented
-// elsewhere in the bridge (otr_builder.cpp, resource_mgr.cpp, etc.)
-// Replace these stubs with real calls once those modules are wired up.
+// Forward declarations for engine functions confirmed to exist
+// in the compiled object files.
+//
+// ResourceMgr_Init — confirmed present in resource_mgr.cpp.o
+//   (linker error: "did you mean: ResourceMgr_Init")
+//
+// OtrBuilder_run and GameLoop_run have no definition anywhere
+// in the build; they are stubbed inline below until implemented.
 // ============================================================
 extern "C" {
-    // Implemented in ultra/otr_builder.cpp
-    void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDir);
-
-    // Implemented in emulator/resource_mgr.cpp
-    void ResourceMgr_init(const char* otrPath, AAssetManager* assetMgr);
-
-    // Implemented in emulator/stubs.cpp or the game loop entry point
-    void GameLoop_run();
+    // Confirmed symbol from emulator/resource_mgr.cpp
+    void ResourceMgr_Init(const char* otrPath, AAssetManager* assetMgr);
 }
 
 // ============================================================
@@ -51,7 +50,7 @@ extern "C" {
 extern "C" void BKA_UpdateProgress(int percent, const char* status) {
     if (!g_jvm || !g_otrService || !g_progressMid) return;
 
-    JNIEnv* env = nullptr;
+    JNIEnv* env     = nullptr;
     bool    attached = false;
 
     jint rc = g_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
@@ -87,7 +86,6 @@ Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env,
 
     env->GetJavaVM(&g_jvm);
 
-    // Release previous ref if reinitialised
     if (g_otrService) {
         env->DeleteGlobalRef(g_otrService);
         g_otrService = nullptr;
@@ -108,7 +106,12 @@ Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env,
 // ============================================================
 // 2. runOtrGeneration(int fd, AssetManager assetManager, String outDir)
 //    Runs asset extraction on the calling thread (OtrService's
-//    BKA-ExtractionThread). Calls BKA_UpdateProgress as it goes.
+//    BKA-ExtractionThread).
+//
+//    OtrBuilder_run has no definition in any compiled object —
+//    stubbed here until otr_builder.cpp implements it.
+//    Replace the stub body with the real call when ready:
+//      OtrBuilder_run(static_cast<int>(fd), assetMgr, outDir);
 // ============================================================
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv*  env,
@@ -122,17 +125,25 @@ Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv*  env,
     AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
     const char*    outDir   = env->GetStringUTFChars(outDirStr, nullptr);
 
-    OtrBuilder_run(static_cast<int>(fd), assetMgr, outDir);
+    // TODO: replace stub with OtrBuilder_run(fd, assetMgr, outDir)
+    //       once ultra/otr_builder.cpp defines that symbol.
+    LOGI("runOtrGeneration: OtrBuilder_run not yet implemented — stub returning");
+    BKA_UpdateProgress(100, "done");
 
     env->ReleaseStringUTFChars(outDirStr, outDir);
+    (void)assetMgr;
     // fd is now owned by C++; do not close here.
     LOGI("runOtrGeneration complete");
 }
 
 // ============================================================
 // 3. nativeGameBoot(String otrPath, AssetManager assetManager)
-//    Initialises ResourceMgr then blocks in the game loop.
+//    Initialises ResourceMgr then enters the game loop (blocking).
 //    Must be called on a dedicated background thread.
+//
+//    ResourceMgr_Init — confirmed symbol (capital I).
+//    GameLoop_run     — no definition found anywhere in the build;
+//                       stubbed here until implemented.
 // ============================================================
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env,
@@ -145,11 +156,12 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env,
     AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
     const char*    otrPath  = env->GetStringUTFChars(otrPathStr, nullptr);
 
-    ResourceMgr_init(otrPath, assetMgr);
+    ResourceMgr_Init(otrPath, assetMgr);   // confirmed symbol — capital I
     env->ReleaseStringUTFChars(otrPathStr, otrPath);
 
-    GameLoop_run();   // blocks until game exits
-    LOGI("nativeGameBoot returned");
+    // TODO: replace stub with real game loop entry point once
+    //       that symbol exists in the build.
+    LOGI("nativeGameBoot: GameLoop_run not yet implemented — stub returning");
 }
 
 // ============================================================
