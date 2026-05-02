@@ -67,25 +67,17 @@
 extern "C" {
 
 // ============================================================
-// 2. STATIC MEMORY ALLOCATION (CRITICAL FIX)
-// Statically allocate 1MB of aligned memory in the .bss segment.
-// This guarantees valid memory at load-time before any Java 
-// or JNI code executes.
+// 2. STATIC MEMORY ALLOCATION
 // ============================================================
 static uint8_t s_N64_Reg_Memory[1024 * 1024] __attribute__((aligned(16)));
-
 uint32_t* gN64_Reg_Base = (uint32_t*)s_N64_Reg_Memory;
 
-// The JNI initialization hook is preserved to satisfy NativeBridge.cpp 
-// but requires no logic because memory is now statically guaranteed.
 void InitN64Registers() {
-    // Intentionally left blank.
+    // Statically allocated; no logic required.
 }
 
 // ============================================================
 // 3. HARDWARE REGISTER POINTER MAPPING
-// All pointers are safely calculated at compile/load time 
-// via relative offsets to the static array.
 // ============================================================
 RECOMP_SYMBOL uint32_t* SP_DMEM              = (uint32_t*)(s_N64_Reg_Memory + 0x0000);
 RECOMP_SYMBOL uint32_t* SP_IMEM              = (uint32_t*)(s_N64_Reg_Memory + 0x1000);
