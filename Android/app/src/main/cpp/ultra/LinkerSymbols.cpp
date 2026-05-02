@@ -59,6 +59,9 @@
 #undef DPC_PIPEBUSY_REG
 #undef DPC_TMEM_REG
 
+#undef PIF_RAM
+#undef PIF_ROM
+
 #define RECOMP_SYMBOL __attribute__((used)) __attribute__((visibility("default")))
 
 extern "C" {
@@ -137,6 +140,9 @@ RECOMP_SYMBOL uint32_t* DPC_CLOCK_REG         = (uint32_t*)(s_N64_Reg_Memory + 0
 RECOMP_SYMBOL uint32_t* DPC_BUFBUSY_REG       = (uint32_t*)(s_N64_Reg_Memory + 0x9014);
 RECOMP_SYMBOL uint32_t* DPC_PIPEBUSY_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x9018);
 RECOMP_SYMBOL uint32_t* DPC_TMEM_REG          = (uint32_t*)(s_N64_Reg_Memory + 0x901C);
+
+RECOMP_SYMBOL uint32_t* PIF_RAM               = (uint32_t*)(s_N64_Reg_Memory + 0xA000);
+RECOMP_SYMBOL uint32_t* PIF_ROM               = (uint32_t*)(s_N64_Reg_Memory + 0xA000);
 
 // ============================================================
 // 4. MATH & ENGINE GLOBALS
