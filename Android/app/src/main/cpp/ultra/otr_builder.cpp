@@ -8,7 +8,12 @@
 #include <sys/syscall.h>
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
+#include <android/log.h>
 #include "rare_decompression.h"
+
+#define LOG_TAG "BKA-Builder"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // --- 1. Shadow-Proof Kernel System Calls ---
 static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
@@ -56,10 +61,12 @@ void ensure_directories(const char* path) {
 
 extern "C" {
 void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) {
+    LOGI(">>> OTR Extraction Started (romFd: %d, outDir: %s)", romFd, outDirPath);
     BKA_UpdateProgress(0, "DEBUG 1: Entered native extraction");
 
     AAsset* manifestAsset = AAssetManager_open(assetMgr, "manifest.bin", AASSET_MODE_BUFFER);
     if (!manifestAsset) {
+        LOGE("FATAL ERROR: 'manifest.bin' not found in assets folder!");
         BKA_UpdateProgress(0, "ERROR: manifest.bin not found in assets");
         return;
     }
@@ -68,6 +75,7 @@ void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) 
     off_t manifestSize = AAsset_getLength(manifestAsset);
 
     if (!manifestPtr || manifestSize < 4) {
+        LOGE("FATAL ERROR: Manifest is empty or invalid (size: %ld)", (long)manifestSize);
         BKA_UpdateProgress(0, "ERROR: Manifest is empty or invalid");
         AAsset_close(manifestAsset);
         return;
@@ -76,8 +84,11 @@ void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) 
     BKA_UpdateProgress(0, "DEBUG 2: Reading manifest header");
     uint32_t entryCount = read_u32_safe(manifestPtr);
     const uint8_t* recordStart = manifestPtr + 4;
+    
+    LOGI("Manifest loaded: %ld bytes, Entry count: %u", (long)manifestSize, entryCount);
 
     if (entryCount == 0 || entryCount > 50000) {
+        LOGE("FATAL ERROR: Invalid entry count %u", entryCount);
         BKA_UpdateProgress(0, "ERROR: Invalid entry count");
         AAsset_close(manifestAsset);
         return;
@@ -88,6 +99,7 @@ void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) 
     for (uint32_t i = 0; i < entryCount; i++) {
         const uint8_t* record = recordStart + (i * 48);
         if (record + 48 > manifestPtr + manifestSize) {
+            LOGE("WARNING: Reached end of manifest prematurely at index %u", i);
             break;
         }
 
@@ -99,6 +111,10 @@ void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) 
         fileName[32] = '\0';
 
         int percentage = (int)(((i + 1) * 100) / entryCount);
+
+        if (i % 100 == 0) {
+             LOGI("Extracting file %u/%u: %s (size: %u, offset: %u)", i, entryCount, fileName, fileSize, romOffset);
+        }
 
         if (fileSize == 0) {
             BKA_UpdateProgress(percentage, fileName);
@@ -121,7 +137,8 @@ void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) 
         if (compressedBuffer) {
             if (i == 0) BKA_UpdateProgress(0, "DEBUG 5: Reading ROM");
 
-            if (safe_pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
+            ssize_t readResult = safe_pread(romFd, compressedBuffer, fileSize, romOffset);
+            if (readResult == (ssize_t)fileSize) {
                 uint32_t decompressedSize = 0;
 
                 if (i == 0) BKA_UpdateProgress(0, "DEBUG 6: Decompressing asset");
@@ -135,18 +152,28 @@ void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDirPath) 
                 if (outFd != -1) {
                     safe_write(outFd, writePtr, writeSize);
                     safe_close(outFd);
+                } else if (i == 0) {
+                    LOGE("ERROR: Failed to open output file for writing: %s", fullPath);
                 }
                 if (finalBuffer) ::free(finalBuffer);
+            } else if (i == 0) {
+                LOGE("ERROR: safe_pread failed. Expected %u bytes, got %zd", fileSize, readResult);
             }
             ::free(compressedBuffer);
+        } else if (i == 0) {
+            LOGE("ERROR: Failed to allocate %u bytes for compressedBuffer", fileSize);
         }
 
-        if (i == 0) BKA_UpdateProgress(0, "DEBUG 8: First file completely successful!");
+        if (i == 0) {
+            LOGI("First file extraction cycle completed");
+            BKA_UpdateProgress(0, "DEBUG 8: First file completely successful!");
+        }
 
         BKA_UpdateProgress(percentage, fileName);
     }
 
     AAsset_close(manifestAsset);
+    LOGI(">>> OTR Extraction Successfully Finished");
     BKA_UpdateProgress(100, "Extraction Complete! Booting Game...");
 }
 }
