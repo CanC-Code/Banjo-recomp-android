@@ -32,6 +32,17 @@ public class OtrService extends Service {
     public static final String ACTION_OTR_ERROR    = "OTR_ERROR";
 
     // -----------------------------------------------------------------------
+    // Static Library Loading (CRITICAL FIX)
+    // -----------------------------------------------------------------------
+    static {
+        try {
+            System.loadLibrary("bka"); 
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "Native library 'bka' failed to load into OtrService context.", e);
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Service lifecycle
     // -----------------------------------------------------------------------
 
