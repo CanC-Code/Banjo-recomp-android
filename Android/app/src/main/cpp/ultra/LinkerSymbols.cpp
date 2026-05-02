@@ -1,4 +1,4 @@
-// File: LinkerSymbols.cpp
+// File: Android/app/src/main/cpp/ultra/LinkerSymbols.cpp
 #include <cstdint>
 #include <cstdlib>
 
@@ -141,7 +141,7 @@ RECOMP_SYMBOL uint32_t* PIF_ROM               = (uint32_t*)(s_N64_Reg_Memory + 0
 // ============================================================
 RECOMP_SYMBOL uint32_t __libm_qnan_f = 0x7FC00000;
 
-RECOMP_SYMBOL uintptr_t core1_VRAM           = 0x80001000; 
+RECOMP_SYMBOL uintptr_t core1_VRAM           = 0x80001000;
 RECOMP_SYMBOL uintptr_t core1_rzip_ROM_START = 0x00001050;
 RECOMP_SYMBOL uintptr_t core1_rzip_ROM_END   = 0x000E0000;
 
