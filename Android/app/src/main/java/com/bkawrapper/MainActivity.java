@@ -227,25 +227,17 @@ public class MainActivity extends AppCompatActivity {
     // -----------------------------------------------------------------------
 
     private void bootGameEngine() {
+        final String assetDir    = getFilesDir().getAbsolutePath();
+        final AssetManager mgr   = getAssets();
+
         // Build and attach the GL surface
         glSurfaceView = new GLSurfaceView(this);
         glSurfaceView.setEGLContextClientVersion(2);   // GLES 2.0 context
-        glSurfaceView.setRenderer(new GLRenderer(this));
+        glSurfaceView.setRenderer(new GLRenderer(this, assetDir, mgr));
         // RENDERMODE_CONTINUOUSLY: the renderer's onDrawFrame is called as
         // fast as the display will allow (vsync-paced by the driver).
         glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
 
         setContentView(glSurfaceView);
-
-        // Run the blocking game loop on a dedicated background thread so the
-        // GL / UI threads remain free.
-        final String assetDir    = getFilesDir().getAbsolutePath();
-        final AssetManager mgr   = getAssets();
-
-        new Thread(() -> {
-            Log.i(TAG, "Game thread starting — assetDir=" + assetDir);
-            NativeBridge.nativeGameBoot(assetDir, mgr);
-            Log.w(TAG, "nativeGameBoot returned — game has exited");
-        }, "BKA-GameThread").start();
     }
 }
