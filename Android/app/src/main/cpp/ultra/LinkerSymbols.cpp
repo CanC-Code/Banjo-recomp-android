@@ -63,129 +63,80 @@
 
 extern "C" {
 
-uint32_t* gN64_Reg_Base = nullptr;
-
 // ============================================================
-// 2. HARDWARE REGISTER POINTER DECLARATIONS
+// 2. STATIC MEMORY ALLOCATION (CRITICAL FIX)
+// Statically allocate 1MB of aligned memory in the .bss segment.
+// This guarantees valid memory at load-time before any Java 
+// or JNI code executes.
 // ============================================================
-RECOMP_SYMBOL uint32_t* SP_DMEM              = nullptr;
-RECOMP_SYMBOL uint32_t* SP_IMEM              = nullptr;
-RECOMP_SYMBOL uint32_t* SP_STATUS_REG        = nullptr;
+static uint8_t s_N64_Reg_Memory[1024 * 1024] __attribute__((aligned(16)));
 
-RECOMP_SYMBOL uint32_t* MI_INIT_MODE_REG     = nullptr;
-RECOMP_SYMBOL uint32_t* MI_VERSION_REG       = nullptr;
-RECOMP_SYMBOL uint32_t* MI_INTR_REG          = nullptr;
-RECOMP_SYMBOL uint32_t* MI_INTR_MASK_REG     = nullptr;
+uint32_t* gN64_Reg_Base = (uint32_t*)s_N64_Reg_Memory;
 
-RECOMP_SYMBOL uint32_t* VI_STATUS_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* VI_ORIGIN_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* VI_WIDTH_REG          = nullptr;
-RECOMP_SYMBOL uint32_t* VI_V_INTR_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* VI_V_CURRENT_LINE_REG = nullptr;
-RECOMP_SYMBOL uint32_t* VI_BURST_REG          = nullptr;
-RECOMP_SYMBOL uint32_t* VI_V_SYNC_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* VI_H_SYNC_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* VI_LEAP_REG           = nullptr;
-RECOMP_SYMBOL uint32_t* VI_H_START_REG        = nullptr;
-RECOMP_SYMBOL uint32_t* VI_V_START_REG        = nullptr;
-RECOMP_SYMBOL uint32_t* VI_V_BURST_REG        = nullptr;
-RECOMP_SYMBOL uint32_t* VI_X_SCALE_REG        = nullptr;
-RECOMP_SYMBOL uint32_t* VI_Y_SCALE_REG        = nullptr;
-
-RECOMP_SYMBOL uint32_t* AI_DRAM_ADDR_REG      = nullptr;
-RECOMP_SYMBOL uint32_t* AI_LEN_REG            = nullptr;
-RECOMP_SYMBOL uint32_t* AI_CONTROL_REG        = nullptr;
-RECOMP_SYMBOL uint32_t* AI_STATUS_REG         = nullptr;
-
-RECOMP_SYMBOL uint32_t* PI_DRAM_ADDR_REG      = nullptr;
-RECOMP_SYMBOL uint32_t* PI_CART_ADDR_REG      = nullptr;
-RECOMP_SYMBOL uint32_t* PI_RD_LEN_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* PI_WR_LEN_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* PI_STATUS_REG         = nullptr;
-
-RECOMP_SYMBOL uint32_t* RI_CONFIG_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* RI_CURRENT_LOAD_REG   = nullptr;
-RECOMP_SYMBOL uint32_t* RI_SELECT_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* RI_REFRESH_REG        = nullptr;
-
-RECOMP_SYMBOL uint32_t* SI_DRAM_ADDR_REG      = nullptr;
-RECOMP_SYMBOL uint32_t* SI_PIF_ADDR_RD64B_REG = nullptr;
-RECOMP_SYMBOL uint32_t* SI_PIF_ADDR_WR64B_REG = nullptr;
-RECOMP_SYMBOL uint32_t* SI_STATUS_REG         = nullptr;
-
-RECOMP_SYMBOL uint32_t* DPC_START_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_END_REG           = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_CURRENT_REG       = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_STATUS_REG        = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_CLOCK_REG         = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_BUFBUSY_REG       = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_PIPEBUSY_REG      = nullptr;
-RECOMP_SYMBOL uint32_t* DPC_TMEM_REG          = nullptr;
-
-// ============================================================
-// 3. RUNTIME MEMORY MAPPING (CRITICAL FIX)
-// ============================================================
+// The JNI initialization hook is preserved to satisfy NativeBridge.cpp 
+// but requires no logic because memory is now statically guaranteed.
 void InitN64Registers() {
-    if (gN64_Reg_Base == nullptr) {
-        // Allocate 1MB of zeroed memory for the hardware registers
-        gN64_Reg_Base = (uint32_t*)calloc(1024 * 1024, 1);
-        
-        // Dynamically map all pointers to the now-valid memory block
-        SP_DMEM              = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x0000);
-        SP_IMEM              = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x1000);
-        SP_STATUS_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x2000);
-
-        MI_INIT_MODE_REG     = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x3000);
-        MI_VERSION_REG       = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x3004);
-        MI_INTR_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x3008);
-        MI_INTR_MASK_REG     = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x300C);
-
-        VI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4000);
-        VI_ORIGIN_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4004);
-        VI_WIDTH_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4008);
-        VI_V_INTR_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x400C);
-        VI_V_CURRENT_LINE_REG = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4010);
-        VI_BURST_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4014);
-        VI_V_SYNC_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4018);
-        VI_H_SYNC_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x401C);
-        VI_LEAP_REG           = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4020);
-        VI_H_START_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4024);
-        VI_V_START_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4028);
-        VI_V_BURST_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x402C);
-        VI_X_SCALE_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4030);
-        VI_Y_SCALE_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4034);
-
-        AI_DRAM_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x5000);
-        AI_LEN_REG            = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x5004);
-        AI_CONTROL_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x5008);
-        AI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x500C);
-
-        PI_DRAM_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6000);
-        PI_CART_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6004);
-        PI_RD_LEN_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6008);
-        PI_WR_LEN_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x600C);
-        PI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6010);
-
-        RI_CONFIG_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7000);
-        RI_CURRENT_LOAD_REG   = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7004);
-        RI_SELECT_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7008);
-        RI_REFRESH_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7010);
-
-        SI_DRAM_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8000);
-        SI_PIF_ADDR_RD64B_REG = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8004);
-        SI_PIF_ADDR_WR64B_REG = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8010);
-        SI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8018);
-
-        DPC_START_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9000);
-        DPC_END_REG           = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9004);
-        DPC_CURRENT_REG       = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9008);
-        DPC_STATUS_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x900C);
-        DPC_CLOCK_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9010);
-        DPC_BUFBUSY_REG       = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9014);
-        DPC_PIPEBUSY_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9018);
-        DPC_TMEM_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x901C);
-    }
+    // Intentionally left blank.
 }
+
+// ============================================================
+// 3. HARDWARE REGISTER POINTER MAPPING
+// All pointers are safely calculated at compile/load time 
+// via relative offsets to the static array.
+// ============================================================
+RECOMP_SYMBOL uint32_t* SP_DMEM              = (uint32_t*)(s_N64_Reg_Memory + 0x0000);
+RECOMP_SYMBOL uint32_t* SP_IMEM              = (uint32_t*)(s_N64_Reg_Memory + 0x1000);
+RECOMP_SYMBOL uint32_t* SP_STATUS_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x2000);
+
+RECOMP_SYMBOL uint32_t* MI_INIT_MODE_REG     = (uint32_t*)(s_N64_Reg_Memory + 0x3000);
+RECOMP_SYMBOL uint32_t* MI_VERSION_REG       = (uint32_t*)(s_N64_Reg_Memory + 0x3004);
+RECOMP_SYMBOL uint32_t* MI_INTR_REG          = (uint32_t*)(s_N64_Reg_Memory + 0x3008);
+RECOMP_SYMBOL uint32_t* MI_INTR_MASK_REG     = (uint32_t*)(s_N64_Reg_Memory + 0x300C);
+
+RECOMP_SYMBOL uint32_t* VI_STATUS_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x4000);
+RECOMP_SYMBOL uint32_t* VI_ORIGIN_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x4004);
+RECOMP_SYMBOL uint32_t* VI_WIDTH_REG          = (uint32_t*)(s_N64_Reg_Memory + 0x4008);
+RECOMP_SYMBOL uint32_t* VI_V_INTR_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x400C);
+RECOMP_SYMBOL uint32_t* VI_V_CURRENT_LINE_REG = (uint32_t*)(s_N64_Reg_Memory + 0x4010);
+RECOMP_SYMBOL uint32_t* VI_BURST_REG          = (uint32_t*)(s_N64_Reg_Memory + 0x4014);
+RECOMP_SYMBOL uint32_t* VI_V_SYNC_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x4018);
+RECOMP_SYMBOL uint32_t* VI_H_SYNC_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x401C);
+RECOMP_SYMBOL uint32_t* VI_LEAP_REG           = (uint32_t*)(s_N64_Reg_Memory + 0x4020);
+RECOMP_SYMBOL uint32_t* VI_H_START_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x4024);
+RECOMP_SYMBOL uint32_t* VI_V_START_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x4028);
+RECOMP_SYMBOL uint32_t* VI_V_BURST_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x402C);
+RECOMP_SYMBOL uint32_t* VI_X_SCALE_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x4030);
+RECOMP_SYMBOL uint32_t* VI_Y_SCALE_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x4034);
+
+RECOMP_SYMBOL uint32_t* AI_DRAM_ADDR_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x5000);
+RECOMP_SYMBOL uint32_t* AI_LEN_REG            = (uint32_t*)(s_N64_Reg_Memory + 0x5004);
+RECOMP_SYMBOL uint32_t* AI_CONTROL_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x5008);
+RECOMP_SYMBOL uint32_t* AI_STATUS_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x500C);
+
+RECOMP_SYMBOL uint32_t* PI_DRAM_ADDR_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x6000);
+RECOMP_SYMBOL uint32_t* PI_CART_ADDR_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x6004);
+RECOMP_SYMBOL uint32_t* PI_RD_LEN_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x6008);
+RECOMP_SYMBOL uint32_t* PI_WR_LEN_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x600C);
+RECOMP_SYMBOL uint32_t* PI_STATUS_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x6010);
+
+RECOMP_SYMBOL uint32_t* RI_CONFIG_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x7000);
+RECOMP_SYMBOL uint32_t* RI_CURRENT_LOAD_REG   = (uint32_t*)(s_N64_Reg_Memory + 0x7004);
+RECOMP_SYMBOL uint32_t* RI_SELECT_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x7008);
+RECOMP_SYMBOL uint32_t* RI_REFRESH_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x7010);
+
+RECOMP_SYMBOL uint32_t* SI_DRAM_ADDR_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x8000);
+RECOMP_SYMBOL uint32_t* SI_PIF_ADDR_RD64B_REG = (uint32_t*)(s_N64_Reg_Memory + 0x8004);
+RECOMP_SYMBOL uint32_t* SI_PIF_ADDR_WR64B_REG = (uint32_t*)(s_N64_Reg_Memory + 0x8010);
+RECOMP_SYMBOL uint32_t* SI_STATUS_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x8018);
+
+RECOMP_SYMBOL uint32_t* DPC_START_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x9000);
+RECOMP_SYMBOL uint32_t* DPC_END_REG           = (uint32_t*)(s_N64_Reg_Memory + 0x9004);
+RECOMP_SYMBOL uint32_t* DPC_CURRENT_REG       = (uint32_t*)(s_N64_Reg_Memory + 0x9008);
+RECOMP_SYMBOL uint32_t* DPC_STATUS_REG        = (uint32_t*)(s_N64_Reg_Memory + 0x900C);
+RECOMP_SYMBOL uint32_t* DPC_CLOCK_REG         = (uint32_t*)(s_N64_Reg_Memory + 0x9010);
+RECOMP_SYMBOL uint32_t* DPC_BUFBUSY_REG       = (uint32_t*)(s_N64_Reg_Memory + 0x9014);
+RECOMP_SYMBOL uint32_t* DPC_PIPEBUSY_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x9018);
+RECOMP_SYMBOL uint32_t* DPC_TMEM_REG          = (uint32_t*)(s_N64_Reg_Memory + 0x901C);
 
 // ============================================================
 // 4. MATH & ENGINE GLOBALS
