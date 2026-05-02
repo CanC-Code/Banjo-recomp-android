@@ -1,206 +1,196 @@
-// File: LinkerSymbols.cpp
-#include <cstdint>
-#include <cstdlib>
+// File: Android/app/src/main/cpp/ultra/NativeBridge.cpp
+//
+// JNI entrypoints for com.bkawrapper.NativeBridge.
+// Every method declared `native` in NativeBridge.java must have a matching
+// symbol here, or the JVM will throw UnsatisfiedLinkError at runtime.
+//
+// Signature rules (all methods are `static native` in Java):
+//   static native  →  (JNIEnv*, jclass,  <args...>)
+//   instance native →  (JNIEnv*, jobject, <args...>)
+// All six methods in NativeBridge.java are static, so jclass is correct.
+
+#include <jni.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
+#include <android/log.h>
+#include <string>
+#include <unistd.h>
+
+#define LOG_TAG "NativeBridge"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // ============================================================
-// 1. MACRO COLLISION FIX
+// Internal state — set by nativeInit, used by runOtrGeneration
+// and updateOtrProgress callbacks.
 // ============================================================
+static JavaVM*   g_jvm         = nullptr;
+static jobject   g_otrService  = nullptr;  // global ref to OtrService instance
+static jmethodID g_progressMid = nullptr;  // OtrService.updateOtrProgress(int, String)
 
-// Clear existing macros to prevent shadowing of our recompiled symbols
-#undef RI_CONFIG_REG
-#undef RI_CURRENT_LOAD_REG
-#undef RI_SELECT_REG
-#undef RI_REFRESH_REG
-
-#undef VI_STATUS_REG
-#undef VI_ORIGIN_REG
-#undef VI_WIDTH_REG
-#undef VI_V_INTR_REG
-#undef VI_V_CURRENT_LINE_REG
-#undef VI_BURST_REG
-#undef VI_V_SYNC_REG
-#undef VI_H_SYNC_REG
-#undef VI_LEAP_REG
-#undef VI_H_START_REG
-#undef VI_V_START_REG
-#undef VI_V_BURST_REG
-#undef VI_X_SCALE_REG
-#undef VI_Y_SCALE_REG
-
-#undef PI_STATUS_REG
-#undef PI_DRAM_ADDR_REG
-#undef PI_CART_ADDR_REG
-#undef PI_RD_LEN_REG
-#undef PI_WR_LEN_REG
-
-#undef SI_DRAM_ADDR_REG
-#undef SI_PIF_ADDR_RD64B_REG
-#undef SI_PIF_ADDR_WR64B_REG
-#undef SI_STATUS_REG
-
-#undef MI_INIT_MODE_REG
-#undef MI_VERSION_REG
-#undef MI_INTR_REG
-#undef MI_INTR_MASK_REG
-
-#undef SP_DMEM
-#undef SP_IMEM
-#undef SP_STATUS_REG
-
-#undef AI_DRAM_ADDR_REG
-#undef AI_LEN_REG
-#undef AI_CONTROL_REG
-#undef AI_STATUS_REG
-
-#undef DPC_START_REG
-#undef DPC_END_REG
-#undef DPC_CURRENT_REG
-#undef DPC_STATUS_REG
-#undef DPC_CLOCK_REG
-#undef DPC_BUFBUSY_REG
-#undef DPC_PIPEBUSY_REG
-#undef DPC_TMEM_REG
-
-#define RECOMP_SYMBOL __attribute__((used)) __attribute__((visibility("default")))
-
+// ============================================================
+// Forward declarations for engine functions implemented
+// elsewhere in the bridge (otr_builder.cpp, resource_mgr.cpp, etc.)
+// Replace these stubs with real calls once those modules are wired up.
+// ============================================================
 extern "C" {
+    // Implemented in ultra/otr_builder.cpp
+    void OtrBuilder_run(int romFd, AAssetManager* assetMgr, const char* outDir);
 
-/**
- * 2. HARDWARE REGISTER TRAP ALLOCATION
- */
-uint32_t* gN64_Reg_Base = nullptr;
+    // Implemented in emulator/resource_mgr.cpp
+    void ResourceMgr_init(const char* otrPath, AAssetManager* assetMgr);
 
-// Invoked by NativeBridge.cpp during JNI initialization
-void InitN64Registers() {
-    if (gN64_Reg_Base == nullptr) {
-        // Allocate 1MB of zeroed memory for the hardware registers
-        gN64_Reg_Base = (uint32_t*)calloc(1024 * 1024, 1);
-    }
+    // Implemented in emulator/stubs.cpp or the game loop entry point
+    void GameLoop_run();
 }
 
 // ============================================================
-// SP (Signal Processor) - Essential for RSP/Task handling
+// Helper — call OtrService.updateOtrProgress(int, String) from
+// any thread (including C++ worker threads).
 // ============================================================
-RECOMP_SYMBOL uint32_t* SP_DMEM              = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x0000);
-RECOMP_SYMBOL uint32_t* SP_IMEM              = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x1000);
-RECOMP_SYMBOL uint32_t* SP_STATUS_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x2000);
+extern "C" void BKA_UpdateProgress(int percent, const char* status) {
+    if (!g_jvm || !g_otrService || !g_progressMid) return;
+
+    JNIEnv* env = nullptr;
+    bool    attached = false;
+
+    jint rc = g_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (rc == JNI_EDETACHED) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+
+    if (env) {
+        jstring jStatus = env->NewStringUTF(status ? status : "");
+        env->CallVoidMethod(g_otrService, g_progressMid,
+                            static_cast<jint>(percent), jStatus);
+        env->DeleteLocalRef(jStatus);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+
+    if (attached) g_jvm->DetachCurrentThread();
+}
+
+extern "C" {
 
 // ============================================================
-// MI (MIPS Interface) - Handles Interrupts (CRITICAL)
+// 1. nativeInit(OtrService service)
+//    Caches the JavaVM, a global ref to the OtrService, and the
+//    updateOtrProgress method ID so C++ threads can call back.
 // ============================================================
-RECOMP_SYMBOL uint32_t* MI_INIT_MODE_REG     = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x3000);
-RECOMP_SYMBOL uint32_t* MI_VERSION_REG       = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x3004);
-RECOMP_SYMBOL uint32_t* MI_INTR_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x3008);
-RECOMP_SYMBOL uint32_t* MI_INTR_MASK_REG     = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x300C);
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env,
+                                            jclass  /*clazz*/,
+                                            jobject  otrService)
+{
+    LOGI("nativeInit called");
+
+    env->GetJavaVM(&g_jvm);
+
+    // Release previous ref if reinitialised
+    if (g_otrService) {
+        env->DeleteGlobalRef(g_otrService);
+        g_otrService = nullptr;
+    }
+    g_otrService = env->NewGlobalRef(otrService);
+
+    jclass svcClass = env->GetObjectClass(otrService);
+    g_progressMid   = env->GetMethodID(svcClass,
+                                       "updateOtrProgress",
+                                       "(ILjava/lang/String;)V");
+    if (!g_progressMid) {
+        LOGE("nativeInit: could not find updateOtrProgress — progress callbacks will be silent");
+    }
+
+    LOGI("nativeInit complete");
+}
 
 // ============================================================
-// VI (Video Interface)
+// 2. runOtrGeneration(int fd, AssetManager assetManager, String outDir)
+//    Runs asset extraction on the calling thread (OtrService's
+//    BKA-ExtractionThread). Calls BKA_UpdateProgress as it goes.
 // ============================================================
-RECOMP_SYMBOL uint32_t* VI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4000);
-RECOMP_SYMBOL uint32_t* VI_ORIGIN_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4004);
-RECOMP_SYMBOL uint32_t* VI_WIDTH_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4008);
-RECOMP_SYMBOL uint32_t* VI_V_INTR_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x400C);
-RECOMP_SYMBOL uint32_t* VI_V_CURRENT_LINE_REG = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4010);
-RECOMP_SYMBOL uint32_t* VI_BURST_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4014);
-RECOMP_SYMBOL uint32_t* VI_V_SYNC_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4018);
-RECOMP_SYMBOL uint32_t* VI_H_SYNC_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x401C);
-RECOMP_SYMBOL uint32_t* VI_LEAP_REG           = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4020);
-RECOMP_SYMBOL uint32_t* VI_H_START_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4024);
-RECOMP_SYMBOL uint32_t* VI_V_START_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4028);
-RECOMP_SYMBOL uint32_t* VI_V_BURST_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x402C);
-RECOMP_SYMBOL uint32_t* VI_X_SCALE_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4030);
-RECOMP_SYMBOL uint32_t* VI_Y_SCALE_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x4034);
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv*  env,
+                                                  jclass   /*clazz*/,
+                                                  jint     fd,
+                                                  jobject  assetManagerObj,
+                                                  jstring  outDirStr)
+{
+    LOGI("runOtrGeneration called, fd=%d", fd);
+
+    AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
+    const char*    outDir   = env->GetStringUTFChars(outDirStr, nullptr);
+
+    OtrBuilder_run(static_cast<int>(fd), assetMgr, outDir);
+
+    env->ReleaseStringUTFChars(outDirStr, outDir);
+    // fd is now owned by C++; do not close here.
+    LOGI("runOtrGeneration complete");
+}
 
 // ============================================================
-// AI (Audio Interface) - Essential for Banjo-Kazooie Sound
+// 3. nativeGameBoot(String otrPath, AssetManager assetManager)
+//    Initialises ResourceMgr then blocks in the game loop.
+//    Must be called on a dedicated background thread.
 // ============================================================
-RECOMP_SYMBOL uint32_t* AI_DRAM_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x5000);
-RECOMP_SYMBOL uint32_t* AI_LEN_REG            = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x5004);
-RECOMP_SYMBOL uint32_t* AI_CONTROL_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x5008);
-RECOMP_SYMBOL uint32_t* AI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x500C);
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env,
+                                                jclass  /*clazz*/,
+                                                jstring otrPathStr,
+                                                jobject assetManagerObj)
+{
+    LOGI("nativeGameBoot called");
+
+    AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
+    const char*    otrPath  = env->GetStringUTFChars(otrPathStr, nullptr);
+
+    ResourceMgr_init(otrPath, assetMgr);
+    env->ReleaseStringUTFChars(otrPathStr, otrPath);
+
+    GameLoop_run();   // blocks until game exits
+    LOGI("nativeGameBoot returned");
+}
 
 // ============================================================
-// PI (Peripheral Interface)
+// 4. surfaceReady(int width, int height)
+//    Called from the GL thread inside onSurfaceCreated.
 // ============================================================
-RECOMP_SYMBOL uint32_t* PI_DRAM_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6000);
-RECOMP_SYMBOL uint32_t* PI_CART_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6004);
-RECOMP_SYMBOL uint32_t* PI_RD_LEN_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6008);
-RECOMP_SYMBOL uint32_t* PI_WR_LEN_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x600C);
-RECOMP_SYMBOL uint32_t* PI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x6010);
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* /*env*/,
+                                              jclass  /*clazz*/,
+                                              jint    width,
+                                              jint    height)
+{
+    LOGI("surfaceReady: %d x %d", width, height);
+    // TODO: allocate / resize the framebuffer texture here.
+}
 
 // ============================================================
-// RI (RAM Interface)
+// 5. updateTexture(int unused)
+//    Called every frame from the GL thread.
 // ============================================================
-RECOMP_SYMBOL uint32_t* RI_CONFIG_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7000);
-RECOMP_SYMBOL uint32_t* RI_CURRENT_LOAD_REG   = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7004);
-RECOMP_SYMBOL uint32_t* RI_SELECT_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7008);
-RECOMP_SYMBOL uint32_t* RI_REFRESH_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x7010);
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* /*env*/,
+                                               jclass  /*clazz*/,
+                                               jint    /*unused*/)
+{
+    // TODO: blit N64 framebuffer → GL texture and draw fullscreen quad.
+}
 
 // ============================================================
-// SI (Serial Interface) - Corrected Offsets (Status is 0x18)
+// 6. nativeUpdateInput(int buttonMask, float stickX, float stickY)
+//    Pushes controller state into the N64 input layer.
 // ============================================================
-RECOMP_SYMBOL uint32_t* SI_DRAM_ADDR_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8000);
-RECOMP_SYMBOL uint32_t* SI_PIF_ADDR_RD64B_REG = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8004);
-RECOMP_SYMBOL uint32_t* SI_PIF_ADDR_WR64B_REG = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8010);
-RECOMP_SYMBOL uint32_t* SI_STATUS_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x8018);
-
-// ============================================================
-// DPC (Display Processor Command) - Essential for Graphics Rendering
-// ============================================================
-RECOMP_SYMBOL uint32_t* DPC_START_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9000);
-RECOMP_SYMBOL uint32_t* DPC_END_REG           = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9004);
-RECOMP_SYMBOL uint32_t* DPC_CURRENT_REG       = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9008);
-RECOMP_SYMBOL uint32_t* DPC_STATUS_REG        = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x900C);
-RECOMP_SYMBOL uint32_t* DPC_CLOCK_REG         = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9010);
-RECOMP_SYMBOL uint32_t* DPC_BUFBUSY_REG       = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9014);
-RECOMP_SYMBOL uint32_t* DPC_PIPEBUSY_REG      = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x9018);
-RECOMP_SYMBOL uint32_t* DPC_TMEM_REG          = (uint32_t*)((uintptr_t)gN64_Reg_Base + 0x901C);
-
-// ============================================================
-// 3. MATH & ENGINE GLOBALS
-// ============================================================
-RECOMP_SYMBOL uint32_t __libm_qnan_f = 0x7FC00000;
-
-RECOMP_SYMBOL uintptr_t core1_VRAM           = 0x80001000; 
-RECOMP_SYMBOL uintptr_t core1_rzip_ROM_START = 0x00001050;
-RECOMP_SYMBOL uintptr_t core1_rzip_ROM_END   = 0x000E0000;
-
-RECOMP_SYMBOL uintptr_t core2_rzip_ROM_START = 0x000F0000;
-RECOMP_SYMBOL uintptr_t core2_rzip_ROM_END   = 0x001F0000;
-
-// ============================================================
-// 4. LEVEL ROM MARKERS
-// ============================================================
-RECOMP_SYMBOL uintptr_t SM_rzip_ROM_START    = 0x00400000;
-RECOMP_SYMBOL uintptr_t SM_rzip_ROM_END      = 0x00410000;
-RECOMP_SYMBOL uintptr_t MM_rzip_ROM_START    = 0x00500000;
-RECOMP_SYMBOL uintptr_t MM_rzip_ROM_END      = 0x00510000;
-RECOMP_SYMBOL uintptr_t TTC_rzip_ROM_START   = 0x00600000;
-RECOMP_SYMBOL uintptr_t TTC_rzip_ROM_END     = 0x00610000;
-RECOMP_SYMBOL uintptr_t CC_rzip_ROM_START    = 0x00700000;
-RECOMP_SYMBOL uintptr_t CC_rzip_ROM_END      = 0x00710000;
-RECOMP_SYMBOL uintptr_t BGS_rzip_ROM_START   = 0x00800000;
-RECOMP_SYMBOL uintptr_t BGS_rzip_ROM_END     = 0x00810000;
-RECOMP_SYMBOL uintptr_t FP_rzip_ROM_START    = 0x00900000;
-RECOMP_SYMBOL uintptr_t FP_rzip_ROM_END      = 0x00910000;
-RECOMP_SYMBOL uintptr_t GV_rzip_ROM_START    = 0x00A00000;
-RECOMP_SYMBOL uintptr_t GV_rzip_ROM_END      = 0x00A10000;
-RECOMP_SYMBOL uintptr_t MMM_rzip_ROM_START   = 0x00B00000;
-RECOMP_SYMBOL uintptr_t MMM_rzip_ROM_END     = 0x00B10000;
-RECOMP_SYMBOL uintptr_t RBB_rzip_ROM_START   = 0x00C00000;
-RECOMP_SYMBOL uintptr_t RBB_rzip_ROM_END     = 0x00C10000;
-RECOMP_SYMBOL uintptr_t CCW_rzip_ROM_START   = 0x00D00000;
-RECOMP_SYMBOL uintptr_t CCW_rzip_ROM_END     = 0x00D10000;
-
-RECOMP_SYMBOL uintptr_t lair_rzip_ROM_START      = 0x00E00000;
-RECOMP_SYMBOL uintptr_t lair_rzip_ROM_END        = 0x00E10000;
-RECOMP_SYMBOL uintptr_t fight_rzip_ROM_START     = 0x00F00000;
-RECOMP_SYMBOL uintptr_t fight_rzip_ROM_END       = 0x00F10000;
-RECOMP_SYMBOL uintptr_t cutscenes_rzip_ROM_START = 0x01000000;
-RECOMP_SYMBOL uintptr_t cutscenes_rzip_ROM_END   = 0x01010000;
-RECOMP_SYMBOL uintptr_t emptyLvl_rzip_ROM_START  = 0x01100000;
-RECOMP_SYMBOL uintptr_t emptyLvl_rzip_ROM_END    = 0x01110000;
-
-RECOMP_SYMBOL uintptr_t gOverlayTable = 0x01200000;
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* /*env*/,
+                                                   jclass  /*clazz*/,
+                                                   jint    buttonMask,
+                                                   jfloat  stickX,
+                                                   jfloat  stickY)
+{
+    // TODO: forward to N64 controller emulation layer.
+    (void)buttonMask; (void)stickX; (void)stickY;
+}
 
 } // extern "C"
