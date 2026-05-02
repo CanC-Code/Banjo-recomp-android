@@ -2,6 +2,7 @@
 package com.bkawrapper;
 
 import android.content.Context;
+import android.content.res.AssetManager;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.util.Log;
@@ -15,22 +16,28 @@ import javax.microedition.khronos.opengles.GL10;
  * Drives the N64 framebuffer → Android display pipeline.
  *
  * Design:
- *   onSurfaceCreated  → tell native side the GL context is alive (allocates
- *                        the RGBA8 320×240 texture on the GL thread).
- *   onSurfaceChanged  → resize viewport.
- *   onDrawFrame       → call NativeBridge.updateTexture() which uploads the
- *                        current screenBuffer and draws it as a fullscreen quad.
+ * onSurfaceCreated  → tell native side the GL context is alive (allocates
+ * the RGBA8 320×240 texture on the GL thread).
+ * onSurfaceChanged  → resize viewport.
+ * onDrawFrame       → call NativeBridge.updateTexture() which uploads the
+ * current screenBuffer and draws it as a fullscreen quad.
  */
 public class GLRenderer implements GLSurfaceView.Renderer {
 
     private static final String TAG = "BKA-GLRenderer";
 
     private final Context context;
+    private final String assetDir;
+    private final AssetManager mgr;
+    
     private int surfaceWidth  = 320;
     private int surfaceHeight = 240;
+    private boolean engineBooted = false;
 
-    public GLRenderer(Context context) {
+    public GLRenderer(Context context, String assetDir, AssetManager mgr) {
         this.context = context;
+        this.assetDir = assetDir;
+        this.mgr = mgr;
     }
 
     // -----------------------------------------------------------------------
@@ -47,6 +54,17 @@ public class GLRenderer implements GLSurfaceView.Renderer {
         // Tell the native side: allocate the framebuffer texture now that
         // we have a valid GL context.
         NativeBridge.surfaceReady(surfaceWidth, surfaceHeight);
+
+        // Run the blocking game loop on a dedicated background thread so the
+        // GL / UI threads remain free, ensuring it only starts after the surface is bound.
+        if (!engineBooted) {
+            engineBooted = true;
+            new Thread(() -> {
+                Log.i(TAG, "Game thread starting — assetDir=" + assetDir);
+                NativeBridge.nativeGameBoot(assetDir, mgr);
+                Log.w(TAG, "nativeGameBoot returned — game has exited");
+            }, "BKA-GameThread").start();
+        }
     }
 
     @Override
