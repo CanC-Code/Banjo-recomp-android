@@ -5,7 +5,7 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 set(TARGET_VERSION "us.v10")
 
 # ============================================================
-# 1. Bridge Sources
+# 1. Bridge Sources (Native-to-Java interface)
 # ============================================================
 set(BRIDGE_SOURCES
     ultra/NativeBridge.cpp
@@ -23,35 +23,26 @@ set(BRIDGE_SOURCES
     emulator/resource_mgr.cpp
     tools/rare_decompression.cpp
     ultra/HardwareRegs.cpp
-
-    # Dead-stub fallbacks — must be last
     ultra/missing_stubs.c
 )
 
 # ============================================================
-# 2. Game Source Files (Including .cpp for Engine Core)
+# 2. Game Source Files (Including Recompiled Engine Core)
 # ============================================================
 option(EXCLUDE_GAME_SRC "Skip compiling the recompiled game source tree" OFF)
 
 set(GAME_SOURCES "")
 if(NOT EXCLUDE_GAME_SRC)
-    # UPDATED: Glob both .c and .cpp to ensure main_loop and engine core are captured
+    # CRITICAL FIX: Glob both C and C++ files to find the entry point
     file(GLOB_RECURSE ALL_GAME_FILES 
         "${REPO_ROOT}/src/*.c"
         "${REPO_ROOT}/src/*.cpp"
     )
 
-    # The Hardware & OS Blacklist
+    # Hardware & OS Blacklist (Excluding files provided by our HLE bridge)
     set(EXCLUSION_LIST
-        "pirawdma.c"   
-        "epirawdma.c"  
-        "pimgr.c"      
-        "vi.c"         
-        "vicurrent.c"  
-        "osYield.c"    
-        "recvmesg.c"   
-        "sendmesg.c"   
-        "jammesg.c"    
+        "pirawdma.c" "epirawdma.c" "pimgr.c" "vi.c" "vicurrent.c" 
+        "osYield.c" "recvmesg.c" "sendmesg.c" "jammesg.c"
     )
 
     foreach(FILE_PATH ${ALL_GAME_FILES})
@@ -66,15 +57,21 @@ if(NOT EXCLUDE_GAME_SRC)
 endif()
 
 # ============================================================
-# 3. Add Library
+# 3. Add Library and Linker Settings
 # ============================================================
 add_library(bkawrapper SHARED
     ${BRIDGE_SOURCES}
     ${GAME_SOURCES}
 )
 
+# Force symbols to be visible for the JNI thread and prevent aggressive stripping
+target_link_options(bkawrapper PRIVATE 
+    "-Wl,--allow-multiple-definition"
+    "-Wl,--export-dynamic"
+)
+
 # ============================================================
-# 4. Include Directories
+# 4. Include Directories & Compile Flags
 # ============================================================
 target_include_directories(bkawrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -86,52 +83,29 @@ target_include_directories(bkawrapper PRIVATE
     ${REPO_ROOT}/src
 )
 
-# ============================================================
-# 5. Compile Options
-# ============================================================
 target_compile_options(bkawrapper PRIVATE
     "-include${CMAKE_CURRENT_SOURCE_DIR}/ultra/n64_types.h"
-    -w
-    -fpermissive
+    -w -fpermissive
     -Wno-error=implicit-int
     -Wno-error=int-conversion
     -Wno-error=implicit-function-declaration
     -Wno-error=incompatible-pointer-types
     -Wno-error=unused-function
-
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
 )
 
-# ============================================================
-# 6. Defines & Linking
-# ============================================================
 target_compile_definitions(bkawrapper PRIVATE
-    F3DEX_GBI
-    N64_RECOMP
-    VERSION=0
-    __ANDROID__
+    F3DEX_GBI N64_RECOMP VERSION=0 __ANDROID__
 )
 
-find_library(log-lib     log)
+find_library(log-lib log)
 find_library(android-lib android)
-find_library(gles3-lib   GLESv3)
-find_library(gles2-lib   GLESv2)
-find_library(z-lib       z)
+find_library(gles3-lib GLESv3)
+find_library(gles2-lib GLESv2)
+find_library(z-lib z)
 
 target_link_libraries(bkawrapper
-    ${log-lib}
-    ${android-lib}
-    ${gles3-lib}
-    ${gles2-lib}
-    ${z-lib}
-    atomic
-    m
-)
-
-# Force the linker to ignore multiple definitions (common in recompiled ports)
-# and ensure symbols like main_loop are visible.
-target_link_options(bkawrapper PRIVATE 
-    "-Wl,--allow-multiple-definition"
-    "-Wl,--export-dynamic"
+    ${log-lib} ${android-lib} ${gles3-lib} ${gles2-lib} ${z-lib}
+    atomic m
 )
