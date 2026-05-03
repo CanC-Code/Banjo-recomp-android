@@ -1,4 +1,3 @@
-// File: Android/app/src/main/java/com/bkawrapper/OtrService.java
 package com.bkawrapper;
 
 import android.app.Notification;
@@ -23,26 +22,15 @@ public class OtrService extends Service {
     private static final String CHANNEL_ID      = "OtrServiceChannel";
     private static final int    NOTIFICATION_ID = 1;
 
-    // Sentinel filename — must match the constant in MainActivity
     private static final String SENTINEL_FILENAME = "extraction_complete";
 
-    // Intent actions broadcast to MainActivity
     public static final String ACTION_OTR_PROGRESS = "OTR_PROGRESS";
     public static final String ACTION_OTR_COMPLETE = "OTR_COMPLETE";
     public static final String ACTION_OTR_ERROR    = "OTR_ERROR";
 
-    // -----------------------------------------------------------------------
-    // Native library load — libbkawrapper.so is the only required .so.
-    // libbka.so was a separate dependency that no longer ships; loading it
-    // here caused the UnsatisfiedLinkError crash seen in the logcat trace.
-    // -----------------------------------------------------------------------
     static {
         System.loadLibrary("bkawrapper");
     }
-
-    // -----------------------------------------------------------------------
-    // Service lifecycle
-    // -----------------------------------------------------------------------
 
     @Override
     public void onCreate() {
@@ -57,7 +45,6 @@ public class OtrService extends Service {
         String uriString = intent.getStringExtra("uri");
         String outDir    = intent.getStringExtra("outDir");
 
-        // Start foreground immediately so Android does not kill us mid-extract
         startForeground(NOTIFICATION_ID,
             new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Preparing Banjo-Kazooie Assets")
@@ -67,27 +54,27 @@ public class OtrService extends Service {
         new Thread(() -> {
             try {
                 Uri uri = Uri.parse(uriString);
-                ParcelFileDescriptor pfd =
-                    getContentResolver().openFileDescriptor(uri, "r");
+                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
 
                 if (pfd == null) {
                     throw new Exception("Could not open ROM file descriptor.");
                 }
 
-                // Detach FD — C++ now owns the file handle
                 int fd = pfd.detachFd();
                 Log.i(TAG, "ROM fd detached: " + fd);
 
-                // Register the JNI callback and run extraction (blocks until done)
                 NativeBridge.nativeInit(this);
-                NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
+                
+                // Note: getAssets() has been removed from this call.
+                boolean success = NativeBridge.runOtrGeneration(fd, outDir);
 
-                // Write the sentinel so MainActivity knows extraction is done
-                writeSentinel(outDir);
-
-                Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
-                LocalBroadcastManager.getInstance(this)
-                    .sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
+                if (success) {
+                    writeSentinel(outDir);
+                    Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
+                    LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
+                } else {
+                    throw new Exception("Internal ROM parsing failed. Invalid ROM or read error.");
+                }
 
             } catch (Exception e) {
                 Log.e(TAG, "Extraction failed", e);
@@ -106,24 +93,12 @@ public class OtrService extends Service {
     @Override
     public IBinder onBind(Intent intent) { return null; }
 
-    // -----------------------------------------------------------------------
-    // JNI callback — called from C++ to push progress to the UI
-    // -----------------------------------------------------------------------
-
-    /**
-     * Called by C++ via JNI to update the extraction progress bar.
-     *
-     * @param percent  0–100
-     * @param status   Name of the asset currently being extracted.
-     */
     public void updateOtrProgress(int percent, String status) {
-        // Broadcast to MainActivity's ProgressBar
         Intent intent = new Intent(ACTION_OTR_PROGRESS);
         intent.putExtra("percent", percent);
         intent.putExtra("status",  status);
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
 
-        // Update the persistent notification
         Notification notification =
             new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Extracting Banjo-Kazooie Assets")
@@ -133,25 +108,14 @@ public class OtrService extends Service {
                 .setOngoing(true)
                 .build();
 
-        NotificationManager mgr =
-            (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        NotificationManager mgr = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
     }
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    /**
-     * Writes a zero-byte sentinel file into {@code outDir} so that
-     * subsequent launches of MainActivity can detect a completed extraction
-     * without scanning the whole asset directory.
-     */
     private void writeSentinel(String outDir) {
         try {
             File sentinel = new File(outDir, SENTINEL_FILENAME);
             if (!sentinel.exists()) {
-                //noinspection ResultOfMethodCallIgnored
                 sentinel.createNewFile();
             }
             Log.i(TAG, "Sentinel written: " + sentinel.getAbsolutePath());
