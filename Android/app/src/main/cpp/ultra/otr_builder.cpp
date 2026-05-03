@@ -7,6 +7,8 @@
 #include <sys/syscall.h>
 #include <android/log.h>
 #include <stdio.h>
+#include <vector>
+#include <string>
 #include "rare_decompression.h"
 
 #define LOG_TAG "BKA-Builder"
@@ -15,6 +17,16 @@
 
 // Rareware FID Table Offset for Banjo-Kazooie (US 1.0)
 #define ROM_FID_TABLE_OFFSET 0x5C30
+
+// --- Manifest Structure (Matches Python struct.pack('<II32s8s')) ---
+#pragma pack(push, 1)
+struct ManifestEntry {
+    uint32_t offset;
+    uint32_t size;
+    char name[32];
+    char type[8];
+};
+#pragma pack(pop)
 
 // --- Shadow-Proof Kernel System Calls ---
 static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
@@ -30,7 +42,7 @@ static int safe_close(int fd) {
     return syscall(SYS_close, fd);
 }
 
-// Recursively create directories for the outDirPath/fileName path
+// Recursively create directories
 void ensure_directories(const char* path) {
     char tmp[512];
     char* p = NULL;
@@ -45,28 +57,48 @@ void ensure_directories(const char* path) {
 }
 
 extern "C" {
-void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
-                                           int romFd, const char* outDirPath) {
+JNIEXPORT void JNICALL Java_com_bkawrapper_OtrService_runNativeOtrGeneration(
+    JNIEnv* env, jobject instance, jobject callbackObj, jint romFd, 
+    jstring outDirPathStr, jstring manifestPathStr) {
 
-    LOGI(">>> Self-Building OTR Extraction Started (romFd: %d)", romFd);
+    const char* outDirPath = env->GetStringUTFChars(outDirPathStr, NULL);
+    const char* manifestPath = env->GetStringUTFChars(manifestPathStr, NULL);
+    jclass callbackClass = env->GetObjectClass(callbackObj);
+    jmethodID progressMid = env->GetMethodID(callbackClass, "onProgressUpdate", "(ILjava/lang/String;)V");
 
-    // 1. Read the Entry Count from the ROM
+    LOGI(">>> Named OTR Extraction Started (romFd: %d)", romFd);
+
+    // 1. Load the Binary Manifest
+    std::vector<ManifestEntry> manifest;
+    int mFd = safe_open(manifestPath, O_RDONLY, 0);
+    if (mFd != -1) {
+        uint32_t mCount = 0;
+        if (read(mFd, &mCount, 4) == 4) {
+            manifest.resize(mCount);
+            read(mFd, manifest.data(), mCount * sizeof(ManifestEntry));
+        }
+        safe_close(mFd);
+        LOGI("Loaded %zu entries from manifest: %s", manifest.size(), manifestPath);
+    } else {
+        LOGE("Failed to open manifest at %s. Falling back to ID-based naming.", manifestPath);
+    }
+
+    // 2. Read the FID Entry Count from the ROM
     uint32_t entryCount = 0;
     if (safe_pread(romFd, &entryCount, 4, ROM_FID_TABLE_OFFSET) != 4) {
         LOGE("Failed to read ROM FID table offset");
         return;
     }
     entryCount = __builtin_bswap32(entryCount);
-
     LOGI("Detected %u file entries in ROM FID table", entryCount);
 
     if (entryCount == 0 || entryCount > 15000) {
-        LOGE("run_native_otr: Invalid entry count (%u). Aborting.", entryCount);
+        LOGE("Invalid entry count (%u). Aborting.", entryCount);
         return;
     }
 
+    // 3. Extraction Loop
     for (uint32_t i = 0; i < entryCount; i++) {
-        // Prevent JNI Local Reference Overflow
         if (env->PushLocalFrame(16) < 0) return;
 
         uint32_t currentFileOffset = 0;
@@ -74,17 +106,20 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
 
         safe_pread(romFd, &currentFileOffset, 4, ROM_FID_TABLE_OFFSET + 4 + (i * 4));
         safe_pread(romFd, &nextFileOffset, 4, ROM_FID_TABLE_OFFSET + 4 + ((i + 1) * 4));
-        
+
         currentFileOffset = __builtin_bswap32(currentFileOffset);
         nextFileOffset = __builtin_bswap32(nextFileOffset);
 
-        uint32_t fileSize = 0;
-        if (nextFileOffset > currentFileOffset) {
-            fileSize = nextFileOffset - currentFileOffset;
+        uint32_t fileSize = (nextFileOffset > currentFileOffset) ? (nextFileOffset - currentFileOffset) : 0;
+
+        // Resolve Filename from Manifest or Fallback to Hex
+        char fileName[256];
+        if (i < manifest.size()) {
+            // Remove trailing nulls/spaces from the 32-char fixed buffer
+            snprintf(fileName, sizeof(fileName), "%s", manifest[i].name);
+        } else {
+            snprintf(fileName, sizeof(fileName), "unknown/%04X.bin", i);
         }
-        
-        char fileName[33];
-        snprintf(fileName, sizeof(fileName), "%04X.bin", i);
 
         int percentage = (int)(((i + 1) * 100) / entryCount);
 
@@ -103,9 +138,8 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
         if (compressedBuffer) {
             if (safe_pread(romFd, compressedBuffer, fileSize, currentFileOffset) == (ssize_t)fileSize) {
                 uint32_t decompressedSize = 0;
-                
                 uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompressedSize);
-                
+
                 uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : compressedBuffer;
                 uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
@@ -115,20 +149,20 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                     safe_close(outFd);
                 }
                 if (finalBuffer) free(finalBuffer);
-            } else {
-                LOGE("Failed to read ROM for %s at offset %u", fileName, currentFileOffset);
             }
             free(compressedBuffer);
         }
 
         jstring jName = env->NewStringUTF(fileName);
         env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
-        
         env->PopLocalFrame(NULL);
     }
 
-    LOGI("OTR Generation Finished. Sending final 100%% signal.");
+    LOGI("OTR Generation Finished.");
     jstring doneMsg = env->NewStringUTF("Extraction Complete! Booting Game...");
     env->CallVoidMethod(callbackObj, progressMid, 100, doneMsg);
+
+    env->ReleaseStringUTFChars(outDirPathStr, outDirPath);
+    env->ReleaseStringUTFChars(manifestPathStr, manifestPath);
 }
 }
