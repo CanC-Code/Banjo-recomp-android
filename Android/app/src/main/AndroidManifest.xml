@@ -27,7 +27,7 @@
             android:name=".OtrService"
             android:foregroundServiceType="specialUse"
             android:exported="false">
-            </service>
+        </service>
 
     </application>
 </manifest>
