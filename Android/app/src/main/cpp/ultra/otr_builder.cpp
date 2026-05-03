@@ -1,21 +1,18 @@
 #include <jni.h>
+#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <android/log.h>
-#include <stdio.h>
 #include "rare_decompression.h"
 
 #define LOG_TAG "BKA-Builder"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Rareware FID Table Offset for Banjo-Kazooie (US 1.0)
-#define ROM_FID_TABLE_OFFSET 0x5C30
-
-// --- Shadow-Proof Kernel System Calls ---
+// --- 1. Shadow-Proof Kernel System Calls ---
 static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
     return syscall(SYS_pread64, fd, buf, count, offset);
 }
@@ -29,25 +26,19 @@ static int safe_close(int fd) {
     return syscall(SYS_close, fd);
 }
 
-// External callback to NativeBridge
-extern "C" void BKA_UpdateProgress(int percent, const char* status);
-
-// Reads a 32-bit integer directly from the ROM and handles N64 Big Endian conversion
-static uint32_t read_u32_rom(int fd, off_t offset) {
-    uint32_t val = 0;
-    if (safe_pread(fd, &val, 4, offset) == 4) {
-        return __builtin_bswap32(val);
-    }
-    return 0;
+// Helper to prevent ARM64 Alignment Crashes
+static uint32_t read_u32_safe(const uint8_t* ptr) {
+    uint32_t val;
+    memcpy(&val, ptr, 4);
+    return val;
 }
 
+// Recursively create directories for the outDirPath/fileName path
 void ensure_directories(const char* path) {
     char tmp[512];
-    int i = 0;
-    while(path[i] != '\0' && i < 511) { tmp[i] = path[i]; i++; }
-    tmp[i] = '\0';
-    
-    for (char* p = tmp + 1; *p; p++) {
+    char* p = NULL;
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
             mkdir(tmp, 0777);
@@ -56,47 +47,66 @@ void ensure_directories(const char* path) {
     }
 }
 
+// External callback to NativeBridge
+extern "C" void BKA_UpdateProgress(int percent, const char* status);
+
 extern "C" {
-bool OtrBuilder_run(int romFd, const char* outDirPath) {
-    LOGI(">>> Self-Building OTR Extraction Started (romFd: %d)", romFd);
-    BKA_UpdateProgress(0, "Scanning ROM Structure...");
+bool OtrBuilder_run(int romFd, const uint8_t* manifestPtr, uint32_t manifestSize, const char* outDirPath) {
+    LOGI(">>> OTR Extraction Started (romFd: %d)", romFd);
 
-    // 1. Read the number of entries from the ROM's internal FID table
-    uint32_t entryCount = read_u32_rom(romFd, ROM_FID_TABLE_OFFSET);
-    LOGI("Detected %u file entries in ROM FID table", entryCount);
-
-    if (entryCount == 0 || entryCount > 15000) {
-        LOGE("FATAL: Invalid entry count %u in ROM. Is this a valid Banjo-Kazooie US 1.0 ROM?", entryCount);
+    if (!manifestPtr || manifestSize < 4) {
+        LOGE("run_native_otr: Manifest pointer is NULL or too small!");
         return false;
     }
 
-    BKA_UpdateProgress(0, "Extracting Assets...");
+    // 1. Read the Entry Count (4-byte header)
+    uint32_t entryCount = read_u32_safe(manifestPtr);
+    const uint8_t* recordStart = manifestPtr + 4;
 
-    // 2. Loop through the internal ROM table
+    LOGI("Manifest loaded. Entries to process: %u", entryCount);
+
+    if (entryCount == 0 || entryCount > 50000) {
+        LOGE("run_native_otr: Invalid entry count (%u). Aborting.", entryCount);
+        return false;
+    }
+
     for (uint32_t i = 0; i < entryCount; i++) {
-        uint32_t currentFileOffset = read_u32_rom(romFd, ROM_FID_TABLE_OFFSET + 4 + (i * 4));
-        uint32_t nextFileOffset    = read_u32_rom(romFd, ROM_FID_TABLE_OFFSET + 4 + ((i + 1) * 4));
+        // Each record is 48 bytes based on the Python script (<II32s8s)
+        const uint8_t* record = recordStart + (i * 48);
         
-        if (nextFileOffset < currentFileOffset) continue; // Protection against corrupted tables
-        
-        uint32_t fileSize = nextFileOffset - currentFileOffset;
-        
-        if (fileSize == 0 || fileSize > 0x1000000) continue; 
+        if (record + 48 > manifestPtr + manifestSize) {
+            LOGE("Buffer overflow prevented at entry %u", i);
+            break;
+        }
 
-        char fileName[32];
-        snprintf(fileName, sizeof(fileName), "%04X.bin", i);
+        uint32_t romOffset = read_u32_safe(record + 0);
+        uint32_t fileSize  = read_u32_safe(record + 4);
+        
+        char fileName[33];
+        memcpy(fileName, record + 8, 32);
+        fileName[32] = '\0';
+
+        // Calculate percentage early so we can report progress even for skipped files
+        int percentage = (int)(((i + 1) * 100) / entryCount);
+
+        // Skip files with 0 size (like padding or tail markers) but still update the UI
+        if (fileSize == 0) {
+            BKA_UpdateProgress(percentage, fileName);
+            continue;
+        }
 
         char fullPath[512];
         snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
         ensure_directories(fullPath);
 
-        uint8_t* compressedBuffer = (uint8_t*)::malloc(fileSize);
+        uint8_t* compressedBuffer = (uint8_t*)malloc(fileSize);
         if (compressedBuffer) {
-            if (safe_pread(romFd, compressedBuffer, fileSize, currentFileOffset) == (ssize_t)fileSize) {
+            if (safe_pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
                 uint32_t decompressedSize = 0;
                 
+                // decompress_rare_asset handles the 0x1172 magic check
                 uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompressedSize);
-
+                
                 uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : compressedBuffer;
                 uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
@@ -105,19 +115,21 @@ bool OtrBuilder_run(int romFd, const char* outDirPath) {
                     safe_write(outFd, writePtr, writeSize);
                     safe_close(outFd);
                 }
-                if (finalBuffer) ::free(finalBuffer);
+                if (finalBuffer) free(finalBuffer);
+            } else {
+                LOGE("Failed to read ROM for %s at offset %u", fileName, romOffset);
             }
-            ::free(compressedBuffer);
+            free(compressedBuffer);
         }
 
-        // Update progress UI periodically
-        if (i % 100 == 0 || i == entryCount - 1) {
-            int percentage = (int)(((i + 1) * 100) / entryCount);
+        // Periodic UI update to prevent swamping the Android message queue
+        if (i % 50 == 0 || i == entryCount - 1) {
             BKA_UpdateProgress(percentage, fileName);
         }
     }
 
-    LOGI(">>> Internal ROM Extraction Successfully Finished");
+    // --- FINAL COMPLETION SIGNAL ---
+    LOGI("OTR Generation Finished. Sending final 100%% signal.");
     BKA_UpdateProgress(100, "Extraction Complete! Booting Game...");
     return true;
 }
