@@ -3,7 +3,6 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <string>
-#include <unistd.h>
 
 #define LOG_TAG "NativeBridge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -15,29 +14,9 @@ static jmethodID g_progressMid = nullptr;
 
 extern "C" {
     void ResourceMgr_Init(const char* otrPath, AAssetManager* assetMgr);
-    bool OtrBuilder_run(int romFd, const uint8_t* manifestPtr, uint32_t manifestSize, const char* outDirPath);
-}
-
-extern "C" void BKA_UpdateProgress(int percent, const char* status) {
-    if (!g_jvm || !g_otrService || !g_progressMid) return;
-
-    JNIEnv* env     = nullptr;
-    bool    attached = false;
-
-    jint rc = g_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
-    if (rc == JNI_EDETACHED) {
-        g_jvm->AttachCurrentThread(&env, nullptr);
-        attached = true;
-    }
-
-    if (env) {
-        jstring jStatus = env->NewStringUTF(status ? status : "");
-        env->CallVoidMethod(g_otrService, g_progressMid, static_cast<jint>(percent), jStatus);
-        env->DeleteLocalRef(jStatus);
-        if (env->ExceptionCheck()) env->ExceptionClear();
-    }
-
-    if (attached) g_jvm->DetachCurrentThread();
+    void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
+                                           int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
+                                           const char* outDirPath);
 }
 
 extern "C" {
@@ -61,33 +40,26 @@ Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass clazz, jobject o
     LOGI("nativeInit complete");
 }
 
-JNIEXPORT jboolean JNICALL
+JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass clazz, jint fd, jobject assetManagerObj, jstring outDirStr) {
     LOGI("runOtrGeneration called, fd=%d", fd);
     const char* outDir = env->GetStringUTFChars(outDirStr, nullptr);
     AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
 
-    // Fallback support in case the python script outputs to a different name
     AAsset* manifestAsset = AAssetManager_open(assetMgr, "manifest.bin", AASSET_MODE_BUFFER);
-    if (!manifestAsset) {
-        manifestAsset = AAssetManager_open(assetMgr, "manifest_us.bin", AASSET_MODE_BUFFER);
-    }
-
-    bool success = false;
     if (manifestAsset) {
-        const uint8_t* manifestPtr = (const uint8_t*)AAsset_getBuffer(manifestAsset);
-        off_t manifestSize = AAsset_getLength(manifestAsset);
+        uint8_t* manifestPtr = (uint8_t*)AAsset_getBuffer(manifestAsset);
+        uint32_t manifestSize = AAsset_getLength(manifestAsset);
         
-        success = OtrBuilder_run(static_cast<int>(fd), manifestPtr, static_cast<uint32_t>(manifestSize), outDir);
+        run_native_otr_generation_with_callback(env, g_otrService, g_progressMid, fd, manifestPtr, manifestSize, outDir);
         
         AAsset_close(manifestAsset);
     } else {
-        LOGE("runOtrGeneration: Manifest file missing! Python asset pipeline failed to include manifest.bin.");
+        LOGE("runOtrGeneration: manifest.bin missing from assets folder!");
     }
 
     env->ReleaseStringUTFChars(outDirStr, outDir);
-    LOGI("runOtrGeneration complete: Success=%d", success);
-    return success ? JNI_TRUE : JNI_FALSE;
+    LOGI("runOtrGeneration complete");
 }
 
 JNIEXPORT void JNICALL
