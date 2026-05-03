@@ -20,26 +20,26 @@ public class NativeBridge {
     public static native void nativeInit(OtrService service);
 
     /**
-     * Extracts ROM assets into {@code outDir} as loose files.
+     * Extracts ROM assets into {@code outDir} as loose files by directly
+     * reading the ROM's internal file table.
      * Calls {@code service.updateOtrProgress()} periodically via JNI.
      *
-     * @param fd           File descriptor for the ROM (detached from a
-     *                     ParcelFileDescriptor — C++ owns it after this call).
-     * @param assetManager Used to read manifest_us.bin from the APK.
-     * @param outDir       Destination directory (getFilesDir()).
+     * @param fd     File descriptor for the ROM (detached from a
+     * ParcelFileDescriptor — C++ owns it after this call).
+     * @param outDir Destination directory (getFilesDir()).
+     * @return       true if the extraction completed successfully, false if 
+     * internal ROM parsing failed.
      */
-    public static native void runOtrGeneration(int fd,
-                                               AssetManager assetManager,
-                                               String outDir);
+    public static native boolean runOtrGeneration(int fd, String outDir);
 
     /**
      * Initialises the engine and enters the main game loop (blocking).
      * Must be called on a dedicated background thread.
      *
      * @param otrPath      Path to the directory containing extracted assets
-     *                     (same value passed as {@code outDir} to
-     *                     {@link #runOtrGeneration}).
-     * @param assetManager Used to re-open manifest_us.bin for ResourceMgr.
+     * (same value passed as {@code outDir} to
+     * {@link #runOtrGeneration}).
+     * @param assetManager Used to re-open internal manifest for ResourceMgr.
      */
     public static native void nativeGameBoot(String otrPath,
                                              AssetManager assetManager);
