@@ -29,31 +29,32 @@ set(BRIDGE_SOURCES
 )
 
 # ============================================================
-# 2. Game Source Files (Filtered to prevent Shadowing/Deadlock)
+# 2. Game Source Files (Including .cpp for Engine Core)
 # ============================================================
 option(EXCLUDE_GAME_SRC "Skip compiling the recompiled game source tree" OFF)
 
 set(GAME_SOURCES "")
 if(NOT EXCLUDE_GAME_SRC)
-    file(GLOB_RECURSE ALL_C_FILES "${REPO_ROOT}/src/*.c")
-
-    # The Hardware & OS Blacklist
-    # We exclude these because we provide Android-compatible HLE versions 
-    # in 'emulator/stubs.cpp' and 'emulator/pi_hle.cpp'
-    set(EXCLUSION_LIST
-        "pirawdma.c"   # Shadows osPiRawStartDma
-        "epirawdma.c"  # Shadows osEPiStartDma
-        "pimgr.c"      # Shadows PI Manager
-        # "piacs.c"    <-- REMOVED: Required for __osPiGetAccess and __osPiRelAccess
-        "vi.c"         # Shadows Video Interface
-        "vicurrent.c"  # Shadows VI tracking
-        "osYield.c"    # Shadows Scheduler
-        "recvmesg.c"   # NEW: Prevent deadlock in message queue
-        "sendmesg.c"   # NEW: Prevent deadlock in message queue
-        "jammesg.c"    # NEW: Prevent deadlock in message queue
+    # UPDATED: Glob both .c and .cpp to ensure main_loop and engine core are captured
+    file(GLOB_RECURSE ALL_GAME_FILES 
+        "${REPO_ROOT}/src/*.c"
+        "${REPO_ROOT}/src/*.cpp"
     )
 
-    foreach(FILE_PATH ${ALL_C_FILES})
+    # The Hardware & OS Blacklist
+    set(EXCLUSION_LIST
+        "pirawdma.c"   
+        "epirawdma.c"  
+        "pimgr.c"      
+        "vi.c"         
+        "vicurrent.c"  
+        "osYield.c"    
+        "recvmesg.c"   
+        "sendmesg.c"   
+        "jammesg.c"    
+    )
+
+    foreach(FILE_PATH ${ALL_GAME_FILES})
         get_filename_component(FILENAME ${FILE_PATH} NAME)
         list(FIND EXCLUSION_LIST ${FILENAME} INDEX)
         if(INDEX EQUAL -1)
@@ -128,4 +129,9 @@ target_link_libraries(bkawrapper
     m
 )
 
-target_link_options(bkawrapper PRIVATE "-Wl,--allow-multiple-definition")
+# Force the linker to ignore multiple definitions (common in recompiled ports)
+# and ensure symbols like main_loop are visible.
+target_link_options(bkawrapper PRIVATE 
+    "-Wl,--allow-multiple-definition"
+    "-Wl,--export-dynamic"
+)
