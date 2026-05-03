@@ -15,8 +15,7 @@ static jmethodID g_progressMid = nullptr;
 extern "C" {
     void ResourceMgr_Init(const char* otrPath, AAssetManager* assetMgr);
     void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
-                                           int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
-                                           const char* outDirPath);
+                                           int romFd, const char* outDirPath);
 }
 
 extern "C" {
@@ -44,19 +43,9 @@ JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass clazz, jint fd, jobject assetManagerObj, jstring outDirStr) {
     LOGI("runOtrGeneration called, fd=%d", fd);
     const char* outDir = env->GetStringUTFChars(outDirStr, nullptr);
-    AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
 
-    AAsset* manifestAsset = AAssetManager_open(assetMgr, "manifest.bin", AASSET_MODE_BUFFER);
-    if (manifestAsset) {
-        uint8_t* manifestPtr = (uint8_t*)AAsset_getBuffer(manifestAsset);
-        uint32_t manifestSize = AAsset_getLength(manifestAsset);
-        
-        run_native_otr_generation_with_callback(env, g_otrService, g_progressMid, fd, manifestPtr, manifestSize, outDir);
-        
-        AAsset_close(manifestAsset);
-    } else {
-        LOGE("runOtrGeneration: manifest.bin missing from assets folder!");
-    }
+    // Call the self-building ROM parser directly
+    run_native_otr_generation_with_callback(env, g_otrService, g_progressMid, fd, outDir);
 
     env->ReleaseStringUTFChars(outDirStr, outDir);
     LOGI("runOtrGeneration complete");
