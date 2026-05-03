@@ -64,9 +64,10 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     const char* otrPath = env->GetStringUTFChars(otrPathStr, nullptr);
     g_otrPath = otrPath;
 
-    // Load Manifest from disk before starting thread
+    // Attempt to load the manifest
     std::string mPath = g_otrPath + "/manifest_us.bin";
     FILE* f = fopen(mPath.c_str(), "rb");
+    
     if (f) {
         fseek(f, 0, SEEK_END);
         long size = ftell(f);
@@ -77,14 +78,15 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
 
         ResourceMgr_Init(otrPath, buf.data(), (uint32_t)size);
         LOGI("NativeBridge: Resource Manager active.");
+        
+        // SAFEGUARD: Launch Emulator Thread asynchronously ONLY if assets are valid
+        pthread_t gameThread;
+        pthread_create(&gameThread, nullptr, game_thread_fn, nullptr);
+        pthread_detach(gameThread);
     } else {
-        LOGE("NativeBridge: Failed to load manifest at %s", mPath.c_str());
+        // ABORT: Prevent the engine from booting to avoid a fatal SIGSEGV
+        LOGE("NativeBridge: Failed to load manifest at %s. Aborting boot sequence.", mPath.c_str());
     }
-
-    // Launch Emulator Thread asynchronously
-    pthread_t gameThread;
-    pthread_create(&gameThread, nullptr, game_thread_fn, nullptr);
-    pthread_detach(gameThread);
 
     env->ReleaseStringUTFChars(otrPathStr, otrPath);
 }
