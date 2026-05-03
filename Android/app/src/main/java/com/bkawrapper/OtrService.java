@@ -65,15 +65,14 @@ public class OtrService extends Service {
 
                 NativeBridge.nativeInit(this);
                 
-                // Note: getAssets() has been removed from this call.
-                boolean success = NativeBridge.runOtrGeneration(fd, outDir);
+                boolean success = NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
 
                 if (success) {
                     writeSentinel(outDir);
                     Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
                     LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
                 } else {
-                    throw new Exception("Internal ROM parsing failed. Invalid ROM or read error.");
+                    throw new Exception("OTR Generation failed: Manifest missing or invalid format.");
                 }
 
             } catch (Exception e) {
