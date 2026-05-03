@@ -20,8 +20,16 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++17"
-                arguments "-DANDROID_STL=c++_shared"
+                // Ensure DEXCLUDE_GAME_SRC matches your project logic
+                arguments "-DANDROID_STL=c++_shared", "-DEXCLUDE_GAME_SRC=OFF"
             }
+        }
+    }
+
+    // Explicitly mapping assets ensures the manifest binaries are bundled
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
         }
     }
 
