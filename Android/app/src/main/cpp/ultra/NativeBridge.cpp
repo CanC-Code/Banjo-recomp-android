@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <pthread.h>
 #include <unistd.h>
+#include <stdint.h>
 
 #define LOG_TAG "NativeBridge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -16,9 +17,10 @@ static JavaVM* g_jvm = nullptr;
 static std::string g_otrPath;
 
 extern "C" {
-    // These functions must be provided by your engine core (e.g., core1_main or main_loop)
-    // If the linker still fails, search your src/ folder for the recompiled entry point name.
-    void main_loop(); 
+    // The exact bootloader entry point defined in bk_boot_1050.c
+    // C-linkage is required because bk_boot_1050.c is compiled as a standard C file.
+    void func_80000450(int32_t arg0);
+    
     void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
     void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
                                                int romFd, const char* outDirPath, const char* manifestPath);
@@ -27,7 +29,11 @@ extern "C" {
 // Background thread loop to prevent UI lockup
 void* game_thread_fn(void* arg) {
     LOGI("NativeBridge: Thread started. Launching game engine...");
-    main_loop(); // Jump to recompiled Banjo-Kazooie code
+    
+    // Jump into the recompiled Banjo-Kazooie boot sequence.
+    // 0 is passed as the default thread argument, matching native hardware behavior.
+    func_80000450(0); 
+    
     return nullptr;
 }
 
@@ -71,9 +77,11 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
 
         ResourceMgr_Init(otrPath, buf.data(), (uint32_t)size);
         LOGI("NativeBridge: Resource Manager active.");
+    } else {
+        LOGE("NativeBridge: Failed to load manifest at %s", mPath.c_str());
     }
 
-    // Launch Emulator Thread
+    // Launch Emulator Thread asynchronously
     pthread_t gameThread;
     pthread_create(&gameThread, nullptr, game_thread_fn, nullptr);
     pthread_detach(gameThread);
