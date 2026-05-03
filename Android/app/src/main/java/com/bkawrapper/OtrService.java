@@ -15,6 +15,10 @@ import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 public class OtrService extends Service {
 
@@ -32,6 +36,15 @@ public class OtrService extends Service {
         System.loadLibrary("bkawrapper");
     }
 
+    /**
+     * Native method declared in otr_builder.cpp
+     * @param callback The object containing onProgressUpdate (this service)
+     * @param romFd File descriptor for the ROM
+     * @param outDir Destination path for extracted .bin files
+     * @param manifestPath Path to the manifest_*.bin on the local filesystem
+     */
+    private native void runNativeOtrGeneration(Object callback, int romFd, String outDir, String manifestPath);
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -44,11 +57,17 @@ public class OtrService extends Service {
 
         String uriString = intent.getStringExtra("uri");
         String outDir    = intent.getStringExtra("outDir");
+        String version   = intent.getStringExtra("version");
+        
+        // Default to US 1.0 if no version is provided
+        if (version == null) version = "us"; 
+        final String finalVersion = version;
 
         startForeground(NOTIFICATION_ID,
             new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Preparing Banjo-Kazooie Assets")
                 .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build());
 
         new Thread(() -> {
@@ -63,10 +82,15 @@ public class OtrService extends Service {
                 int fd = pfd.detachFd();
                 Log.i(TAG, "ROM fd detached: " + fd);
 
-                NativeBridge.nativeInit(this);
-                // AssetManager is passed but ignored by C++ to preserve method signatures
-                NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
+                // 1. Move manifest from APK Assets to local storage so C++ safe_open can see it
+                String manifestName = "manifest_" + finalVersion + ".bin";
+                File internalManifest = new File(getFilesDir(), manifestName);
+                copyAssetToDisk(manifestName, internalManifest);
 
+                // 2. Call the native extraction engine
+                runNativeOtrGeneration(this, fd, outDir, internalManifest.getAbsolutePath());
+
+                // 3. Cleanup and Signal Completion
                 writeSentinel(outDir);
                 Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
                 LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
@@ -85,8 +109,12 @@ public class OtrService extends Service {
         return START_NOT_STICKY;
     }
 
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
+    /**
+     * Helper to bridge the JNI callback to the existing progress logic
+     */
+    public void onProgressUpdate(int percent, String status) {
+        updateOtrProgress(percent, status);
+    }
 
     public void updateOtrProgress(int percent, String status) {
         Intent intent = new Intent(ACTION_OTR_PROGRESS);
@@ -107,13 +135,31 @@ public class OtrService extends Service {
         if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
     }
 
+    /**
+     * C++ uses syscalls (openat) which cannot access compressed APK assets.
+     * We must copy the manifest to the app's private files directory first.
+     */
+    private void copyAssetToDisk(String assetName, File outFile) throws IOException {
+        // Only copy if it doesn't exist, to save time on subsequent boots
+        if (outFile.exists()) return; 
+
+        try (InputStream in = getAssets().open(assetName);
+             OutputStream out = new FileOutputStream(outFile)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            Log.i(TAG, "Manifest extracted to filesystem: " + outFile.getAbsolutePath());
+        }
+    }
+
     private void writeSentinel(String outDir) {
         try {
             File sentinel = new File(outDir, SENTINEL_FILENAME);
             if (!sentinel.exists()) {
                 sentinel.createNewFile();
             }
-            Log.i(TAG, "Sentinel written: " + sentinel.getAbsolutePath());
         } catch (Exception e) {
             Log.w(TAG, "Could not write sentinel: " + e.getMessage());
         }
@@ -129,4 +175,7 @@ public class OtrService extends Service {
             if (mgr != null) mgr.createNotificationChannel(channel);
         }
     }
+
+    @Override
+    public IBinder onBind(Intent intent) { return null; }
 }
