@@ -64,6 +64,7 @@ public class OtrService extends Service {
                 Log.i(TAG, "ROM fd detached: " + fd);
 
                 NativeBridge.nativeInit(this);
+                // AssetManager is passed but ignored by C++ to preserve method signatures
                 NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
 
                 writeSentinel(outDir);
