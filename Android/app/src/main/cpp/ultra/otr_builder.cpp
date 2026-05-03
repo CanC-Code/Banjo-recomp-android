@@ -28,13 +28,21 @@ struct ManifestEntry {
 };
 #pragma pack(pop)
 
-// Dynamic Endianness Helpers
+// Robust Endian-Safe ROM format detection
 RomFormat detect_format(int fd) {
-    uint32_t magic = 0;
-    syscall(SYS_pread64, fd, &magic, 4, 0);
-    if (magic == 0x80371240) return FORMAT_Z64; // Big-Endian
-    if (magic == 0x40123780) return FORMAT_N64; // Little-Endian (.n64)
-    if (magic == 0x37804012) return FORMAT_V64; // Byte-swapped
+    uint8_t magic[4] = {0};
+    syscall(SYS_pread64, fd, magic, 4, 0);
+    
+    if (magic[0] == 0x80 && magic[1] == 0x37 && magic[2] == 0x12 && magic[3] == 0x40) {
+        return FORMAT_Z64; // Big-Endian
+    }
+    if (magic[0] == 0x40 && magic[1] == 0x12 && magic[2] == 0x37 && magic[3] == 0x80) {
+        return FORMAT_N64; // Little-Endian (.n64)
+    }
+    if (magic[0] == 0x37 && magic[1] == 0x80 && magic[2] == 0x40 && magic[3] == 0x12) {
+        return FORMAT_V64; // Byte-swapped
+    }
+    
     return FORMAT_UNKNOWN;
 }
 
@@ -58,10 +66,6 @@ void ensure_dir(const char* path) {
 }
 
 extern "C" {
-/**
- * CRITICAL LINKAGE FIX: 
- * This raw C function provides the entry point for NativeBridge.cpp.
- */
 void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
                                                int romFd, const char* outDirPath, const char* manifestPath) {
     
