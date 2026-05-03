@@ -15,7 +15,7 @@ static jmethodID g_progressMid = nullptr;
 
 extern "C" {
     void ResourceMgr_Init(const char* otrPath, AAssetManager* assetMgr);
-    bool OtrBuilder_run(int fd, const char* outDir); 
+    bool OtrBuilder_run(int romFd, const uint8_t* manifestPtr, uint32_t manifestSize, const char* outDirPath);
 }
 
 extern "C" void BKA_UpdateProgress(int percent, const char* status) {
@@ -62,11 +62,28 @@ Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass clazz, jobject o
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass clazz, jint fd, jstring outDirStr) {
+Java_com_bkawrapper_NativeBridge_runOtrGeneration(JNIEnv* env, jclass clazz, jint fd, jobject assetManagerObj, jstring outDirStr) {
     LOGI("runOtrGeneration called, fd=%d", fd);
     const char* outDir = env->GetStringUTFChars(outDirStr, nullptr);
+    AAssetManager* assetMgr = AAssetManager_fromJava(env, assetManagerObj);
 
-    bool success = OtrBuilder_run(static_cast<int>(fd), outDir);
+    // Fallback support in case the python script outputs to a different name
+    AAsset* manifestAsset = AAssetManager_open(assetMgr, "manifest.bin", AASSET_MODE_BUFFER);
+    if (!manifestAsset) {
+        manifestAsset = AAssetManager_open(assetMgr, "manifest_us.bin", AASSET_MODE_BUFFER);
+    }
+
+    bool success = false;
+    if (manifestAsset) {
+        const uint8_t* manifestPtr = (const uint8_t*)AAsset_getBuffer(manifestAsset);
+        off_t manifestSize = AAsset_getLength(manifestAsset);
+        
+        success = OtrBuilder_run(static_cast<int>(fd), manifestPtr, static_cast<uint32_t>(manifestSize), outDir);
+        
+        AAsset_close(manifestAsset);
+    } else {
+        LOGE("runOtrGeneration: Manifest file missing! Python asset pipeline failed to include manifest.bin.");
+    }
 
     env->ReleaseStringUTFChars(outDirStr, outDir);
     LOGI("runOtrGeneration complete: Success=%d", success);
