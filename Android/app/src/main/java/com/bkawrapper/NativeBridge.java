@@ -8,10 +8,12 @@ public class NativeBridge {
         System.loadLibrary("bkawrapper");
     }
 
+    // Still used for context initialization in the C++ layer
     public static native void nativeInit(OtrService service);
 
-    public static native void runOtrGeneration(int fd, AssetManager assetManager, String outDir);
+    // REMOVED: runOtrGeneration (Moved to OtrService.java)
 
+    // Used for booting the engine once extraction is confirmed
     public static native void nativeGameBoot(String otrPath, AssetManager assetManager);
 
     public static native void surfaceReady(int width, int height);
