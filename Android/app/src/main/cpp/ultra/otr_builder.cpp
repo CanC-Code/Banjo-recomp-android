@@ -18,7 +18,7 @@
 #define ROM_FID_TABLE_OFFSET 0x5C30
 
 enum RomFormat {
-    FORMAT_Z64, // Big-Endian (Native N64)
+    FORMAT_Z64, // Big-Endian
     FORMAT_N64, // Little-Endian
     FORMAT_V64, // Byte-swapped
     FORMAT_UNKNOWN
@@ -44,29 +44,22 @@ static int safe_close(int fd) {
     return syscall(SYS_close, fd);
 }
 
-// Detects ROM format based on the first 4 bytes
 RomFormat detect_format(int fd) {
     uint32_t magic = 0;
     if (safe_pread(fd, &magic, 4, 0) != 4) return FORMAT_UNKNOWN;
-
     if (magic == 0x80371240) return FORMAT_Z64;
     if (magic == 0x40123780) return FORMAT_N64;
     if (magic == 0x37804012) return FORMAT_V64;
-
     return FORMAT_UNKNOWN;
 }
 
-// Dynamically converts a 32-bit value based on ROM format
 uint32_t read_u32_safe(int fd, off_t offset, RomFormat format) {
     uint32_t val = 0;
     if (safe_pread(fd, &val, 4, offset) != 4) return 0;
-
     switch (format) {
-        case FORMAT_Z64: return __builtin_bswap32(val); // Swap Big to Little
-        case FORMAT_V64: // Handle Byte-swapped
-            return ((val & 0xFF00FF00) >> 8) | ((val & 0x00FF00FF) << 8);
-        case FORMAT_N64: 
-        default: return val; // Already Little-Endian
+        case FORMAT_Z64: return __builtin_bswap32(val);
+        case FORMAT_V64: return ((val & 0xFF00FF00) >> 8) | ((val & 0x00FF00FF) << 8);
+        default: return val;
     }
 }
 
@@ -84,24 +77,22 @@ void ensure_directories(const char* path) {
 }
 
 extern "C" {
-JNIEXPORT void JNICALL Java_com_bkawrapper_OtrService_runNativeOtrGeneration(
-    JNIEnv* env, jobject instance, jobject callbackObj, jint romFd, 
-    jstring outDirPathStr, jstring manifestPathStr) {
+/**
+ * Standard C function called by NativeBridge.cpp
+ * This provides the linkage the linker is currently missing.
+ */
+void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
+                                               int romFd, const char* outDirPath, const char* manifestPath) {
 
-    const char* outDirPath = env->GetStringUTFChars(outDirPathStr, NULL);
-    const char* manifestPath = env->GetStringUTFChars(manifestPathStr, NULL);
-    jclass callbackClass = env->GetObjectClass(callbackObj);
-    jmethodID progressMid = env->GetMethodID(callbackClass, "onProgressUpdate", "(ILjava/lang/String;)V");
+    LOGI(">>> Named OTR Extraction Started (romFd: %d)", romFd);
 
-    // 1. Detect Format
     RomFormat format = detect_format(romFd);
     if (format == FORMAT_UNKNOWN) {
-        LOGE("Unknown ROM format. Aborting.");
+        LOGE("Unknown ROM format. Aborting extraction.");
         return;
     }
     LOGI("ROM Format Detected: %d", format);
 
-    // 2. Load Manifest
     std::vector<ManifestEntry> manifest;
     int mFd = safe_open(manifestPath, O_RDONLY, 0);
     if (mFd != -1) {
@@ -109,16 +100,14 @@ JNIEXPORT void JNICALL Java_com_bkawrapper_OtrService_runNativeOtrGeneration(
         if (read(mFd, &mCount, 4) == 4) {
             manifest.resize(mCount);
             read(mFd, manifest.data(), mCount * sizeof(ManifestEntry));
+            LOGI("Manifest loaded: %u entries", mCount);
         }
         safe_close(mFd);
     }
 
-    // 3. Read Entry Count using dynamic swap
     uint32_t entryCount = read_u32_safe(romFd, ROM_FID_TABLE_OFFSET, format);
-    LOGI("Detected %u file entries in ROM FID table", entryCount);
-
     if (entryCount == 0 || entryCount > 15000) {
-        LOGE("Invalid entry count (%u). Mismatch in ROM version or offset.", entryCount);
+        LOGE("Invalid entry count: %u", entryCount);
         return;
     }
 
@@ -127,7 +116,6 @@ JNIEXPORT void JNICALL Java_com_bkawrapper_OtrService_runNativeOtrGeneration(
 
         uint32_t currentFileOffset = read_u32_safe(romFd, ROM_FID_TABLE_OFFSET + 4 + (i * 4), format);
         uint32_t nextFileOffset    = read_u32_safe(romFd, ROM_FID_TABLE_OFFSET + 4 + ((i + 1) * 4), format);
-
         uint32_t fileSize = (nextFileOffset > currentFileOffset) ? (nextFileOffset - currentFileOffset) : 0;
 
         char fileName[256];
@@ -137,8 +125,6 @@ JNIEXPORT void JNICALL Java_com_bkawrapper_OtrService_runNativeOtrGeneration(
             snprintf(fileName, sizeof(fileName), "unknown/%04X.bin", i);
         }
 
-        int percentage = (int)(((i + 1) * 100) / entryCount);
-
         if (fileSize > 0 && fileSize < 0x1000000) {
             char fullPath[512];
             snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
@@ -147,26 +133,26 @@ JNIEXPORT void JNICALL Java_com_bkawrapper_OtrService_runNativeOtrGeneration(
             uint8_t* compressedBuffer = (uint8_t*)malloc(fileSize);
             if (compressedBuffer) {
                 safe_pread(romFd, compressedBuffer, fileSize, currentFileOffset);
-                
-                uint32_t decompressedSize = 0;
-                uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompressedSize);
+                uint32_t decompSize = 0;
+                uint8_t* decompBuf = decompress_rare_asset(compressedBuffer, fileSize, &decompSize);
 
                 int outFd = safe_open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                 if (outFd != -1) {
-                    syscall(SYS_write, outFd, (finalBuffer ? finalBuffer : compressedBuffer), (finalBuffer ? decompressedSize : fileSize));
+                    write(outFd, decompBuf ? decompBuf : compressedBuffer, decompBuf ? decompSize : fileSize);
                     safe_close(outFd);
                 }
-                if (finalBuffer) free(finalBuffer);
+                if (decompBuf) free(decompBuf);
                 free(compressedBuffer);
             }
         }
 
-        jstring jName = env->NewStringUTF(fileName);
-        env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
+        if (i % 100 == 0 || i == entryCount - 1) {
+            int percentage = (int)(((i + 1) * 100) / entryCount);
+            jstring jName = env->NewStringUTF(fileName);
+            env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
+        }
         env->PopLocalFrame(NULL);
     }
-
-    env->ReleaseStringUTFChars(outDirPathStr, outDirPath);
-    env->ReleaseStringUTFChars(manifestPathStr, manifestPath);
+    LOGI("Extraction complete.");
 }
 }
