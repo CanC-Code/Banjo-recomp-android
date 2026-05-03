@@ -64,16 +64,11 @@ public class OtrService extends Service {
                 Log.i(TAG, "ROM fd detached: " + fd);
 
                 NativeBridge.nativeInit(this);
-                
-                boolean success = NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
+                NativeBridge.runOtrGeneration(fd, getAssets(), outDir);
 
-                if (success) {
-                    writeSentinel(outDir);
-                    Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
-                    LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
-                } else {
-                    throw new Exception("OTR Generation failed: Manifest missing or invalid format.");
-                }
+                writeSentinel(outDir);
+                Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
+                LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
 
             } catch (Exception e) {
                 Log.e(TAG, "Extraction failed", e);
