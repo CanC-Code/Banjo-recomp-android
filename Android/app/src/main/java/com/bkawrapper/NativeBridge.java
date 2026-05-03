@@ -10,11 +10,7 @@ public class NativeBridge {
 
     public static native void nativeInit(OtrService service);
 
-    /**
-     * Extracts ROM assets using the Python-generated manifest buffer.
-     * @return true if successful, false if manifest missing or malformed.
-     */
-    public static native boolean runOtrGeneration(int fd, AssetManager assetManager, String outDir);
+    public static native void runOtrGeneration(int fd, AssetManager assetManager, String outDir);
 
     public static native void nativeGameBoot(String otrPath, AssetManager assetManager);
 
