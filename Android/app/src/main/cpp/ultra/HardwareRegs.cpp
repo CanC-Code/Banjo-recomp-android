@@ -31,7 +31,8 @@
 extern "C" {
     uint32_t* gN64_Reg_Base  = nullptr;   // Points to RCP register window
     uint32_t* gN64_PIF_Base  = nullptr;   // Points to PIF ROM/RAM window
-    uint8_t*  gN64_RDRAM     = nullptr;   // Points to main RDRAM
+    uint8_t* gN64_RDRAM     = nullptr;   // Points to main RDRAM
+    uint32_t* gN64_RAM_Base  = nullptr;   // Points to RDRAM for the routing macro
 }
 
 // ----------------------------------------------------------------------------
@@ -87,6 +88,9 @@ extern "C" void InitN64Registers() {
         gN64_RDRAM = (uint8_t*)try_map_fixed((void*)N64_RDRAM_BASE_ADDR,
                                               N64_RDRAM_SIZE, "RDRAM");
         memset(gN64_RDRAM, 0, N64_RDRAM_SIZE);
+        
+        // Initialize the routing macro's RAM base pointer
+        gN64_RAM_Base = (uint32_t*)gN64_RDRAM;
     }
 
     // 2. RCP register space — SP, DP, MI, VI, AI, PI, RI, SI registers
@@ -109,6 +113,7 @@ void HardwareRegs_Shutdown() {
         if ((uintptr_t)gN64_RDRAM == N64_RDRAM_BASE_ADDR)
             munmap(gN64_RDRAM, N64_RDRAM_SIZE);
         gN64_RDRAM = nullptr;
+        gN64_RAM_Base = nullptr;
     }
 
     if (gN64_Reg_Base != nullptr) {
