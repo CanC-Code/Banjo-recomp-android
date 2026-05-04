@@ -210,61 +210,58 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
-    # Wipe comments and strings to prevent false positives when searching for functional signatures
-    def repl(m): return ' ' * len(m.group(0))
-    clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
-    clean_content = re.sub(r'//.*', repl, clean_content)
-    clean_content = re.sub(r'".*?"', repl, clean_content)
-    clean_content = re.sub(r"'.*?'", repl, clean_content)
-
-    # Isolate global scope explicitly by flattening all `{ ... }` blocks. This ensures functions 
-    # invoked inside other functions (implicit calls) are never misidentified as prototypes.
-    global_scope_chars = []
-    depth = 0
-    for char in clean_content:
-        if char == '{':
-            depth += 1
-        elif char == '}':
-            if depth > 0: depth -= 1
-        elif depth == 0:
-            global_scope_chars.append(char)
-    global_scope = "".join(global_scope_chars)
-
-    # Match static functions strictly terminating before their block definition brace
-    static_def_pattern = re.compile(r"^(static\s+[\w\s\*]+?\b(\w+)\s*\([^;{]*\)\s*)\{", re.MULTILINE)
-    
-    replacements = []
+    # 1. Strip 'static' from definitions that have explicit non-static prototypes
+    static_def_pattern = re.compile(r"^[ \t]*static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1)
         func_name = match.group(2)
 
-        # Check global scope for non-static prototypes only
-        proto_pattern = re.compile(r"^[ \t]*(?!static\b|typedef\b)[a-zA-Z_][\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^;{]*\)\s*;", re.MULTILINE)
-        if proto_pattern.search(global_scope):
-            replacements.append((match.group(0), match.group(0).replace("static ", "", 1)))
+        # Look for a non-static forward declaration
+        proto_pattern = re.compile(r"^[ \t]*([a-zA-Z_][\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
+        has_non_static_proto = False
+        
+        for p_match in proto_pattern.finditer(content):
+            proto_line = p_match.group(1)
+            # Ensure it is a valid prototype, not a keyword sequence or variable assignment
+            if "static" not in proto_line and "typedef" not in proto_line and "return" not in proto_line and "=" not in proto_line:
+                words = [w for w in re.split(r'\W+', proto_line) if w]
+                # A true prototype will have at least two words (e.g. return type + identifier)
+                if len(words) >= 2 and func_name in words:
+                    has_non_static_proto = True
+                    break
 
-    for old, new in replacements:
-        content = content.replace(old, new)
+        if has_non_static_proto:
+            # Drop the static specifier without wrecking original formatting/indentation
+            content = content.replace(match.group(0), match.group(0).replace("static ", "", 1))
 
-    matches = static_def_pattern.findall(content)
+    # 2. Extract unresolved static definitions and embed explicit forward declarations 
+    static_func_pattern = re.compile(r"^[ \t]*(static\s+[\w\s\*]+?\b(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
+    matches = static_func_pattern.findall(content)
     if not matches: return content
 
     signatures = []
     added_funcs = set()
 
-    # Generate prototypes safely checked against true global scope
     for full_sig, func_name in matches:
-        has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^;{]*\)\s*;", global_scope))
+        has_prototype = bool(re.search(r"^[ \t]*static\s+[\w\s\*]+\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE))
         if not has_prototype and func_name not in added_funcs:
-            decl = f"{full_sig.strip()};"
+            # Flatten any multiline signatures caused by decompiler line breaks
+            sig_clean = re.sub(r'\s+', ' ', full_sig.strip())
+            decl = f"{sig_clean};"
             signatures.append(decl)
             added_funcs.add(func_name)
 
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
 
-        # Robustly discover the starting block of the *first* execution function (static or not, missing return types supported)
-        func_def_pattern = re.compile(r'^[ \t]*(?!#)(?!(?:if|while|for|switch|catch)\b)(?:[a-zA-Z_][\w\s\*]*\b\s+)?([a-zA-Z_]\w*)\s*\([^;{]*\)[^;{]*\{', re.MULTILINE)
+        def repl(m): return ' ' * len(m.group(0))
+        clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
+        clean_content = re.sub(r'//.*', repl, clean_content)
+        clean_content = re.sub(r'".*?"', repl, clean_content)
+        clean_content = re.sub(r"'.*?'", repl, clean_content)
+
+        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
+
         first_func_match = func_def_pattern.search(clean_content)
 
         if first_func_match:
@@ -280,7 +277,6 @@ def fix_linkage_conflicts(content):
             last_macro_match = list(re.finditer(r'^[ \t]*#[ \t]*define[^\n]*', clean_pre_text, re.MULTILINE))
             last_macro_pos = last_macro_match[-1].end() if last_macro_match else 0
 
-            # Calculate safe injection offset bypassing global array definitions and structs, targeting pre-exec block
             insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
 
             if insert_idx > 0:
@@ -344,7 +340,6 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
     content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
     
-    # Match to the end of the line instead of relying on non-greedy parens, which leaves trailed artifacts on single-line macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
@@ -379,11 +374,9 @@ def sanitize_codebase(root_path):
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
             
-            # Identify if either the old or new header currently exists to flag code parsing
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
                 
-                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed to avoid shadowing NDK paths.
                 if os.path.exists(old_path):
                     if os.path.exists(new_path):
                         os.remove(new_path)
