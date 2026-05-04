@@ -299,17 +299,20 @@ extern void InitN64Registers(void);
 static inline unsigned char* BKA_GetSafeRegBase(void) {
     if (gN64_Reg_Base) return (unsigned char*)gN64_Reg_Base;
     InitN64Registers();
-    return gN64_Reg_Base ? (unsigned char*)gN64_Reg_Base : (unsigned char*)0;
+    if (!gN64_Reg_Base) gN64_Reg_Base = (unsigned int*)calloc(1, 0x100000); /* 1 MB */
+    return (unsigned char*)gN64_Reg_Base;
 }
 static inline unsigned char* BKA_GetSafePifBase(void) {
     if (gN64_PIF_Base) return (unsigned char*)gN64_PIF_Base;
     InitN64Registers();
-    return gN64_PIF_Base ? (unsigned char*)gN64_PIF_Base : (unsigned char*)0;
+    if (!gN64_PIF_Base) gN64_PIF_Base = (unsigned int*)calloc(1, 0x1000); /* 4 KB */
+    return (unsigned char*)gN64_PIF_Base;
 }
 static inline unsigned char* BKA_GetSafeRamBase(void) {
     if (gN64_RAM_Base) return (unsigned char*)gN64_RAM_Base;
     InitN64Registers();
-    return gN64_RAM_Base ? (unsigned char*)gN64_RAM_Base : (unsigned char*)0;
+    if (!gN64_RAM_Base) gN64_RAM_Base = (unsigned int*)calloc(1, 0x800000); /* 8 MB */
+    return (unsigned char*)gN64_RAM_Base;
 }
 #endif
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
