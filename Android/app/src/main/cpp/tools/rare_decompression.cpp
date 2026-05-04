@@ -1,4 +1,4 @@
-#include "tools/rare_decompression.h"
+#include "rare_decompression.h" // Ensure this matches your local project header location
 
 #include <cstdint>
 #include <cstdlib>
@@ -31,7 +31,7 @@ uint8_t* decompress_rare_asset(const uint8_t* src,
 
     // FIX: Sanity limit increased from 32 MB to 128 MB to support larger OTR assets
     const uint32_t MAX_DECOMPRESSED_SIZE = 128u * 1024u * 1024u;
-    
+
     if (decompLen == 0 || decompLen > MAX_DECOMPRESSED_SIZE) {
         __android_log_print(
             ANDROID_LOG_ERROR,
