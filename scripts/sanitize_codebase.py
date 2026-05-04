@@ -253,7 +253,6 @@ def fix_linkage_conflicts(content):
 
         if first_func_match:
             pos = first_func_match.start()
-
             clean_pre_text = clean_content[:pos]
 
             last_semi = clean_pre_text.rfind(';')
@@ -278,6 +277,94 @@ def fix_linkage_conflicts(content):
             content = content + "\n" + header_block
 
     return content
+
+def remove_bka_from_initializers(content):
+    out = []
+    i = 0
+    n = len(content)
+    
+    in_comment = False
+    in_line_comment = False
+    in_string = False
+    in_init = False
+    brace_depth = 0
+    block_start = 0
+    
+    while i < n:
+        if not in_comment and not in_line_comment and not in_string:
+            if content[i:i+2] == '/*':
+                in_comment = True
+                if not in_init: out.append('/*')
+                i += 2
+                continue
+            elif content[i:i+2] == '//':
+                in_line_comment = True
+                if not in_init: out.append('//')
+                i += 2
+                continue
+            elif content[i] == '"':
+                in_string = True
+                if not in_init: out.append('"')
+                i += 1
+                continue
+                
+            if not in_init:
+                if content[i] == '=':
+                    j = i + 1
+                    while j < n and content[j] in ' \t\r\n':
+                        j += 1
+                    if j < n and content[j] == '{':
+                        in_init = True
+                        brace_depth = 1
+                        out.append(content[i:j+1])
+                        i = j + 1
+                        block_start = i
+                        continue
+            else:
+                if content[i] == '{':
+                    brace_depth += 1
+                elif content[i] == '}':
+                    brace_depth -= 1
+                    if brace_depth == 0:
+                        block = content[block_start:i]
+                        # Strips the BKA_TRANSLATE_ADDR layer off static fields
+                        block = re.sub(r'BKA_TRANSLATE_ADDR\(([^()]+)\)', r'\1', block)
+                        out.append(block)
+                        out.append('}')
+                        in_init = False
+                        i += 1
+                        continue
+                i += 1
+                continue
+
+        else:
+            if in_comment and content[i:i+2] == '*/':
+                in_comment = False
+                if not in_init: out.append('*/')
+                i += 2
+                continue
+            elif in_line_comment and content[i] == '\n':
+                in_line_comment = False
+                if not in_init: out.append('\n')
+                i += 1
+                continue
+            elif in_string and content[i] == '"':
+                bs_count = 0
+                k = i - 1
+                while k >= 0 and content[k] == '\\':
+                    bs_count += 1
+                    k -= 1
+                if bs_count % 2 == 0:
+                    in_string = False
+                    if not in_init: out.append('"')
+                    i += 1
+                    continue
+
+        if not in_init:
+            out.append(content[i])
+        i += 1
+        
+    return "".join(out)
 
 def apply_android_memory_routing(content, filename):
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
@@ -373,7 +460,9 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
         content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
         content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
-    # Only inject the header if the file actually required memory mapping or ptr translation
+    # Post-process: Exclude memory routing macros from static initialization context
+    content = remove_bka_from_initializers(content)
+
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', original_content)
     if content != original_content or has_memory_access:
         content = header + content
