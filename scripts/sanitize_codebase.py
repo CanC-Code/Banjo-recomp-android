@@ -51,6 +51,8 @@ TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
+    if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
+        return True
     path_lower = filepath.replace('\\', '/').lower()
     if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
@@ -208,37 +210,51 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
-    # 1. Strip static from definition if a non-static prototype exists
-    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^;{]*\)\s*\{)", re.MULTILINE)
+    # Wipe comments and strings to prevent false positives when searching for functional signatures
+    def repl(m): return ' ' * len(m.group(0))
+    clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
+    clean_content = re.sub(r'//.*', repl, clean_content)
+    clean_content = re.sub(r'".*?"', repl, clean_content)
+    clean_content = re.sub(r"'.*?'", repl, clean_content)
+
+    # Isolate global scope explicitly by flattening all `{ ... }` blocks. This ensures functions 
+    # invoked inside other functions (implicit calls) are never misidentified as prototypes.
+    global_scope_chars = []
+    depth = 0
+    for char in clean_content:
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            if depth > 0: depth -= 1
+        elif depth == 0:
+            global_scope_chars.append(char)
+    global_scope = "".join(global_scope_chars)
+
+    # Match static functions strictly terminating before their block definition brace
+    static_def_pattern = re.compile(r"^(static\s+[\w\s\*]+?\b(\w+)\s*\([^;{]*\)\s*)\{", re.MULTILINE)
+    
+    replacements = []
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1)
         func_name = match.group(2)
 
-        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^;{]*\)\s*;)", re.MULTILINE)
-        has_non_static_proto = False
-        for p_match in proto_pattern.finditer(content):
-            proto_line = p_match.group(0)
-            if "static" not in proto_line and "typedef" not in proto_line:
-                has_non_static_proto = True
-                break
+        # Check global scope for non-static prototypes only
+        proto_pattern = re.compile(r"^[ \t]*(?!static\b|typedef\b)[a-zA-Z_][\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^;{]*\)\s*;", re.MULTILINE)
+        if proto_pattern.search(global_scope):
+            replacements.append((match.group(0), match.group(0).replace("static ", "", 1)))
 
-        if has_non_static_proto:
-            content = content.replace("static " + full_sig, full_sig)
+    for old, new in replacements:
+        content = content.replace(old, new)
 
-    # 2. Gather static functions that need forward decls
-    static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^;{]*\)\s*)\{", re.MULTILINE)
-    matches = static_func_pattern.findall(content)
+    matches = static_def_pattern.findall(content)
     if not matches: return content
 
     signatures = []
     added_funcs = set()
 
+    # Generate prototypes safely checked against true global scope
     for full_sig, func_name in matches:
-        # Strict requirement on valid return type sequences to prevent misidentifying function calls as prototypes
-        forbidden = r"(?!return\b|if\b|while\b|for\b|switch\b)"
-        proto_pattern = r"^[ \t]*" + forbidden + r"(?:(?:static|extern|inline|__inline)\s+)*" + forbidden + r"[a-zA-Z_]\w*[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^;{]*\)\s*;"
-        has_prototype = bool(re.search(proto_pattern, content, re.MULTILINE))
-        
+        has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^;{]*\)\s*;", global_scope))
         if not has_prototype and func_name not in added_funcs:
             decl = f"{full_sig.strip()};"
             signatures.append(decl)
@@ -247,15 +263,8 @@ def fix_linkage_conflicts(content):
     if signatures:
         header_block = "\n/* Automated Forward Decls */\n" + "\n".join(signatures) + "\n\n"
 
-        def repl(m): return ' ' * len(m.group(0))
-        clean_content = re.sub(r'/\*.*?\*/', repl, content, flags=re.DOTALL)
-        clean_content = re.sub(r'//.*', repl, clean_content)
-        clean_content = re.sub(r'".*?"', repl, clean_content)
-        clean_content = re.sub(r"'.*?'", repl, clean_content)
-
-        # Uses [^;{]* inside parens to cleanly hurdle deeply nested function pointers & macro parameter lists
-        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^;{]*\)[ \t\n]*\{', re.MULTILINE)
-
+        # Robustly discover the starting block of the *first* execution function (static or not, missing return types supported)
+        func_def_pattern = re.compile(r'^[ \t]*(?!#)(?!(?:if|while|for|switch|catch)\b)(?:[a-zA-Z_][\w\s\*]*\b\s+)?([a-zA-Z_]\w*)\s*\([^;{]*\)[^;{]*\{', re.MULTILINE)
         first_func_match = func_def_pattern.search(clean_content)
 
         if first_func_match:
@@ -271,6 +280,7 @@ def fix_linkage_conflicts(content):
             last_macro_match = list(re.finditer(r'^[ \t]*#[ \t]*define[^\n]*', clean_pre_text, re.MULTILINE))
             last_macro_pos = last_macro_match[-1].end() if last_macro_match else 0
 
+            # Calculate safe injection offset bypassing global array definitions and structs, targeting pre-exec block
             insert_idx = max(last_semi_pos, last_inc_pos, last_macro_pos)
 
             if insert_idx > 0:
@@ -285,93 +295,6 @@ def fix_linkage_conflicts(content):
 
     return content
 
-def remove_bka_from_initializers(content):
-    out = []
-    i = 0
-    n = len(content)
-    
-    in_comment = False
-    in_line_comment = False
-    in_string = False
-    in_init = False
-    brace_depth = 0
-    block_start = 0
-    
-    while i < n:
-        if not in_comment and not in_line_comment and not in_string:
-            if content[i:i+2] == '/*':
-                in_comment = True
-                if not in_init: out.append('/*')
-                i += 2
-                continue
-            elif content[i:i+2] == '//':
-                in_line_comment = True
-                if not in_init: out.append('//')
-                i += 2
-                continue
-            elif content[i] == '"':
-                in_string = True
-                if not in_init: out.append('"')
-                i += 1
-                continue
-                
-            if not in_init:
-                if content[i] == '=':
-                    j = i + 1
-                    while j < n and content[j] in ' \t\r\n':
-                        j += 1
-                    if j < n and content[j] == '{':
-                        in_init = True
-                        brace_depth = 1
-                        out.append(content[i:j+1])
-                        i = j + 1
-                        block_start = i
-                        continue
-            else:
-                if content[i] == '{':
-                    brace_depth += 1
-                elif content[i] == '}':
-                    brace_depth -= 1
-                    if brace_depth == 0:
-                        block = content[block_start:i]
-                        block = re.sub(r'BKA_TRANSLATE_ADDR\(([^()]+)\)', r'\1', block)
-                        out.append(block)
-                        out.append('}')
-                        in_init = False
-                        i += 1
-                        continue
-                i += 1
-                continue
-
-        else:
-            if in_comment and content[i:i+2] == '*/':
-                in_comment = False
-                if not in_init: out.append('*/')
-                i += 2
-                continue
-            elif in_line_comment and content[i] == '\n':
-                in_line_comment = False
-                if not in_init: out.append('\n')
-                i += 1
-                continue
-            elif in_string and content[i] == '"':
-                bs_count = 0
-                k = i - 1
-                while k >= 0 and content[k] == '\\':
-                    bs_count += 1
-                    k -= 1
-                if bs_count % 2 == 0:
-                    in_string = False
-                    if not in_init: out.append('"')
-                    i += 1
-                    continue
-
-        if not in_init:
-            out.append(content[i])
-        i += 1
-        
-    return "".join(out)
-
 def apply_android_memory_routing(content, filename):
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
@@ -384,95 +307,59 @@ extern "C" {
 extern void* calloc(unsigned long, unsigned long);
 extern unsigned int* gN64_Reg_Base;
 extern unsigned int* gN64_PIF_Base;
-extern unsigned int* gN64_RAM_Base;
 extern void InitN64Registers(void);
 #ifdef __cplusplus
 }
 #endif
-static inline unsigned char* BKA_GetSafeRegBase(void) {
-    if (gN64_Reg_Base) return (unsigned char*)gN64_Reg_Base;
+static inline unsigned int* BKA_GetSafeRegBase(void) {
+    if (gN64_Reg_Base) return gN64_Reg_Base;
     InitN64Registers();
-    if (!gN64_Reg_Base) gN64_Reg_Base = (unsigned int*)calloc(1, 0x100000); /* 1 MB */
-    return (unsigned char*)gN64_Reg_Base;
+    return gN64_Reg_Base ? gN64_Reg_Base : (unsigned int*)0;
 }
-static inline unsigned char* BKA_GetSafePifBase(void) {
-    if (gN64_PIF_Base) return (unsigned char*)gN64_PIF_Base;
+static inline unsigned int* BKA_GetSafePifBase(void) {
+    if (gN64_PIF_Base) return gN64_PIF_Base;
     InitN64Registers();
-    if (!gN64_PIF_Base) gN64_PIF_Base = (unsigned int*)calloc(1, 0x1000); /* 4 KB */
-    return (unsigned char*)gN64_PIF_Base;
-}
-static inline unsigned char* BKA_GetSafeRamBase(void) {
-    if (gN64_RAM_Base) return (unsigned char*)gN64_RAM_Base;
-    InitN64Registers();
-    if (!gN64_RAM_Base) gN64_RAM_Base = (unsigned int*)calloc(1, 0x800000); /* 8 MB */
-    return (unsigned char*)gN64_RAM_Base;
+    return gN64_PIF_Base ? gN64_PIF_Base : (unsigned int*)0;
 }
 #endif
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
-#define BKA_GET_RAM_BASE() BKA_GetSafeRamBase()
 #define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
-#define BKA_IS_HOST_PTR(a) ((((unsigned long)(a) >> 32) != 0) && (((unsigned long)(a) >> 32) != 0xFFFFFFFF))
-#define BKA_PACK_REG(a) ((((unsigned long)(a) >> 16) & 0xFF) << 12 | ((unsigned long)(a) & 0xFFF))
 #define BKA_TRANSLATE_ADDR(addr) ( \\
-    BKA_IS_HOST_PTR(addr) ? (unsigned long)(addr) : \\
-    (BKA_MASK32(addr) >= 0x80000000 && BKA_MASK32(addr) < 0x90000000) ? ((unsigned long)(BKA_GET_RAM_BASE() + (BKA_MASK32(addr) & 0x007FFFFF))) : \\
-    (BKA_MASK32(addr) >= 0xA0000000 && BKA_MASK32(addr) < 0xB0000000) ? ((unsigned long)(BKA_GET_RAM_BASE() + (BKA_MASK32(addr) & 0x007FFFFF))) : \\
-    (BKA_MASK32(addr) >= 0x03F00000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)(BKA_GET_REG_BASE() + BKA_PACK_REG(BKA_MASK32(addr)))) : \\
-    (BKA_MASK32(addr) >= 0xA3F00000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)(BKA_GET_REG_BASE() + BKA_PACK_REG(BKA_MASK32(addr)))) : \\
-    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) & 0x00000FFF))) : \\
-    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) & 0x00000FFF))) : \\
+    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000))) : \\
+    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
+    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000))) : \\
+    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
     (unsigned long)(addr) \\
 )\n\n"""
+    
+    has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
+    has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
+    
+    if not (has_memory_access or has_hardcoded_ptrs):
+        return content
 
-    original_content = content
-
-    # Universal Cast Patch 1: Literals
-    cast_literal_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(0x[0-9a-fA-F]+)'
-    content = re.sub(cast_literal_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
-
-    # Universal Cast Patch 2: Variables/Macros/Struct Accesses
-    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)(?!\w)(?!\s*\()'
-    content = re.sub(cast_var_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
-
-    # Universal Cast Patch 3: Parenthesized Expressions
-    cast_expr_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*\(([a-zA-Z0-9_ \t\+\-\*&\|~]+)\)'
-    def replace_cast_expr(match):
-        vol = match.group(1) or ""
-        typ = match.group(2)
-        stars = match.group(3)
-        expr = match.group(4).strip()
-        if "BKA_TRANSLATE_ADDR" in expr:
-            return match.group(0)
-        return f"({vol}{typ} {stars})BKA_TRANSLATE_ADDR({expr})"
-    content = re.sub(cast_expr_pat, replace_cast_expr, content)
-
-    # Universal Cast Patch 4: Simple Function/Macro Calls
-    cast_func_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([a-zA-Z_]\w*\s*\([^()]*\))'
-    content = re.sub(cast_func_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
-
-    # Hardware specific routing macros
+    content = header + content
+    ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
+    content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
+    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
+    
+    # Match to the end of the line instead of relying on non-greedy parens, which leaves trailed artifacts on single-line macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
 
     if filename == "os_convert.h":
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + BKA_PACK_REG(x)) : ((unsigned long)(x) >= 0x1FC00000 && (unsigned long)(x) < 0x1FC01000) ? ((unsigned long)BKA_GET_PIF_BASE() + ((unsigned long)(x) & 0x00000FFF)) : ((unsigned long)BKA_GET_RAM_BASE() + ((unsigned long)(x) & 0x007FFFFF))))', content)
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + BKA_PACK_REG(x)) : ((unsigned long)(x) >= 0x1FC00000 && (unsigned long)(x) < 0x1FC01000) ? ((unsigned long)BKA_GET_PIF_BASE() + ((unsigned long)(x) & 0x00000FFF)) : ((unsigned long)BKA_GET_RAM_BASE() + ((unsigned long)(x) & 0x007FFFFF))))', content)
-        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
-        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0xA0000000)))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0x80000000)))', content)
+        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
 
     if filename == "R4300.h":
-        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + BKA_PACK_REG(x)) : ((unsigned long)(x) >= 0x1FC00000 && (unsigned long)(x) < 0x1FC01000) ? ((unsigned long)BKA_GET_PIF_BASE() + ((unsigned long)(x) & 0x00000FFF)) : ((unsigned long)BKA_GET_RAM_BASE() + ((unsigned long)(x) & 0x007FFFFF)))', content)
-        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + BKA_PACK_REG(x)) : ((unsigned long)(x) >= 0x1FC00000 && (unsigned long)(x) < 0x1FC01000) ? ((unsigned long)BKA_GET_PIF_BASE() + ((unsigned long)(x) & 0x00000FFF)) : ((unsigned long)BKA_GET_RAM_BASE() + ((unsigned long)(x) & 0x007FFFFF)))', content)
-        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
-        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
-
-    content = remove_bka_from_initializers(content)
-
-    has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', original_content)
-    if content != original_content or has_memory_access:
-        content = header + content
+        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned int)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0xA0000000))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned int)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0x80000000))', content)
+        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
 
     return content
 
@@ -491,10 +378,12 @@ def sanitize_codebase(root_path):
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-
+            
+            # Identify if either the old or new header currently exists to flag code parsing
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
-
+                
+                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed to avoid shadowing NDK paths.
                 if os.path.exists(old_path):
                     if os.path.exists(new_path):
                         os.remove(new_path)
@@ -521,6 +410,8 @@ def sanitize_codebase(root_path):
                     content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
 
                     if is_wrapper:
+                        content = apply_android_memory_routing(content, filename)
+                        
                         if content != original_content:
                             with open(filepath, 'w', encoding='utf-8') as f:
                                 f.write(content)
