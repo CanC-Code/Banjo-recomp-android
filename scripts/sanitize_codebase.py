@@ -425,7 +425,8 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     content = re.sub(cast_literal_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
     # Universal Cast Patch 2: Variables/Macros/Struct Accesses (excluding function/macro calls)
-    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)(?!\s*\()'
+    # The negative lookahead (?!\w) ensures we don't partially match words like PHYS_TO_K out of PHYS_TO_K1(
+    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)(?!\w)(?!\s*\()'
     content = re.sub(cast_var_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
     # Universal Cast Patch 3: Parenthesized Expressions (e.g., (u16 *)(addr + 0x10))
