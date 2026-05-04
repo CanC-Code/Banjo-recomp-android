@@ -315,6 +315,7 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     if (!s_ram_base) s_ram_base = (unsigned char*)calloc(1, 8 * 1024 * 1024);
     return s_ram_base;
 }
+
 #define BKA_RAM_BASE BKA_GetSafeRamBase()
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
@@ -331,6 +332,7 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
     (unsigned long)(addr) \\
 )
+
 static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     unsigned char* ram = BKA_GetSafeRamBase();
     unsigned int* reg = BKA_GetSafeRegBase();
