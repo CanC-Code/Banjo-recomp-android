@@ -350,8 +350,6 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
 
     content = header + content
     ptr_pat_hex = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)'
-    
-    # Updated ptr_pat_var to exclude function-like memory macros already handled at header level
     ptr_pat_var = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR|PHYS_TO_K|K[01]_TO_PHYS|OS_PHYSICAL_TO_K|OS_K[01]_TO_PHYS)([a-zA-Z_]\w*)'
     
     content = re.sub(ptr_pat_hex, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
@@ -362,14 +360,14 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
 
     if filename == "os_convert.h":
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) (BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) (BKA_TRANSLATE_ADDR(x))', content)
         content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
         content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
 
     if filename == "R4300.h":
-        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
-        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (BKA_TRANSLATE_ADDR(x))', content)
         content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
         content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
 
