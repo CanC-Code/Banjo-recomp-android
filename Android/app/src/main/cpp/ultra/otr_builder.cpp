@@ -1,158 +1,184 @@
 #include <jni.h>
-#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <android/log.h>
-#include <stdio.h>
-#include <vector>
-#include <string>
+#include <sys/syscall.h>
 #include "rare_decompression.h"
 
-#define LOG_TAG "BKA-Builder"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+// --- 1. Shadow-Proof Kernel System Calls ---
+static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
+    return syscall(SYS_pread64, fd, buf, count, offset);
+}
+static int safe_open(const char *pathname, int flags, mode_t mode) {
+    return syscall(SYS_openat, AT_FDCWD, pathname, flags, mode);
+}
+static ssize_t safe_write(int fd, const void *buf, size_t count) {
+    return syscall(SYS_write, fd, buf, count);
+}
+static int safe_close(int fd) {
+    return syscall(SYS_close, fd);
+}
 
-#define ROM_FID_TABLE_OFFSET 0x5C30
-
+// --- 2. Endianness Detection & Normalization ---
 enum RomFormat { FORMAT_Z64, FORMAT_N64, FORMAT_V64, FORMAT_UNKNOWN };
 
-#pragma pack(push, 1)
-struct ManifestEntry {
-    uint32_t offset;
-    uint32_t size;
-    char name[32];
-    char type[8];
-};
-#pragma pack(pop)
-
-RomFormat detect_format(uint8_t* magic) {
+static RomFormat detect_format(int romFd) {
+    uint8_t magic[4] = {0};
+    safe_pread(romFd, magic, 4, 0);
+    
     if (magic[0] == 0x80 && magic[1] == 0x37 && magic[2] == 0x12 && magic[3] == 0x40) return FORMAT_Z64;
     if (magic[0] == 0x40 && magic[1] == 0x12 && magic[2] == 0x37 && magic[3] == 0x80) return FORMAT_N64;
     if (magic[0] == 0x37 && magic[1] == 0x80 && magic[2] == 0x40 && magic[3] == 0x12) return FORMAT_V64;
+    
     return FORMAT_UNKNOWN;
 }
 
-// Convert Little-Endian (.n64) or Byte-Swapped (.v64) buffer into Native Big-Endian (.z64)
-void normalize_rom_to_z64(uint8_t* romData, size_t size, RomFormat format) {
+static void normalize_buffer_to_z64(uint8_t* data, size_t size, RomFormat format) {
     if (format == FORMAT_N64) {
         for (size_t i = 0; i < (size & ~3); i += 4) {
-            uint8_t t0 = romData[i];
-            uint8_t t1 = romData[i+1];
-            romData[i]   = romData[i+3];
-            romData[i+1] = romData[i+2];
-            romData[i+2] = t1;
-            romData[i+3] = t0;
+            uint8_t t0 = data[i];     uint8_t t1 = data[i+1];
+            data[i]   = data[i+3];    data[i+1] = data[i+2];
+            data[i+2] = t1;           data[i+3] = t0;
         }
     } else if (format == FORMAT_V64) {
         for (size_t i = 0; i < (size & ~1); i += 2) {
-            uint8_t t = romData[i];
-            romData[i]   = romData[i+1];
-            romData[i+1] = t;
+            uint8_t t = data[i];
+            data[i] = data[i+1];
+            data[i+1] = t;
         }
     }
 }
 
-// Read 4 bytes from a normalized Z64 buffer and return as a host integer
-uint32_t read_u32_be(uint8_t* buffer, uint32_t offset) {
-    return (buffer[offset] << 24) | (buffer[offset+1] << 16) | (buffer[offset+2] << 8) | buffer[offset+3];
+// --- 3. Visual Debugger Helper ---
+void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const char* msg) {
+    if (!env || !callbackObj || !progressMid) return;
+    jstring jMsg = env->NewStringUTF(msg);
+    env->CallVoidMethod(callbackObj, progressMid, 0, jMsg);
+    env->DeleteLocalRef(jMsg);
 }
 
-void ensure_dir(const char* path) {
+// --- 4. Shadow-Proof Memory & Strings ---
+static uint32_t read_u32_safe(uint8_t* ptr) {
+    uint32_t val;
+    uint8_t* dst = (uint8_t*)&val;
+    for(int i = 0; i < 4; i++) dst[i] = ptr[i]; 
+    return val;
+}
+
+void ensure_directories(const char* path) {
     char tmp[512];
-    char* p = NULL;
-    snprintf(tmp, sizeof(tmp), "%s", path);
-    for (p = tmp + 1; *p; p++) {
-        if (*p == '/') { *p = 0; mkdir(tmp, 0777); *p = '/'; }
+    int i = 0;
+    while(path[i] != '\0' && i < 511) {
+        tmp[i] = path[i];
+        i++;
+    }
+    tmp[i] = '\0';
+    
+    for (char* p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            mkdir(tmp, 0777);
+            *p = '/';
+        }
     }
 }
 
 extern "C" {
 void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
-                                               int romFd, const char* outDirPath, const char* manifestPath) {
-    
-    LOGI(">>> Named OTR Extraction Started (romFd: %d)", romFd);
+                                           int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
+                                           const char* outDirPath) {
 
-    // Get file size
-    off_t romSize = lseek(romFd, 0, SEEK_END);
-    lseek(romFd, 0, SEEK_SET);
+    debug_ui(env, callbackObj, progressMid, "DEBUG 1: Entered native C++");
 
-    if (romSize < 0x1000000) { 
-        LOGE("ROM is too small.");
-        return;
-    }
-
-    // Load entire ROM into memory for rapid normalization and extraction
-    uint8_t* romData = (uint8_t*)malloc(romSize);
-    read(romFd, romData, romSize);
-
-    RomFormat format = detect_format(romData);
+    RomFormat format = detect_format(romFd);
     if (format == FORMAT_UNKNOWN) {
-        LOGE("Unknown ROM format. Check your source file.");
-        free(romData);
+        debug_ui(env, callbackObj, progressMid, "ERROR: Unrecognized ROM format.");
         return;
     }
 
-    // Standardize all bits to Big-Endian to satisfy the Rareware decompression algorithm
-    normalize_rom_to_z64(romData, romSize, format);
-    LOGI("ROM Normalized to Z64 structure in memory.");
-
-    std::vector<ManifestEntry> manifest;
-    int mFd = open(manifestPath, O_RDONLY);
-    if (mFd != -1) {
-        uint32_t mCount = 0;
-        if (read(mFd, &mCount, 4) == 4) {
-            manifest.resize(mCount);
-            read(mFd, manifest.data(), mCount * sizeof(ManifestEntry));
-        }
-        close(mFd);
+    if (!manifestPtr || manifestSize < 4) {
+        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest is NULL");
+        return;
     }
 
-    uint32_t entryCount = read_u32_be(romData, ROM_FID_TABLE_OFFSET);
-    LOGI("Detected %u file entries in ROM FID table", entryCount);
+    uint32_t entryCount = read_u32_safe(manifestPtr);
+    uint8_t* recordStart = manifestPtr + 4;
+
+    if (entryCount == 0 || entryCount > 50000) {
+        debug_ui(env, callbackObj, progressMid, "ERROR: Invalid entry count");
+        return;
+    }
+
+    debug_ui(env, callbackObj, progressMid, "DEBUG 3: Entering extraction loop");
 
     for (uint32_t i = 0; i < entryCount; i++) {
-        if (env->PushLocalFrame(16) < 0) break;
+        if (env->PushLocalFrame(16) < 0) return;
 
-        uint32_t cur = read_u32_be(romData, ROM_FID_TABLE_OFFSET + 4 + (i * 4));
-        uint32_t nxt = read_u32_be(romData, ROM_FID_TABLE_OFFSET + 4 + ((i + 1) * 4));
-        uint32_t size = (nxt > cur) ? (nxt - cur) : 0;
-
-        char fileName[256];
-        if (i < manifest.size()) {
-            snprintf(fileName, sizeof(fileName), "%s", manifest[i].name);
-        } else {
-            snprintf(fileName, sizeof(fileName), "unknown/%04X.bin", i);
+        uint8_t* record = recordStart + (i * 48);
+        if (record + 48 > manifestPtr + manifestSize) {
+            env->PopLocalFrame(NULL);
+            break;
         }
 
-        if (size > 0 && (cur + size) <= romSize) {
-            char fullPath[512];
-            snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
-            ensure_dir(fullPath);
+        uint32_t romOffset = read_u32_safe(record + 0);
+        uint32_t fileSize  = read_u32_safe(record + 4);
 
-            uint8_t* compressed = romData + cur;
-            uint32_t decompSize = 0;
-            
-            // Safe decompression from the newly normalized byte-stream
-            uint8_t* finalBuf = decompress_rare_asset(compressed, size, &decompSize);
+        char fileName[33];
+        for(int j = 0; j < 32; j++) fileName[j] = *(record + 8 + j);
+        fileName[32] = '\0';
 
-            int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            if (outFd != -1) {
-                write(outFd, finalBuf ? finalBuf : compressed, finalBuf ? decompSize : size);
-                close(outFd);
+        int percentage = (int)(((i + 1) * 100) / entryCount);
+
+        if (fileSize == 0) {
+            jstring jNameSkip = env->NewStringUTF(fileName);
+            env->CallVoidMethod(callbackObj, progressMid, percentage, jNameSkip);
+            env->PopLocalFrame(NULL);
+            continue;
+        }
+
+        char fullPath[512];
+        int pIdx = 0;
+        while(outDirPath[pIdx] != '\0' && pIdx < 400) { fullPath[pIdx] = outDirPath[pIdx]; pIdx++; }
+        fullPath[pIdx++] = '/';
+        int nIdx = 0;
+        while(fileName[nIdx] != '\0' && pIdx < 510) { fullPath[pIdx++] = fileName[nIdx++]; }
+        fullPath[pIdx] = '\0';
+
+        ensure_directories(fullPath);
+
+        // Scope resolution bypasses N64 malloc
+        uint8_t* compressedBuffer = (uint8_t*)::malloc(fileSize);
+        if (compressedBuffer) {
+            if (safe_pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
+                
+                // CRITICAL: Normalize the chunk to Big-Endian before passing to Rare's decompressor
+                normalize_buffer_to_z64(compressedBuffer, fileSize, format);
+
+                uint32_t decompressedSize = 0;
+                uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompressedSize);
+
+                uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : compressedBuffer;
+                uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
+
+                int outFd = safe_open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                if (outFd != -1) {
+                    safe_write(outFd, writePtr, writeSize);
+                    safe_close(outFd);
+                }
+                
+                if (finalBuffer) ::free(finalBuffer);
             }
-            if (finalBuf) free(finalBuf);
+            ::free(compressedBuffer);
         }
 
-        if (i % 500 == 0) {
-            int progress = (int)(((i + 1) * 100) / entryCount);
-            jstring jName = env->NewStringUTF(fileName);
-            env->CallVoidMethod(callbackObj, progressMid, progress, jName);
-        }
+        jstring jName = env->NewStringUTF(fileName);
+        env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
+
         env->PopLocalFrame(NULL);
     }
-    
-    free(romData);
+
+    jstring doneMsg = env->NewStringUTF("Extraction Complete! Booting Game...");
+    env->CallVoidMethod(callbackObj, progressMid, 100, doneMsg);
 }
 }
