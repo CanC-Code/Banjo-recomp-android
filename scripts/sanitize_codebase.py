@@ -321,10 +321,10 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     BKA_IS_HOST_PTR(addr) ? (unsigned long)(addr) : \\
     (BKA_MASK32(addr) >= 0x80000000 && BKA_MASK32(addr) < 0x90000000) ? ((unsigned long)(BKA_GET_RAM_BASE() + (BKA_MASK32(addr) & 0x007FFFFF))) : \\
     (BKA_MASK32(addr) >= 0xA0000000 && BKA_MASK32(addr) < 0xB0000000) ? ((unsigned long)(BKA_GET_RAM_BASE() + (BKA_MASK32(addr) & 0x007FFFFF))) : \\
-    (BKA_MASK32(addr) >= 0x03F00000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)(BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x03000000))) : \\
-    (BKA_MASK32(addr) >= 0xA3F00000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)(BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA3000000))) : \\
-    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
-    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
+    (BKA_MASK32(addr) >= 0x03F00000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)(BKA_GET_REG_BASE() + (BKA_MASK32(addr) & 0x00FFFFFF))) : \\
+    (BKA_MASK32(addr) >= 0xA3F00000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)(BKA_GET_REG_BASE() + (BKA_MASK32(addr) & 0x00FFFFFF))) : \\
+    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) & 0x00000FFF))) : \\
+    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) & 0x00000FFF))) : \\
     (unsigned long)(addr) \\
 )\n\n"""
 
@@ -339,22 +339,21 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
     content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
 
-    # Match to the end of the line instead of relying on non-greedy parens, which leaves trailed artifacts on single-line macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
 
     if filename == "os_convert.h":
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x03000000)) : ((unsigned long)(x) | 0xA0000000)))', content)
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x03000000)) : ((unsigned long)(x) | 0x80000000)))', content)
-        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x02000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x03000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
-        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x02000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x03000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) & 0x00FFFFFF)) : ((unsigned long)(x) | 0xA0000000)))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) & 0x00FFFFFF)) : ((unsigned long)(x) | 0x80000000)))', content)
+        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x01000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x01000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
     if filename == "R4300.h":
-        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x03000000)) : ((unsigned long)(x) | 0xA0000000))', content)
-        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x03000000)) : ((unsigned long)(x) | 0x80000000))', content)
-        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x02000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x03000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
-        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x02000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x03000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) & 0x00FFFFFF)) : ((unsigned long)(x) | 0xA0000000))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (((unsigned long)(x) >= 0x03F00000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) & 0x00FFFFFF)) : ((unsigned long)(x) | 0x80000000))', content)
+        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x01000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) ((BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x01000000)) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
     return content
 
