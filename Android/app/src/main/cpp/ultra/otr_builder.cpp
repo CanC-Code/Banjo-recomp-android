@@ -147,13 +147,22 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
 
         ensure_directories(fullPath);
 
+        // --- ALIGNMENT FIX ---
+        // Calculate a 4-byte aligned block to guarantee endian-swapping doesn't cross word boundaries
+        uint32_t alignedOffset = romOffset & ~3;
+        uint32_t endOffset = (romOffset + fileSize + 3) & ~3;
+        uint32_t alignedSize = endOffset - alignedOffset;
+
         // Scope resolution bypasses N64 malloc
-        uint8_t* compressedBuffer = (uint8_t*)::malloc(fileSize);
-        if (compressedBuffer) {
-            if (safe_pread(romFd, compressedBuffer, fileSize, romOffset) == (ssize_t)fileSize) {
+        uint8_t* alignedBuffer = (uint8_t*)::malloc(alignedSize);
+        if (alignedBuffer) {
+            if (safe_pread(romFd, alignedBuffer, alignedSize, alignedOffset) == (ssize_t)alignedSize) {
                 
-                // CRITICAL: Normalize the chunk to Big-Endian before passing to Rare's decompressor
-                normalize_buffer_to_z64(compressedBuffer, fileSize, format);
+                // 1. Normalize the aligned chunk to Big-Endian
+                normalize_buffer_to_z64(alignedBuffer, alignedSize, format);
+
+                // 2. Safely offset into the normalized chunk to access the exact asset
+                uint8_t* compressedBuffer = alignedBuffer + (romOffset - alignedOffset);
 
                 uint32_t decompressedSize = 0;
                 uint8_t* finalBuffer = decompress_rare_asset(compressedBuffer, fileSize, &decompressedSize);
@@ -169,7 +178,7 @@ void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, j
                 
                 if (finalBuffer) ::free(finalBuffer);
             }
-            ::free(compressedBuffer);
+            ::free(alignedBuffer);
         }
 
         jstring jName = env->NewStringUTF(fileName);
