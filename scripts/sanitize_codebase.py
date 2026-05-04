@@ -208,12 +208,13 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
-    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
+    # 1. Strip static from definition if a non-static prototype exists
+    static_def_pattern = re.compile(r"^static\s+([\w\s\*]+\b(\w+)\s*\([^;{]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1)
         func_name = match.group(2)
 
-        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
+        proto_pattern = re.compile(r"^[ \t]*([\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^;{]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
         for p_match in proto_pattern.finditer(content):
             proto_line = p_match.group(0)
@@ -224,7 +225,8 @@ def fix_linkage_conflicts(content):
         if has_non_static_proto:
             content = content.replace("static " + full_sig, full_sig)
 
-    static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
+    # 2. Gather static functions that need forward decls
+    static_func_pattern = re.compile(r"^(static\s+[\w\s\*]+?(\w+)\s*\([^;{]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
 
@@ -232,7 +234,11 @@ def fix_linkage_conflicts(content):
     added_funcs = set()
 
     for full_sig, func_name in matches:
-        has_prototype = bool(re.search(rf"\b{re.escape(func_name)}\s*\([^)]*\)\s*;", content))
+        # Strict requirement on valid return type sequences to prevent misidentifying function calls as prototypes
+        forbidden = r"(?!return\b|if\b|while\b|for\b|switch\b)"
+        proto_pattern = r"^[ \t]*" + forbidden + r"(?:(?:static|extern|inline|__inline)\s+)*" + forbidden + r"[a-zA-Z_]\w*[\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^;{]*\)\s*;"
+        has_prototype = bool(re.search(proto_pattern, content, re.MULTILINE))
+        
         if not has_prototype and func_name not in added_funcs:
             decl = f"{full_sig.strip()};"
             signatures.append(decl)
@@ -247,7 +253,8 @@ def fix_linkage_conflicts(content):
         clean_content = re.sub(r'".*?"', repl, clean_content)
         clean_content = re.sub(r"'.*?'", repl, clean_content)
 
-        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^)]*\)[ \t\n]*\{', re.MULTILINE)
+        # Uses [^;{]* inside parens to cleanly hurdle deeply nested function pointers & macro parameter lists
+        func_def_pattern = re.compile(r'^[ \t]*([a-zA-Z_]\w*[ \t\n\*]+)+[a-zA-Z_]\w*[ \t\n]*\([^;{]*\)[ \t\n]*\{', re.MULTILINE)
 
         first_func_match = func_def_pattern.search(clean_content)
 
@@ -420,18 +427,16 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
 
     original_content = content
 
-    # Universal Cast Patch 1: Literals (e.g., (void *)0x80000000)
+    # Universal Cast Patch 1: Literals
     cast_literal_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(0x[0-9a-fA-F]+)'
     content = re.sub(cast_literal_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
-    # Universal Cast Patch 2: Variables/Macros/Struct Accesses (excluding function/macro calls)
-    # The negative lookahead (?!\w) ensures we don't partially match words like PHYS_TO_K out of PHYS_TO_K1(
+    # Universal Cast Patch 2: Variables/Macros/Struct Accesses
     cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)(?!\w)(?!\s*\()'
     content = re.sub(cast_var_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
-    # Universal Cast Patch 3: Parenthesized Expressions (e.g., (u16 *)(addr + 0x10))
+    # Universal Cast Patch 3: Parenthesized Expressions
     cast_expr_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*\(([a-zA-Z0-9_ \t\+\-\*&\|~]+)\)'
-    
     def replace_cast_expr(match):
         vol = match.group(1) or ""
         typ = match.group(2)
@@ -440,10 +445,9 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
         if "BKA_TRANSLATE_ADDR" in expr:
             return match.group(0)
         return f"({vol}{typ} {stars})BKA_TRANSLATE_ADDR({expr})"
-        
     content = re.sub(cast_expr_pat, replace_cast_expr, content)
 
-    # Universal Cast Patch 4: Simple Function/Macro Calls (e.g., (s32 *)PHYS_TO_K1(0x284))
+    # Universal Cast Patch 4: Simple Function/Macro Calls
     cast_func_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([a-zA-Z_]\w*\s*\([^()]*\))'
     content = re.sub(cast_func_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
@@ -464,7 +468,6 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
         content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
         content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
-    # Post-process: Exclude memory routing macros from static initialization context
     content = remove_bka_from_initializers(content)
 
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', original_content)
