@@ -88,27 +88,73 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         return;
     }
 
+    // FIX 1: Validate that the manifest is large enough to hold the entry count field itself.
+    if (manifestSize < 4) {
+        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest too small to contain entry count.");
+        return;
+    }
+
     uint32_t entryCount = read_u32_safe(manifestPtr);
+
+    // FIX 2: Validate entryCount against the actual manifest buffer size.
+    // Each record is 48 bytes. The manifest must be at least 4 + (entryCount * 48) bytes.
+    // This prevents record pointer arithmetic from walking off the end of manifestPtr,
+    // which was the root cause of the SIGSEGV (strlen on garbage data in snprintf).
+    const uint32_t RECORD_SIZE = 48;
+    if (entryCount > (manifestSize - 4) / RECORD_SIZE) {
+        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest entryCount exceeds buffer bounds.");
+        return;
+    }
+
     uint8_t* recordStart = manifestPtr + 4;
 
     for (uint32_t i = 0; i < entryCount; i++) {
         if (env->PushLocalFrame(16) < 0) return;
 
-        uint8_t* record = recordStart + (i * 48);
+        uint8_t* record = recordStart + (i * RECORD_SIZE);
         uint32_t romOffset = read_u32_safe(record + 0);
         uint32_t fileSize  = read_u32_safe(record + 4);
 
+        // FIX 3: Copy fileName bytes then explicitly null-terminate.
+        // Also sanitize: replace any non-printable or path-separator characters to
+        // prevent directory traversal and ensure snprintf receives a valid C string.
         char fileName[33];
-        for(int j = 0; j < 32; j++) fileName[j] = *(record + 8 + j);
+        for(int j = 0; j < 32; j++) {
+            uint8_t ch = *(record + 8 + j);
+            // Allow printable ASCII except path separators. Replace anything else with '_'.
+            if (ch >= 0x20 && ch < 0x7F && ch != '/' && ch != '\\') {
+                fileName[j] = (char)ch;
+            } else if (ch == '\0') {
+                // Treat embedded null as end of name; pad remainder with '\0'.
+                for(int k = j; k < 32; k++) fileName[k] = '\0';
+                break;
+            } else {
+                fileName[j] = '_';
+            }
+        }
         fileName[32] = '\0';
+
+        // FIX 4: If fileName is empty after sanitization, skip this entry rather than
+        // passing an empty string to snprintf and creating a path like "/outDir/".
+        if (fileName[0] == '\0') {
+            env->PopLocalFrame(NULL);
+            continue;
+        }
 
         if (fileSize == 0) {
             env->PopLocalFrame(NULL);
             continue;
         }
 
+        // FIX 5: Guard the snprintf output buffer. outDirPath is caller-supplied and
+        // unbounded; check that the composed path fits before writing.
         char fullPath[512];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
+        int written = snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
+        if (written < 0 || written >= (int)sizeof(fullPath)) {
+            // Path would overflow — skip this entry.
+            env->PopLocalFrame(NULL);
+            continue;
+        }
         ensure_directories(fullPath);
 
         // --- ALIGNMENT WINDOW FIX ---
