@@ -327,7 +327,6 @@ def remove_bka_from_initializers(content):
                     brace_depth -= 1
                     if brace_depth == 0:
                         block = content[block_start:i]
-                        # Strips the BKA_TRANSLATE_ADDR layer off static fields
                         block = re.sub(r'BKA_TRANSLATE_ADDR\(([^()]+)\)', r'\1', block)
                         out.append(block)
                         out.append('}')
@@ -425,8 +424,8 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     cast_literal_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(0x[0-9a-fA-F]+)'
     content = re.sub(cast_literal_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
-    # Universal Cast Patch 2: Variables/Macros/Struct Accesses (e.g., (u32 *)K0BASE, (void *)D_80389FA0.unk24, &g_Array[10]->field.subfield)
-    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)'
+    # Universal Cast Patch 2: Variables/Macros/Struct Accesses (excluding function/macro calls)
+    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)(?!\s*\()'
     content = re.sub(cast_var_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
     # Universal Cast Patch 3: Parenthesized Expressions (e.g., (u16 *)(addr + 0x10))
@@ -442,6 +441,10 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
         return f"({vol}{typ} {stars})BKA_TRANSLATE_ADDR({expr})"
         
     content = re.sub(cast_expr_pat, replace_cast_expr, content)
+
+    # Universal Cast Patch 4: Simple Function/Macro Calls (e.g., (s32 *)PHYS_TO_K1(0x284))
+    cast_func_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([a-zA-Z_]\w*\s*\([^()]*\))'
+    content = re.sub(cast_func_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
     # Hardware specific routing macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
