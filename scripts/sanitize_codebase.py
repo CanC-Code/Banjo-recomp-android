@@ -13,8 +13,10 @@ TOKEN_REPLACEMENTS = {
     r"\bstrcat\b": "n64_strcat",
     r"\bstrcpy\b": "n64_strcpy",
     r"\bstrlen\b": "n64_strlen",
-    r"\bmemcpy\b": "n64_memcpy",
-    r"\bmemmove\b": "n64_memmove",
+    r"\bmemcpy\b": "BKA_MEMCPY",
+    r"\bmemmove\b": "BKA_MEMMOVE",
+    r"\bmemset\b": "BKA_MEMSET",
+    r"\bbzero\b": "BKA_BZERO",
     r"\bmalloc\b": "n64_malloc",
     r"\bfree\b": "n64_free",
     r"\brealloc\b": "n64_realloc",
@@ -193,7 +195,7 @@ def fix_decompiler_artifacts(content, filename):
         src = src.strip()
         if src.startswith('{') or src.startswith('"') or src.startswith("'"):
             return match.group(0)
-        return f"{indent}{dtype} {name}[{size}];\n{indent}n64_memcpy({name}, {src}, {size} * sizeof({dtype}));"
+        return f"{indent}{dtype} {name}[{size}];\n{indent}BKA_MEMCPY({name}, {src}, {size} * sizeof({dtype}));"
 
     content = assign_pattern.sub(array_to_memcpy, content)
     return content
@@ -285,6 +287,7 @@ def apply_android_memory_routing(content, filename):
 
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
+#include <string.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -330,18 +333,24 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) & 0x00000FFF))) : \\
     (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)(BKA_GET_PIF_BASE() + (BKA_MASK32(addr) & 0x00000FFF))) : \\
     (unsigned long)(addr) \\
-)\n\n"""
+)
+#ifndef BKA_MEM_MACROS
+#define BKA_MEM_MACROS
+#define BKA_MEMCPY(dst, src, sz) memcpy((void*)BKA_TRANSLATE_ADDR(dst), (void*)BKA_TRANSLATE_ADDR(src), (sz))
+#define BKA_MEMSET(dst, val, sz) memset((void*)BKA_TRANSLATE_ADDR(dst), (val), (sz))
+#define BKA_BZERO(dst, sz) memset((void*)BKA_TRANSLATE_ADDR(dst), 0, (sz))
+#define BKA_MEMMOVE(dst, src, sz) memmove((void*)BKA_TRANSLATE_ADDR(dst), (void*)BKA_TRANSLATE_ADDR(src), (sz))
+#endif\n\n"""
 
-    has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
-    has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
+    has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0|BKA_MEMCPY|BKA_MEMSET|BKA_BZERO|BKA_MEMMOVE)\b', content)
+    ptr_pat = r'\(\s*((?:volatile\s+)?(?:[us](?:8|16|32|64)|v[us](?:8|16|32|64)|void))\s*\*\s*\)\s*'
+    has_hardcoded_ptrs = re.search(ptr_pat + r'(0x[0-9a-fA-F]+|[a-zA-Z_]\w*)', content)
 
     if not (has_memory_access or has_hardcoded_ptrs):
         return content
 
-    content = header + content
-    ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
-    content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
-    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
+    content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
+    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR\b)([a-zA-Z_]\w*)', r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
 
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
@@ -359,6 +368,7 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
         content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
         content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_IS_HOST_PTR(x) ? (((unsigned long)(x) >= (unsigned long)BKA_GET_RAM_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_RAM_BASE() + 0x800000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_RAM_BASE()) : (((unsigned long)(x) >= (unsigned long)BKA_GET_PIF_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_PIF_BASE() + 0x1000) ? (((unsigned long)(x) - (unsigned long)BKA_GET_PIF_BASE()) | 0x1FC00000) : 0)) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
+    content = header + content
     return content
 
 def sanitize_codebase(root_path):
