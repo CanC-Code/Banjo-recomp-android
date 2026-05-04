@@ -1,130 +1,143 @@
-#include "HardwareRegs.h"
-#include <sys/mman.h>
-#include <errno.h>
+#include <jni.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
 #include <android/log.h>
-#include <cstdlib>
-#include <cstring>
+#include <string>
+#include <vector>
+#include <cstdio>
+#include <pthread.h>
+#include <unistd.h>
+#include <stdint.h>
 
-#define LOG_TAG "BKA_MEM"
+#define LOG_TAG "NativeBridge"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// --- N64 Physical Memory Map (as seen by the recompiler) ---
-// The recompiler emits code with hardcoded offsets relative to these bases.
-// These MUST be the actual virtual addresses used — a fallback to an arbitrary
-// heap address will be silently ignored by recompiled code that computes
-// absolute addresses directly (e.g. lui $t0, 0xa000 / sw $v0, offset($t0)).
+static JavaVM* g_jvm = nullptr;
+static std::string g_otrPath;
 
-// RDRAM: 0x80000000 / uncached mirror 0xa0000000, 8MB
-#define N64_RDRAM_BASE_ADDR     0x80000000UL
-#define N64_RDRAM_SIZE          0x00800000UL   // 8 MB
+// FIX 1: The manifest buffer must outlive nativeGameBoot's stack frame.
+// The game thread calls ResourceMgr_HandleDma which reads g_assetDir (set from
+// this buffer during ResourceMgr_Init). If this was a local std::vector it would
+// be destroyed when nativeGameBoot returned, leaving the game thread writing into
+// freed heap — the exact SEGV_ACCERR seen at fault addr 0x6ea21ca1c8.
+// Promoting to static ensures the buffer lives for the process lifetime.
+static std::vector<uint8_t> g_manifestBuf;
 
-// RCP register space: 0xa3f00000–0xa4ffffff (uncached)
-// Covered by a 16MB window anchored at 0xa3000000 for alignment safety.
-#define N64_RCP_BASE_ADDR       0xa3000000UL
-#define N64_RCP_SPACE_SIZE      0x02000000UL   // 32 MB window covers all RCP regs
-
-// PIF ROM/RAM: physical 0x1fc00000, uncached mirror 0xbfc00000
-#define N64_PIF_BASE_ADDR       0xbfc00000UL
-#define N64_PIF_SPACE_SIZE      0x00001000UL   // 4 KB
-
-// Enforce C-linkage so the recompiled C translation units can reference these
-// without name-mangling mismatches. Only ONE definition must exist — here.
 extern "C" {
-    uint32_t* gN64_Reg_Base  = nullptr;   // Points to RCP register window
-    uint32_t* gN64_PIF_Base  = nullptr;   // Points to PIF ROM/RAM window
-    uint8_t* gN64_RDRAM     = nullptr;   // Points to main RDRAM
-    uint32_t* gN64_RAM_Base  = nullptr;   // Points to RDRAM for the routing macro
+    // The exact bootloader entry point defined in bk_boot_1050.c
+    // C-linkage is required because bk_boot_1050.c is compiled as a standard C file.
+    void func_80000450(int32_t arg0);
+
+    void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
+    void run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
+                                               int romFd, const char* outDirPath, const char* manifestPath);
 }
 
-// ----------------------------------------------------------------------------
-// try_map_fixed: attempt MAP_FIXED at the requested N64 physical address.
-//
-// On Android 14 (aarch64, 39-bit VA), addresses like 0xa0000000 are in the
-// upper user VA range and MAP_FIXED will succeed only if nothing is already
-// mapped there. If it fails we do NOT silently fall back to malloc — the
-// recompiled game uses the address directly in pointer arithmetic and a
-// random heap address will not be used by those paths, leaving hardware
-// register writes hitting unmapped memory and producing SEGV_ACCERR.
-//
-// Instead, if MAP_FIXED fails we try MAP_FIXED_NOREPLACE (kernel 4.17+,
-// Android 12+) for a cleaner failure mode, then abort with a clear message.
-// A future improvement would be to patch the recompiler output to use
-// a base-relative addressing mode, but that is out of scope here.
-// ----------------------------------------------------------------------------
-static void* try_map_fixed(void* addr, size_t size, const char* name) {
-    // First attempt: MAP_FIXED — will replace any existing mapping at that VA.
-    void* p = mmap(addr, size,
-                   PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-                   -1, 0);
+// Background thread loop to prevent UI lockup
+void* game_thread_fn(void* arg) {
+    LOGI("NativeBridge: Thread started. Launching game engine...");
 
-    if (p != MAP_FAILED) {
-        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-            "InitN64Registers: Mapped %s at fixed addr %p (%zu KB)",
-            name, p, size / 1024);
-        return p;
-    }
+    // Jump into the recompiled Banjo-Kazooie boot sequence.
+    // 0 is passed as the default thread argument, matching native hardware behavior.
+    func_80000450(0);
 
-    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG,
-        "InitN64Registers: MAP_FIXED FAILED for %s at %p: %s. "
-        "The recompiled game uses this address in hardcoded pointer arithmetic — "
-        "a heap fallback cannot substitute. "
-        "Ensure no prior mapping occupies this VA range before calling InitN64Registers.",
-        name, addr, strerror(errno));
-
-    // Hard abort. A silent fallback here causes SEGV_ACCERR inside the game
-    // thread (exactly the crash observed at fault addr 0x6ea5bd5b18).
-    abort();
-    return nullptr; // unreachable
+    LOGI("NativeBridge: Game engine returned cleanly.");
+    return nullptr;
 }
 
-extern "C" void InitN64Registers() {
-    // Guard against redundant init (e.g. called from multiple threads at startup)
-    if (gN64_Reg_Base != nullptr && gN64_PIF_Base != nullptr && gN64_RDRAM != nullptr) {
+extern "C" {
+
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject instance, jobject callbackObj,
+                                                      jint romFd, jstring outDirStr, jstring manifestPathStr) {
+    const char* outDir = env->GetStringUTFChars(outDirStr, nullptr);
+    const char* manifestPath = env->GetStringUTFChars(manifestPathStr, nullptr);
+    jclass svcClass = env->GetObjectClass(callbackObj);
+    jmethodID progressMid = env->GetMethodID(svcClass, "onProgressUpdate", "(ILjava/lang/String;)V");
+
+    run_native_otr_generation_with_callback(env, callbackObj, progressMid, romFd, outDir, manifestPath);
+
+    env->ReleaseStringUTFChars(outDirStr, outDir);
+    env->ReleaseStringUTFChars(manifestPathStr, manifestPath);
+}
+
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass clazz, jobject context) {
+    env->GetJavaVM(&g_jvm);
+    LOGI("NativeBridge: VM Reference captured.");
+}
+
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstring otrPathStr, jobject assetManagerObj) {
+    const char* otrPath = env->GetStringUTFChars(otrPathStr, nullptr);
+    g_otrPath = otrPath;
+    env->ReleaseStringUTFChars(otrPathStr, otrPath);
+
+    // FIX 2: Load the manifest into the static g_manifestBuf, not a local vector.
+    // The previous local std::vector buf was destroyed when this function returned,
+    // but the game thread continued issuing DMA calls that read from that memory.
+    // That is what caused SEGV_ACCERR on BKA-GameThread (tid 9475).
+    std::string mPath = g_otrPath + "/manifest_us.bin";
+    FILE* f = fopen(mPath.c_str(), "rb");
+
+    if (!f) {
+        LOGE("NativeBridge: Failed to open manifest at %s. Aborting boot.", mPath.c_str());
         return;
     }
 
-    // 1. RDRAM — main 8MB working memory
-    if (gN64_RDRAM == nullptr) {
-        gN64_RDRAM = (uint8_t*)try_map_fixed((void*)N64_RDRAM_BASE_ADDR,
-                                              N64_RDRAM_SIZE, "RDRAM");
-        memset(gN64_RDRAM, 0, N64_RDRAM_SIZE);
-        
-        // Initialize the routing macro's RAM base pointer
-        gN64_RAM_Base = (uint32_t*)gN64_RDRAM;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+
+    if (size <= 0) {
+        LOGE("NativeBridge: Manifest file is empty at %s. Aborting boot.", mPath.c_str());
+        fclose(f);
+        return;
     }
 
-    // 2. RCP register space — SP, DP, MI, VI, AI, PI, RI, SI registers
-    if (gN64_Reg_Base == nullptr) {
-        gN64_Reg_Base = (uint32_t*)try_map_fixed((void*)N64_RCP_BASE_ADDR,
-                                                  N64_RCP_SPACE_SIZE, "RCP");
-        memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
+    g_manifestBuf.resize((size_t)size);
+    size_t bytesRead = fread(g_manifestBuf.data(), 1, (size_t)size, f);
+    fclose(f);
+
+    if (bytesRead != (size_t)size) {
+        LOGE("NativeBridge: Manifest read incomplete (%zu of %ld bytes). Aborting boot.", bytesRead, size);
+        g_manifestBuf.clear();
+        return;
     }
 
-    // 3. PIF ROM/RAM
-    if (gN64_PIF_Base == nullptr) {
-        gN64_PIF_Base = (uint32_t*)try_map_fixed((void*)N64_PIF_BASE_ADDR,
-                                                  N64_PIF_SPACE_SIZE, "PIF");
-        memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
+    ResourceMgr_Init(g_otrPath.c_str(), g_manifestBuf.data(), (uint32_t)size);
+    LOGI("NativeBridge: Resource Manager active.");
+
+    // FIX 3: Use pthread_join instead of pthread_detach.
+    //
+    // pthread_detach caused nativeGameBoot to return immediately while the game
+    // thread was still executing. The GL renderer then logged "nativeGameBoot
+    // returned" and began teardown — freeing surfaces and GL state the game
+    // thread was actively using. pthread_join blocks until func_80000450 exits,
+    // so teardown only begins after the game has fully stopped.
+    //
+    // This is safe because nativeGameBoot is called from the GL thread
+    // (BKA-GLRenderer, tid 9474), not the UI thread, so blocking here does not
+    // ANR the application.
+    pthread_t gameThread;
+    int rc = pthread_create(&gameThread, nullptr, game_thread_fn, nullptr);
+    if (rc != 0) {
+        LOGE("NativeBridge: pthread_create failed (errno %d). Aborting boot.", rc);
+        g_manifestBuf.clear();
+        return;
     }
+
+    // Block the GL thread here until the game engine exits cleanly.
+    pthread_join(gameThread, nullptr);
+    LOGI("NativeBridge: Game thread joined. Boot sequence complete.");
+
+    // Safe to release the manifest buffer now that the game thread has exited.
+    g_manifestBuf.clear();
 }
 
-void HardwareRegs_Shutdown() {
-    if (gN64_RDRAM != nullptr) {
-        if ((uintptr_t)gN64_RDRAM == N64_RDRAM_BASE_ADDR)
-            munmap(gN64_RDRAM, N64_RDRAM_SIZE);
-        gN64_RDRAM = nullptr;
-        gN64_RAM_Base = nullptr;
-    }
+JNIEXPORT void JNICALL Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* env, jclass clazz, jint w, jint h) {}
+JNIEXPORT void JNICALL Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint u) {}
+JNIEXPORT void JNICALL Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* env, jclass clazz, jint b, jfloat x, jfloat y) {}
 
-    if (gN64_Reg_Base != nullptr) {
-        if ((uintptr_t)gN64_Reg_Base == N64_RCP_BASE_ADDR)
-            munmap(gN64_Reg_Base, N64_RCP_SPACE_SIZE);
-        gN64_Reg_Base = nullptr;
-    }
-
-    if (gN64_PIF_Base != nullptr) {
-        if ((uintptr_t)gN64_PIF_Base == N64_PIF_BASE_ADDR)
-            munmap(gN64_PIF_Base, N64_PIF_SPACE_SIZE);
-        gN64_PIF_Base = nullptr;
-    }
 }
