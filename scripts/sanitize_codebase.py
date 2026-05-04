@@ -343,14 +343,16 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
 #endif\n\n"""
     
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
-    has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
+    has_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+|[a-zA-Z_])', content)
     
-    if not (has_memory_access or has_hardcoded_ptrs):
+    if not (has_memory_access or has_ptrs):
         return content
 
     content = header + content
     ptr_pat_hex = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)'
-    ptr_pat_var = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR|PHYS_TO_K|K[01]_TO_PHYS|OS_PHYSICAL_TO_K|OS_K[01]_TO_PHYS)([a-zA-Z_]\w*)'
+    
+    # Matches base variable + optional nested struct and array accesses (e.g. var->field.array[0])
+    ptr_pat_var = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR|PHYS_TO_K|K[01]_TO_PHYS|OS_PHYSICAL_TO_K|OS_K[01]_TO_PHYS)([a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]+\])*)'
     
     content = re.sub(ptr_pat_hex, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
     content = re.sub(ptr_pat_var, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
