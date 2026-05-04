@@ -315,7 +315,6 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     if (!s_ram_base) s_ram_base = (unsigned char*)calloc(1, 8 * 1024 * 1024);
     return s_ram_base;
 }
-#endif
 #define BKA_RAM_BASE BKA_GetSafeRamBase()
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
@@ -338,7 +337,8 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     if (ram && addr >= (unsigned long)ram && addr < (unsigned long)ram + 8*1024*1024) return addr - (unsigned long)ram;
     if (reg && addr >= (unsigned long)reg && addr < (unsigned long)reg + 0x1000000) return (addr - (unsigned long)reg) + 0x04000000;
     return addr;
-}\n\n"""
+}
+#endif\n\n"""
     
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
     has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
