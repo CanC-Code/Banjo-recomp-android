@@ -13,11 +13,10 @@
 // heap address will be silently ignored by recompiled code that computes
 // absolute addresses directly (e.g. lui $t0, 0xa000 / sw $v0, offset($t0)).
 
-// RDRAM: 0x80000000 / uncached mirror 0xa0000000
-// Expanded to 16MB to safely absorb unmasked mirrored accesses (e.g., 0x80800018)
-// that would otherwise hit unmapped host memory and cause SEGV_ACCERR.
+// RDRAM: 0x80000000 / uncached mirror 0xa0000000, 8MB
+// The translation macro now safely masks mirrored accesses, so this remains 8MB.
 #define N64_RDRAM_BASE_ADDR     0x80000000UL
-#define N64_RDRAM_SIZE          0x01000000UL   // 16 MB
+#define N64_RDRAM_SIZE          0x00800000UL   // 8 MB
 
 // RCP register space: 0xa3f00000–0xa4ffffff (uncached)
 // Covered by a 32MB window anchored at 0xa3000000 for alignment safety.
@@ -33,7 +32,7 @@
 extern "C" {
     uint32_t* gN64_Reg_Base  = nullptr;   // Points to RCP register window
     uint32_t* gN64_PIF_Base  = nullptr;   // Points to PIF ROM/RAM window
-    uint8_t* gN64_RDRAM     = nullptr;   // Points to main RDRAM
+    uint8_t* gN64_RDRAM      = nullptr;   // Points to main RDRAM
     uint32_t* gN64_RAM_Base  = nullptr;   // Points to RDRAM for the routing macro
 }
 
@@ -73,8 +72,7 @@ static void* try_map_fixed(void* addr, size_t size, const char* name) {
         "Ensure no prior mapping occupies this VA range before calling InitN64Registers.",
         name, addr, strerror(errno));
 
-    // Hard abort. A silent fallback here causes SEGV_ACCERR inside the game
-    // thread.
+    // Hard abort. A silent fallback here causes SEGV_ACCERR inside the game thread.
     abort();
     return nullptr; // unreachable
 }
@@ -85,7 +83,7 @@ extern "C" void InitN64Registers() {
         return;
     }
 
-    // 1. RDRAM — main working memory
+    // 1. RDRAM — main 8MB working memory
     if (gN64_RDRAM == nullptr) {
         gN64_RDRAM = (uint8_t*)try_map_fixed((void*)N64_RDRAM_BASE_ADDR,
                                               N64_RDRAM_SIZE, "RDRAM");
