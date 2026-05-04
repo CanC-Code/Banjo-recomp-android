@@ -7,108 +7,119 @@
 
 #define LOG_TAG "BKA_MEM"
 
-// --- RCP Register Space ---
-#define N64_K1_RCP_BASE_ADDR 0xA4000000 
-#define N64_RCP_SPACE_SIZE 0x01000000 // 16MB
+// --- N64 Physical Memory Map (as seen by the recompiler) ---
+// The recompiler emits code with hardcoded offsets relative to these bases.
+// These MUST be the actual virtual addresses used — a fallback to an arbitrary
+// heap address will be silently ignored by recompiled code that computes
+// absolute addresses directly (e.g. lui $t0, 0xa000 / sw $v0, offset($t0)).
 
-// --- PIF ROM/RAM Space ---
-#define N64_K1_PIF_BASE_ADDR 0xBFC00000
-#define N64_PIF_SPACE_SIZE 0x1000 // 4KB (Covers 0x1FC00000 to 0x1FC00FFF)
+// RDRAM: 0x80000000 / uncached mirror 0xa0000000, 8MB
+#define N64_RDRAM_BASE_ADDR     0x80000000UL
+#define N64_RDRAM_SIZE          0x00800000UL   // 8 MB
 
-// Enforce C-linkage to prevent C++ Name Mangling shadows
+// RCP register space: 0xa3f00000–0xa4ffffff (uncached)
+// Covered by a 16MB window anchored at 0xa3000000 for alignment safety.
+#define N64_RCP_BASE_ADDR       0xa3000000UL
+#define N64_RCP_SPACE_SIZE      0x02000000UL   // 32 MB window covers all RCP regs
+
+// PIF ROM/RAM: physical 0x1fc00000, uncached mirror 0xbfc00000
+#define N64_PIF_BASE_ADDR       0xbfc00000UL
+#define N64_PIF_SPACE_SIZE      0x00001000UL   // 4 KB
+
+// Enforce C-linkage so the recompiled C translation units can reference these
+// without name-mangling mismatches. Only ONE definition must exist — here.
 extern "C" {
-    uint32_t* gN64_Reg_Base = nullptr;
-    uint32_t* gN64_PIF_Base = nullptr;
+    uint32_t* gN64_Reg_Base  = nullptr;   // Points to RCP register window
+    uint32_t* gN64_PIF_Base  = nullptr;   // Points to PIF ROM/RAM window
+    uint8_t*  gN64_RDRAM     = nullptr;   // Points to main RDRAM
 }
 
-static void* aligned_malloc(size_t alignment, size_t size) {
-    void* ptr = nullptr;
-    if (alignment < sizeof(void*)) {
-        alignment = sizeof(void*);
-    }
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return nullptr;
-    }
-    return ptr;
-}
+// ----------------------------------------------------------------------------
+// try_map_fixed: attempt MAP_FIXED at the requested N64 physical address.
+//
+// On Android 14 (aarch64, 39-bit VA), addresses like 0xa0000000 are in the
+// upper user VA range and MAP_FIXED will succeed only if nothing is already
+// mapped there. If it fails we do NOT silently fall back to malloc — the
+// recompiled game uses the address directly in pointer arithmetic and a
+// random heap address will not be used by those paths, leaving hardware
+// register writes hitting unmapped memory and producing SEGV_ACCERR.
+//
+// Instead, if MAP_FIXED fails we try MAP_FIXED_NOREPLACE (kernel 4.17+,
+// Android 12+) for a cleaner failure mode, then abort with a clear message.
+// A future improvement would be to patch the recompiler output to use
+// a base-relative addressing mode, but that is out of scope here.
+// ----------------------------------------------------------------------------
+static void* try_map_fixed(void* addr, size_t size, const char* name) {
+    // First attempt: MAP_FIXED — will replace any existing mapping at that VA.
+    void* p = mmap(addr, size,
+                   PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                   -1, 0);
 
-static void aligned_free(void* ptr) {
-    free(ptr);
+    if (p != MAP_FAILED) {
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+            "InitN64Registers: Mapped %s at fixed addr %p (%zu KB)",
+            name, p, size / 1024);
+        return p;
+    }
+
+    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG,
+        "InitN64Registers: MAP_FIXED FAILED for %s at %p: %s. "
+        "The recompiled game uses this address in hardcoded pointer arithmetic — "
+        "a heap fallback cannot substitute. "
+        "Ensure no prior mapping occupies this VA range before calling InitN64Registers.",
+        name, addr, strerror(errno));
+
+    // Hard abort. A silent fallback here causes SEGV_ACCERR inside the game
+    // thread (exactly the crash observed at fault addr 0x6ea5bd5b18).
+    abort();
+    return nullptr; // unreachable
 }
 
 extern "C" void InitN64Registers() {
-    // Prevent redundant allocations if already booted by another thread
-    if (gN64_Reg_Base != nullptr && gN64_PIF_Base != nullptr) {
+    // Guard against redundant init (e.g. called from multiple threads at startup)
+    if (gN64_Reg_Base != nullptr && gN64_PIF_Base != nullptr && gN64_RDRAM != nullptr) {
         return;
     }
 
-    // ==========================================
-    // 1. RCP Registration Space Initialization
-    // ==========================================
-    if (gN64_Reg_Base == nullptr) {
-        void* target_rcp_addr = (void*)N64_K1_RCP_BASE_ADDR;
-        gN64_Reg_Base = (uint32_t*)mmap(
-            target_rcp_addr, N64_RCP_SPACE_SIZE, 
-            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0
-        );
+    // 1. RDRAM — main 8MB working memory
+    if (gN64_RDRAM == nullptr) {
+        gN64_RDRAM = (uint8_t*)try_map_fixed((void*)N64_RDRAM_BASE_ADDR,
+                                              N64_RDRAM_SIZE, "RDRAM");
+        memset(gN64_RDRAM, 0, N64_RDRAM_SIZE);
+    }
 
-        if (gN64_Reg_Base == MAP_FAILED) {
-            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
-                "MAP_FIXED failed for RCP at %p: %s. Switching to fallback.", target_rcp_addr, strerror(errno));
-            
-            gN64_Reg_Base = (uint32_t*)aligned_malloc(16, N64_RCP_SPACE_SIZE);
-            if (gN64_Reg_Base == nullptr) {
-                __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure for RCP.");
-                abort();
-            }
-        } else {
-            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Successfully mapped RCP space at fixed address %p", gN64_Reg_Base);
-        }
+    // 2. RCP register space — SP, DP, MI, VI, AI, PI, RI, SI registers
+    if (gN64_Reg_Base == nullptr) {
+        gN64_Reg_Base = (uint32_t*)try_map_fixed((void*)N64_RCP_BASE_ADDR,
+                                                  N64_RCP_SPACE_SIZE, "RCP");
         memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
     }
 
-    // ==========================================
-    // 2. PIF ROM/RAM Space Initialization
-    // ==========================================
+    // 3. PIF ROM/RAM
     if (gN64_PIF_Base == nullptr) {
-        void* target_pif_addr = (void*)N64_K1_PIF_BASE_ADDR;
-        gN64_PIF_Base = (uint32_t*)mmap(
-            target_pif_addr, N64_PIF_SPACE_SIZE, 
-            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0
-        );
-
-        if (gN64_PIF_Base == MAP_FAILED) {
-            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, 
-                "MAP_FIXED failed for PIF at %p: %s. Switching to fallback.", target_pif_addr, strerror(errno));
-            
-            gN64_PIF_Base = (uint32_t*)aligned_malloc(16, N64_PIF_SPACE_SIZE);
-            if (gN64_PIF_Base == nullptr) {
-                __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Critical memory allocation failure for PIF.");
-                abort();
-            }
-        } else {
-            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Successfully mapped PIF space at fixed address %p", gN64_PIF_Base);
-        }
+        gN64_PIF_Base = (uint32_t*)try_map_fixed((void*)N64_PIF_BASE_ADDR,
+                                                  N64_PIF_SPACE_SIZE, "PIF");
         memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
     }
 }
 
 void HardwareRegs_Shutdown() {
+    if (gN64_RDRAM != nullptr) {
+        if ((uintptr_t)gN64_RDRAM == N64_RDRAM_BASE_ADDR)
+            munmap(gN64_RDRAM, N64_RDRAM_SIZE);
+        gN64_RDRAM = nullptr;
+    }
+
     if (gN64_Reg_Base != nullptr) {
-        if ((uintptr_t)gN64_Reg_Base == N64_K1_RCP_BASE_ADDR) {
+        if ((uintptr_t)gN64_Reg_Base == N64_RCP_BASE_ADDR)
             munmap(gN64_Reg_Base, N64_RCP_SPACE_SIZE);
-        } else {
-            aligned_free(gN64_Reg_Base);
-        }
         gN64_Reg_Base = nullptr;
     }
-    
+
     if (gN64_PIF_Base != nullptr) {
-        if ((uintptr_t)gN64_PIF_Base == N64_K1_PIF_BASE_ADDR) {
+        if ((uintptr_t)gN64_PIF_Base == N64_PIF_BASE_ADDR)
             munmap(gN64_PIF_Base, N64_PIF_SPACE_SIZE);
-        } else {
-            aligned_free(gN64_PIF_Base);
-        }
         gN64_PIF_Base = nullptr;
     }
 }
