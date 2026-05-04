@@ -338,12 +338,12 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
     cast_literal_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(0x[0-9a-fA-F]+)'
     content = re.sub(cast_literal_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
-    # Universal Cast Patch 2: Variables/Macros/Struct Members (e.g., (u32 *)K0BASE, (void *)D_80389FA0.unk24, or (u16 *)arr[i])
-    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&]?[a-zA-Z_]\w*(?:(?:\.|->)[a-zA-Z_]\w*|\[[^\]]+\])*)'
+    # Universal Cast Patch 2: Variables/Macros/Struct Accesses (e.g., (u32 *)K0BASE, (void *)D_80389FA0.unk24, &g_Array[10]->field.subfield)
+    cast_var_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*(?!BKA_TRANSLATE_ADDR\b)(?!sizeof\b)([&*]*[a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]*\])*)'
     content = re.sub(cast_var_pat, r'(\1\2 \3)BKA_TRANSLATE_ADDR(\4)', content)
 
     # Universal Cast Patch 3: Parenthesized Expressions (e.g., (u16 *)(addr + 0x10))
-    cast_expr_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*\(([a-zA-Z0-9_ \t\+\-\*&\|~\.\>\[\]]+)\)'
+    cast_expr_pat = r'\(\s*(volatile\s+)?(u8|s8|u16|s16|u32|s32|u64|s64|void|char|int|short|long|float|double)\s*(\*+)\s*\)\s*\(([a-zA-Z0-9_ \t\+\-\*&\|~]+)\)'
     
     def replace_cast_expr(match):
         vol = match.group(1) or ""
