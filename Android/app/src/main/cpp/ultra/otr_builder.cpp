@@ -5,7 +5,10 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <android/log.h>
+#include <stdio.h> // Required for snprintf
 #include "rare_decompression.h"
+
+#define LOG_TAG "BKA_OTR"
 
 // --- 1. Shadow-Proof Kernel System Calls ---
 // These bypass the standard C library to prevent symbol shadowing by the recompiled game.
@@ -34,7 +37,6 @@ static RomFormat detect_format(int romFd) {
     return FORMAT_UNKNOWN;
 }
 
-// Normalizes a specific buffer chunk back to Big-Endian (Z64) for the decompressor
 static void normalize_chunk(uint8_t* data, size_t size, RomFormat format) {
     if (format == FORMAT_N64) {
         for (size_t i = 0; i < (size & ~3); i += 4) {
@@ -57,12 +59,13 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
     env->DeleteLocalRef(jMsg);
 }
 
-// --- 4. Shadow-Proof Memory Helpers ---
-static uint32_t read_u32_safe(uint8_t* ptr) {
-    uint32_t val;
-    uint8_t* dst = (uint8_t*)&val;
-    for(int i = 0; i < 4; i++) dst[i] = ptr[i]; 
-    return val;
+// --- 4. Endian-Aware Data Readers ---
+static uint32_t read_u32_be(const uint8_t* ptr) {
+    return (ptr[0] << 24) | (ptr[1] << 16) | (ptr[2] << 8) | ptr[3];
+}
+
+static uint32_t read_u32_le(const uint8_t* ptr) {
+    return (ptr[3] << 24) | (ptr[2] << 16) | (ptr[1] << 8) | ptr[0];
 }
 
 void ensure_directories(const char* path) {
@@ -80,52 +83,63 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
                                            int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
                                            const char* outDirPath) {
 
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "STATUS: Initializing extraction...");
     debug_ui(env, callbackObj, progressMid, "STATUS: Initializing extraction...");
 
     RomFormat format = detect_format(romFd);
     if (format == FORMAT_UNKNOWN) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: Unknown ROM Format.");
         debug_ui(env, callbackObj, progressMid, "ERROR: Unknown ROM Format.");
         return;
     }
 
-    // FIX 1: Validate that the manifest is large enough to hold the entry count field itself.
     if (manifestSize < 4) {
-        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest too small to contain entry count.");
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: Manifest too small (%u bytes).", manifestSize);
+        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest too small.");
         return;
     }
 
-    uint32_t entryCount = read_u32_safe(manifestPtr);
+    // Heuristically detect endianness of the incoming manifest payload.
+    // N64 games rarely exceed 20,000 files. If reading as Little-Endian produces an astronomically 
+    // high number, the payload is Big-Endian.
+    bool isLittleEndian = true;
+    uint32_t entryCount = read_u32_le(manifestPtr);
+    if (entryCount > 100000) {
+        entryCount = read_u32_be(manifestPtr);
+        isLittleEndian = false;
+    }
 
-    // FIX 2: Validate entryCount against the actual manifest buffer size.
-    // Each record is 48 bytes. The manifest must be at least 4 + (entryCount * 48) bytes.
-    // This prevents record pointer arithmetic from walking off the end of manifestPtr,
-    // which was the root cause of the SIGSEGV (strlen on garbage data in snprintf).
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Detected %u entries. LittleEndian=%d, ManifestSize=%u", 
+                        entryCount, isLittleEndian, manifestSize);
+
     const uint32_t RECORD_SIZE = 48;
     if (entryCount > (manifestSize - 4) / RECORD_SIZE) {
-        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest entryCount exceeds buffer bounds.");
+        char errMsg[128];
+        snprintf(errMsg, sizeof(errMsg), "ERROR: OOB! Count:%u requires %u bytes, but Size:%u", 
+                 entryCount, (entryCount * RECORD_SIZE) + 4, manifestSize);
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "%s", errMsg);
+        debug_ui(env, callbackObj, progressMid, errMsg);
         return;
     }
 
     uint8_t* recordStart = manifestPtr + 4;
+    uint32_t successCount = 0;
 
     for (uint32_t i = 0; i < entryCount; i++) {
         if (env->PushLocalFrame(16) < 0) return;
 
         uint8_t* record = recordStart + (i * RECORD_SIZE);
-        uint32_t romOffset = read_u32_safe(record + 0);
-        uint32_t fileSize  = read_u32_safe(record + 4);
+        
+        // Use the dynamically selected endian reader for all loop properties
+        uint32_t romOffset = isLittleEndian ? read_u32_le(record + 0) : read_u32_be(record + 0);
+        uint32_t fileSize  = isLittleEndian ? read_u32_le(record + 4) : read_u32_be(record + 4);
 
-        // FIX 3: Copy fileName bytes then explicitly null-terminate.
-        // Also sanitize: replace any non-printable or path-separator characters to
-        // prevent directory traversal and ensure snprintf receives a valid C string.
         char fileName[33];
         for(int j = 0; j < 32; j++) {
             uint8_t ch = *(record + 8 + j);
-            // Allow printable ASCII except path separators. Replace anything else with '_'.
             if (ch >= 0x20 && ch < 0x7F && ch != '/' && ch != '\\') {
                 fileName[j] = (char)ch;
             } else if (ch == '\0') {
-                // Treat embedded null as end of name; pad remainder with '\0'.
                 for(int k = j; k < 32; k++) fileName[k] = '\0';
                 break;
             } else {
@@ -134,31 +148,20 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         }
         fileName[32] = '\0';
 
-        // FIX 4: If fileName is empty after sanitization, skip this entry rather than
-        // passing an empty string to snprintf and creating a path like "/outDir/".
-        if (fileName[0] == '\0') {
+        if (fileName[0] == '\0' || fileSize == 0) {
             env->PopLocalFrame(NULL);
             continue;
         }
 
-        if (fileSize == 0) {
-            env->PopLocalFrame(NULL);
-            continue;
-        }
-
-        // FIX 5: Guard the snprintf output buffer. outDirPath is caller-supplied and
-        // unbounded; check that the composed path fits before writing.
         char fullPath[512];
         int written = snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
         if (written < 0 || written >= (int)sizeof(fullPath)) {
-            // Path would overflow — skip this entry.
             env->PopLocalFrame(NULL);
             continue;
         }
         ensure_directories(fullPath);
 
-        // --- ALIGNMENT WINDOW FIX ---
-        // We must read on 4-byte boundaries for the swap to be valid.
+        // Word-align the extraction boundaries to allow the chunk normalizer to swap the endianness safely
         uint32_t alignedStart = romOffset & ~3;
         uint32_t alignedEnd = (romOffset + fileSize + 3) & ~3;
         uint32_t alignedSize = alignedEnd - alignedStart;
@@ -166,13 +169,11 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         uint8_t* workBuffer = (uint8_t*)::malloc(alignedSize);
         if (workBuffer) {
             if (safe_pread(romFd, workBuffer, alignedSize, alignedStart) == (ssize_t)alignedSize) {
-                
-                // Swap the entire aligned window to Big-Endian
-                normalize_chunk(workBuffer, alignedSize, format);
 
-                // Point to the actual asset within the corrected window
+                normalize_chunk(workBuffer, alignedSize, format);
                 uint8_t* assetPtr = workBuffer + (romOffset - alignedStart);
                 uint32_t decompressedSize = 0;
+                
                 uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
 
                 uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
@@ -182,12 +183,14 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
                 if (outFd != -1) {
                     safe_write(outFd, writePtr, writeSize);
                     safe_close(outFd);
+                    successCount++;
                 }
                 if (finalBuffer) ::free(finalBuffer);
             }
             ::free(workBuffer);
         }
 
+        // Standardize UI updates
         if (i % 250 == 0 || i == entryCount - 1) {
             int percentage = (int)(((i + 1) * 100) / entryCount);
             jstring jName = env->NewStringUTF(fileName);
@@ -198,6 +201,7 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         env->PopLocalFrame(NULL);
     }
 
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u assets.", successCount);
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
 }
 }
