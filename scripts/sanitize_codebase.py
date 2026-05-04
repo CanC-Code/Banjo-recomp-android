@@ -310,19 +310,35 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     InitN64Registers();
     return gN64_PIF_Base ? gN64_PIF_Base : (unsigned int*)0;
 }
+static inline unsigned char* BKA_GetSafeRamBase(void) {
+    static unsigned char* s_ram_base = 0;
+    if (!s_ram_base) s_ram_base = (unsigned char*)calloc(1, 8 * 1024 * 1024);
+    return s_ram_base;
+}
 #endif
+#define BKA_RAM_BASE BKA_GetSafeRamBase()
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
 #define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
 #define BKA_IS_NATIVE_PTR(addr) ((((unsigned long)(addr)) >> 32) != 0 && (((unsigned long)(addr)) >> 32) != 0xFFFFFFFF)
 #define BKA_TRANSLATE_ADDR(addr) ( \\
     BKA_IS_NATIVE_PTR(addr) ? (unsigned long)(addr) : \\
+    (BKA_MASK32(addr) < 0x00800000) ? ((unsigned long)BKA_RAM_BASE + BKA_MASK32(addr)) : \\
+    (BKA_MASK32(addr) >= 0x80000000 && BKA_MASK32(addr) < 0x80800000) ? ((unsigned long)BKA_RAM_BASE + (BKA_MASK32(addr) - 0x80000000)) : \\
+    (BKA_MASK32(addr) >= 0xA0000000 && BKA_MASK32(addr) < 0xA0800000) ? ((unsigned long)BKA_RAM_BASE + (BKA_MASK32(addr) - 0xA0000000)) : \\
     (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000))) : \\
     (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
     (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000))) : \\
     (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
     (unsigned long)(addr) \\
-)\n\n"""
+)
+static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
+    unsigned char* ram = BKA_GetSafeRamBase();
+    unsigned int* reg = BKA_GetSafeRegBase();
+    if (ram && addr >= (unsigned long)ram && addr < (unsigned long)ram + 8*1024*1024) return addr - (unsigned long)ram;
+    if (reg && addr >= (unsigned long)reg && addr < (unsigned long)reg + 0x1000000) return (addr - (unsigned long)reg) + 0x04000000;
+    return addr;
+}\n\n"""
     
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
     has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
@@ -331,25 +347,27 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
         return content
 
     content = header + content
-    ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
-    content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
-    content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
+    ptr_pat_hex = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)'
+    ptr_pat_var = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)'
+    
+    content = re.sub(ptr_pat_hex, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
+    content = re.sub(ptr_pat_var, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
     
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
 
     if filename == "os_convert.h":
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000))) : ((unsigned long)(x) | 0xA0000000))))', content)
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000))) : ((unsigned long)(x) | 0x80000000))))', content)
-        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF)))', content)
-        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF)))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
+        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
 
     if filename == "R4300.h":
-        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000)) : ((unsigned long)(x) | 0xA0000000)))', content)
-        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000)) : ((unsigned long)(x) | 0x80000000)))', content)
-        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF)))', content)
-        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_IS_NATIVE_PTR(x) ? (unsigned long)(x) : (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF)))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) ((void *)BKA_TRANSLATE_ADDR(x))', content)
+        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
+        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
 
     return content
 
