@@ -285,9 +285,16 @@ def fix_linkage_conflicts(content):
     return content
 
 def apply_android_memory_routing(content, filename):
+    """
+    Injects memory boundary mapping architectures to route direct RDRAM accesses,
+    PIF ranges, and register limits seamlessly into the generic NDK context.
+    """
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
 
+    # The mapping macro has been updated to strictly enforce 0 == NULL checks. 
+    # Decompiled sources frequently rely on evaluating pointers against 0 rather than explicit NULL.
+    # We must preserve physical 0 to avoid false evaluations before native bounds checking.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #ifdef __cplusplus
@@ -322,6 +329,7 @@ static inline unsigned char* BKA_GetSafeRamBase(void) {
 #define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
 #define BKA_IS_NATIVE_PTR(addr) ((((unsigned long)(addr)) >> 32) != 0 && (((unsigned long)(addr)) >> 32) != 0xFFFFFFFF)
 #define BKA_TRANSLATE_ADDR(addr) ( \\
+    (BKA_MASK32(addr) == 0) ? 0 : \\
     BKA_IS_NATIVE_PTR(addr) ? (unsigned long)(addr) : \\
     (BKA_MASK32(addr) < 0x00800000) ? ((unsigned long)BKA_RAM_BASE + BKA_MASK32(addr)) : \\
     (BKA_MASK32(addr) >= 0x80000000 && BKA_MASK32(addr) < 0x80800000) ? ((unsigned long)BKA_RAM_BASE + (BKA_MASK32(addr) - 0x80000000)) : \\
@@ -342,20 +350,32 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
 }
 #endif\n\n"""
     
+    # We must scan for macros and hardcoded physical addresses
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
-    has_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+|[a-zA-Z_])', content)
+    has_hardcoded_ptrs = re.search(r'\(\s*[a-zA-Z_][\w\s\*]*?\s*\*\s*\)\s*(?:0x[0-9a-fA-F]+|[a-zA-Z_]\w*|\()', content)
     
-    if not (has_memory_access or has_ptrs):
+    if not (has_memory_access or has_hardcoded_ptrs):
         return content
 
     content = header + content
-    ptr_pat_hex = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)'
     
-    # Matches base variable + optional nested struct and array accesses (e.g. var->field.array[0])
-    ptr_pat_var = r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(?!BKA_TRANSLATE_ADDR|PHYS_TO_K|K[01]_TO_PHYS|OS_PHYSICAL_TO_K|OS_K[01]_TO_PHYS)([a-zA-Z_]\w*(?:(?:->|\.)[a-zA-Z_]\w*|\[[^\]]+\])*)'
+    # Structural Error Fix: The primary failure in the provided Clang logs (member reference type 'unsigned long' is not a pointer)
+    # was triggered by the regex matching incomplete expressions like `(u32 *)bptr` within `(u32 *)bptr->C2Addr`.
+    # Replacing the isolated pointer variable injected the macro directly ahead of the `->` operator, shifting the 
+    # evaluation order to parse the returned `unsigned long` as a struct.
+    #
+    # To fix this flawlessly:
+    # 1. Capture the entire member-access hierarchy `[a-zA-Z_]\w*(?:\s*(?:->|\.)\s*[a-zA-Z_]\w*)*` natively.
+    # 2. Add an explicit negative lookahead `(?!\s*\()` to ensure we do not wrap function invocations (e.g., malloc).
+    # 3. Capture bracketed expressions `\([^)]+\)` fully to natively encapsulate complex pointer arithmetic like `(addr + 0x10)`.
+    # 4. Expand cast coverage to handle all pointer types generically (e.g., `LEOCmd *`, `void **`) instead of strictly primitives.
     
-    content = re.sub(ptr_pat_hex, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
-    content = re.sub(ptr_pat_var, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
+    cast_pat = r'\(\s*([a-zA-Z_][\w\s\*]*?)\s*\*\s*\)'
+    target_pat = r'(0x[0-9a-fA-F]+|[a-zA-Z_]\w*(?:\s*(?:->|\.)\s*[a-zA-Z_]\w*)*(?!\s*\()|\([^)]+\)(?!\s*\())'
+    
+    ptr_pat_all = rf'{cast_pat}\s*(?!BKA_TRANSLATE_ADDR|PHYS_TO_K|K[01]_TO_PHYS|OS_PHYSICAL_TO_K|OS_K[01]_TO_PHYS){target_pat}'
+    
+    content = re.sub(ptr_pat_all, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
     
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
