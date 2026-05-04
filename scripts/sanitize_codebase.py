@@ -210,31 +210,25 @@ def fix_struct_shadowing(content):
     return content
 
 def fix_linkage_conflicts(content):
-    # 1. Strip 'static' from definitions that have explicit non-static prototypes
     static_def_pattern = re.compile(r"^[ \t]*static\s+([\w\s\*]+\b(\w+)\s*\([^)]*\)\s*\{)", re.MULTILINE)
     for match in static_def_pattern.finditer(content):
         full_sig = match.group(1)
         func_name = match.group(2)
 
-        # Look for a non-static forward declaration
         proto_pattern = re.compile(r"^[ \t]*([a-zA-Z_][\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
         
         for p_match in proto_pattern.finditer(content):
             proto_line = p_match.group(1)
-            # Ensure it is a valid prototype, not a keyword sequence or variable assignment
             if "static" not in proto_line and "typedef" not in proto_line and "return" not in proto_line and "=" not in proto_line:
                 words = [w for w in re.split(r'\W+', proto_line) if w]
-                # A true prototype will have at least two words (e.g. return type + identifier)
                 if len(words) >= 2 and func_name in words:
                     has_non_static_proto = True
                     break
 
         if has_non_static_proto:
-            # Drop the static specifier without wrecking original formatting/indentation
             content = content.replace(match.group(0), match.group(0).replace("static ", "", 1))
 
-    # 2. Extract unresolved static definitions and embed explicit forward declarations 
     static_func_pattern = re.compile(r"^[ \t]*(static\s+[\w\s\*]+?\b(\w+)\s*\([^)]*\)\s*)\{", re.MULTILINE)
     matches = static_func_pattern.findall(content)
     if not matches: return content
@@ -245,7 +239,6 @@ def fix_linkage_conflicts(content):
     for full_sig, func_name in matches:
         has_prototype = bool(re.search(r"^[ \t]*static\s+[\w\s\*]+\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;", content, re.MULTILINE))
         if not has_prototype and func_name not in added_funcs:
-            # Flatten any multiline signatures caused by decompiler line breaks
             sig_clean = re.sub(r'\s+', ' ', full_sig.strip())
             decl = f"{sig_clean};"
             signatures.append(decl)
@@ -322,10 +315,10 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
 #define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
 #define BKA_TRANSLATE_ADDR(addr) ( \\
-    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000))) : \\
-    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
-    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000))) : \\
-    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
+    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000))) : \\
+    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
+    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000))) : \\
+    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
     (unsigned long)(addr) \\
 )\n\n"""
     
@@ -345,16 +338,16 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
 
     if filename == "os_convert.h":
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0xA0000000)))', content)
-        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned char*)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0x80000000)))', content)
-        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
-        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K1\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K1(x) ((void *)(((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000))) : ((unsigned long)(x) | 0xA0000000)))', content)
+        content = re.sub(r'#define\s+OS_PHYSICAL_TO_K0\s*\(\s*x\s*\).*', r'#define OS_PHYSICAL_TO_K0(x) ((void *)(((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000))) : ((unsigned long)(x) | 0x80000000)))', content)
+        content = re.sub(r'#define\s+OS_K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+OS_K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define OS_K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
     if filename == "R4300.h":
-        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned int)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0xA0000000))', content)
-        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (((unsigned int)(x) >= 0x04000000 && (unsigned int)(x) < 0x05000000) ? ((unsigned int)BKA_GET_REG_BASE() + ((unsigned int)(x) - 0x04000000)) : ((unsigned int)(x) | 0x80000000))', content)
-        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
-        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned int)(x) >= (unsigned int)BKA_GET_REG_BASE() && (unsigned int)(x) < (unsigned int)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned int)(x) - (unsigned int)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned int)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K1\s*\(\s*x\s*\).*', r'#define PHYS_TO_K1(x) (((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000)) : ((unsigned long)(x) | 0xA0000000))', content)
+        content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (((unsigned long)(x) >= 0x04000000 && (unsigned long)(x) < 0x05000000) ? ((unsigned long)BKA_GET_REG_BASE() + ((unsigned long)(x) - 0x04000000)) : ((unsigned long)(x) | 0x80000000))', content)
+        content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
+        content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_GET_REG_BASE() && ((unsigned long)(x) >= (unsigned long)BKA_GET_REG_BASE() && (unsigned long)(x) < (unsigned long)BKA_GET_REG_BASE() + 0x1000000) ? ((unsigned long)(x) - (unsigned long)BKA_GET_REG_BASE() + 0x04000000) : ((unsigned long)(x) & 0x1FFFFFFF))', content)
 
     return content
 
