@@ -217,7 +217,7 @@ def fix_linkage_conflicts(content):
 
         proto_pattern = re.compile(r"^[ \t]*([a-zA-Z_][\w\s\*]*\b" + re.escape(func_name) + r"\s*\([^)]*\)\s*;)", re.MULTILINE)
         has_non_static_proto = False
-        
+
         for p_match in proto_pattern.finditer(content):
             proto_line = p_match.group(1)
             if "static" not in proto_line and "typedef" not in proto_line and "return" not in proto_line and "=" not in proto_line:
@@ -292,7 +292,7 @@ def apply_android_memory_routing(content, filename):
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
 
-    # The mapping macro has been updated to strictly enforce 0 == NULL checks. 
+    # The mapping macro has been updated to strictly enforce 0 == NULL checks.
     # Decompiled sources frequently rely on evaluating pointers against 0 rather than explicit NULL.
     # We must preserve physical 0 to avoid false evaluations before native bounds checking.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
@@ -300,7 +300,7 @@ def apply_android_memory_routing(content, filename):
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern void* calloc(unsigned long, unsigned long);
+extern void* n64_calloc(unsigned long, unsigned long);
 extern unsigned int* gN64_Reg_Base;
 extern unsigned int* gN64_PIF_Base;
 extern void InitN64Registers(void);
@@ -319,7 +319,7 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
 }
 static inline unsigned char* BKA_GetSafeRamBase(void) {
     static unsigned char* s_ram_base = 0;
-    if (!s_ram_base) s_ram_base = (unsigned char*)calloc(1, 8 * 1024 * 1024);
+    if (!s_ram_base) s_ram_base = (unsigned char*)n64_calloc(1, 8 * 1024 * 1024);
     return s_ram_base;
 }
 
@@ -349,34 +349,35 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     return addr;
 }
 #endif\n\n"""
-    
+
     # We must scan for macros and hardcoded physical addresses
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
-    has_hardcoded_ptrs = re.search(r'\(\s*[a-zA-Z_][\w\s\*]*?\s*\*\s*\)\s*(?:0x[0-9a-fA-F]+|[a-zA-Z_]\w*|\()', content)
-    
+    has_hardcoded_ptrs = re.search(r'\(\s*(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+\s*\)\s*(?:0x[0-9a-fA-F]+)', content)
+
     if not (has_memory_access or has_hardcoded_ptrs):
         return content
 
     content = header + content
-    
-    # Structural Error Fix: The primary failure in the provided Clang logs (member reference type 'unsigned long' is not a pointer)
-    # was triggered by the regex matching incomplete expressions like `(u32 *)bptr` within `(u32 *)bptr->C2Addr`.
-    # Replacing the isolated pointer variable injected the macro directly ahead of the `->` operator, shifting the 
-    # evaluation order to parse the returned `unsigned long` as a struct.
-    #
-    # To fix this flawlessly:
-    # 1. Capture the entire member-access hierarchy `[a-zA-Z_]\w*(?:\s*(?:->|\.)\s*[a-zA-Z_]\w*)*` natively.
-    # 2. Add an explicit negative lookahead `(?!\s*\()` to ensure we do not wrap function invocations (e.g., malloc).
-    # 3. Capture bracketed expressions `\([^)]+\)` fully to natively encapsulate complex pointer arithmetic like `(addr + 0x10)`.
-    # 4. Expand cast coverage to handle all pointer types generically (e.g., `LEOCmd *`, `void **`) instead of strictly primitives.
-    
-    cast_pat = r'\(\s*([a-zA-Z_][\w\s\*]*?)\s*\*\s*\)'
-    target_pat = r'(0x[0-9a-fA-F]+|[a-zA-Z_]\w*(?:\s*(?:->|\.)\s*[a-zA-Z_]\w*)*(?!\s*\()|\([^)]+\)(?!\s*\())'
-    
-    ptr_pat_all = rf'{cast_pat}\s*(?!BKA_TRANSLATE_ADDR|PHYS_TO_K|K[01]_TO_PHYS|OS_PHYSICAL_TO_K|OS_K[01]_TO_PHYS){target_pat}'
-    
-    content = re.sub(ptr_pat_all, r'(\1 *)BKA_TRANSLATE_ADDR(\2)', content)
-    
+
+    # Cast + hardcoded hex address only.
+    # Restricting targets to hex literals and explicit pointer-arithmetic expressions in parens
+    # avoids the two failure modes from the prior overly-broad approach:
+    #   1. Function names like calloc()/malloc() being split at the '(' by the lookahead firing too late.
+    #   2. BKA_GET_REG_BASE() / BKA_GET_PIF_BASE() inside the macro body being re-matched and mangled.
+    # We deliberately do NOT wrap bare variable names or member-access chains here;
+    # those are only safe to wrap when followed by a hardcoded offset (handled via HW_REG / IO_READ macros below).
+    # The N64 primitive cast types cover all decompiler-generated pointer dereference patterns.
+    N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
+
+    # Target: hex literal, or a parenthesised expression (pointer arithmetic like (base + offset))
+    # We explicitly do NOT match bare identifiers to avoid wrapping function calls and BKA_ internals.
+    ptr_hex_pat = re.compile(
+        r'\(\s*(' + N64_PRIM_CAST + r')\s*\)'
+        r'\s*(?!BKA_TRANSLATE_ADDR)'
+        r'(0x[0-9a-fA-F]+|\([^)]+\))'
+    )
+    content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
+
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
@@ -410,10 +411,14 @@ def sanitize_codebase(root_path):
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-            
+
+            # Identify if either the old or new header currently exists to flag code parsing
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
-                
+
+                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed to avoid shadowing NDK paths.
+                # The crucial fix here enforces the removal of stale n64_* files from previous dirty builds,
+                # ensuring the checked-in header can always be renamed safely without failing an `exists()` block.
                 if os.path.exists(old_path):
                     if os.path.exists(new_path):
                         os.remove(new_path)
@@ -441,7 +446,7 @@ def sanitize_codebase(root_path):
 
                     if is_wrapper:
                         content = apply_android_memory_routing(content, filename)
-                        
+
                         if content != original_content:
                             with open(filepath, 'w', encoding='utf-8') as f:
                                 f.write(content)
