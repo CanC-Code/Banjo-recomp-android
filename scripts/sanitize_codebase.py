@@ -51,8 +51,6 @@ TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
 
 def is_modern_wrapper(filepath, content):
-    if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')):
-        return True
     path_lower = filepath.replace('\\', '/').lower()
     if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower:
         return True
@@ -293,6 +291,7 @@ extern "C" {
 extern void* calloc(unsigned long, unsigned long);
 extern unsigned int* gN64_Reg_Base;
 extern unsigned int* gN64_PIF_Base;
+extern unsigned int* gN64_RAM_Base;
 extern void InitN64Registers(void);
 #ifdef __cplusplus
 }
@@ -307,21 +306,29 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     InitN64Registers();
     return gN64_PIF_Base ? gN64_PIF_Base : (unsigned int*)0;
 }
+static inline unsigned int* BKA_GetSafeRamBase(void) {
+    if (gN64_RAM_Base) return gN64_RAM_Base;
+    InitN64Registers();
+    return gN64_RAM_Base ? gN64_RAM_Base : (unsigned int*)0;
+}
 #endif
 #define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
 #define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
+#define BKA_GET_RAM_BASE() BKA_GetSafeRamBase()
 #define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
 #define BKA_TRANSLATE_ADDR(addr) ( \\
+    (BKA_MASK32(addr) >= 0x80000000 && BKA_MASK32(addr) < 0x80800000) ? ((unsigned int)((unsigned char*)BKA_GET_RAM_BASE() + (BKA_MASK32(addr) - 0x80000000))) : \\
+    (BKA_MASK32(addr) >= 0xA0000000 && BKA_MASK32(addr) < 0xA0800000) ? ((unsigned int)((unsigned char*)BKA_GET_RAM_BASE() + (BKA_MASK32(addr) - 0xA0000000))) : \\
     (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000))) : \\
     (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
     (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned int)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000))) : \\
     (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned int)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
     (unsigned long)(addr) \\
 )\n\n"""
-    
+
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
     has_hardcoded_ptrs = re.search(r'\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*(0x[0-9a-fA-F]+)', content)
-    
+
     if not (has_memory_access or has_hardcoded_ptrs):
         return content
 
@@ -329,7 +336,7 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     ptr_pat = r'^([ \t]+)\(\s*(volatile\s+[us]\d+|v?[us]\d+)\s*\*\s*\)\s*'
     content = re.sub(ptr_pat + r'(0x[0-9a-fA-F]+)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
     content = re.sub(ptr_pat + r'(?!BKA_TRANSLATE_ADDR)([a-zA-Z_]\w*)', r'\1(\2 *)BKA_TRANSLATE_ADDR(\3)', content, flags=re.MULTILINE)
-    
+
     # Match to the end of the line instead of relying on non-greedy parens, which leaves trailed artifacts on single-line macros
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
@@ -364,11 +371,11 @@ def sanitize_codebase(root_path):
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-            
+
             # Identify if either the old or new header currently exists to flag code parsing
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
-                
+
                 # If the un-prefixed file still exists in the dir, it MUST be removed/renamed to avoid shadowing NDK paths.
                 # The crucial fix here enforces the removal of stale n64_* files from previous dirty builds, 
                 # ensuring the checked-in header can always be renamed safely without failing an `exists()` block.
@@ -398,8 +405,8 @@ def sanitize_codebase(root_path):
                     content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
 
                     if is_wrapper:
-                        content = apply_android_memory_routing(content, filename)
-                        
+                        # DO NOT inject memory routing macros into wrapper code.
+                        # The wrapper is responsible for defining these structures on the host system.
                         if content != original_content:
                             with open(filepath, 'w', encoding='utf-8') as f:
                                 f.write(content)
