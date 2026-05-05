@@ -295,6 +295,10 @@ def apply_android_memory_routing(content, filename):
     # The mapping macro has been updated to strictly enforce 0 == NULL checks.
     # Decompiled sources frequently rely on evaluating pointers against 0 rather than explicit NULL.
     # We must preserve physical 0 to avoid false evaluations before native bounds checking.
+    #
+    # n64_calloc is used here (rather than calloc) because safe_token_replacement will have already
+    # renamed calloc -> n64_calloc in any .c/.h files processed before this function runs.
+    # Using calloc directly would produce a stale symbol in those translation units.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #ifdef __cplusplus
@@ -360,21 +364,32 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     content = header + content
 
     # Cast + hardcoded hex address only.
-    # Restricting targets to hex literals and explicit pointer-arithmetic expressions in parens
-    # avoids the two failure modes from the prior overly-broad approach:
-    #   1. Function names like calloc()/malloc() being split at the '(' by the lookahead firing too late.
-    #   2. BKA_GET_REG_BASE() / BKA_GET_PIF_BASE() inside the macro body being re-matched and mangled.
-    # We deliberately do NOT wrap bare variable names or member-access chains here;
-    # those are only safe to wrap when followed by a hardcoded offset (handled via HW_REG / IO_READ macros below).
-    # The N64 primitive cast types cover all decompiler-generated pointer dereference patterns.
+    #
+    # Allowed targets:
+    #   1. Hex literal:             0x04000000
+    #   2. Arithmetic expression:   (base + 0x10)  -- parenthesised, contains an operator
+    #
+    # Target rule for parenthesised expressions: the content MUST contain at least one
+    # arithmetic/bitwise/member operator (+, -, *, /, %, &, |, ^, ->, .) or array index ([).
+    # This excludes bare casts like (u32) or double-paren casts like ((u32)) which the
+    # decompiler emits and which are NOT valid translate targets -- they are intermediate
+    # cast expressions applied to an rvalue that follows them, not addresses themselves.
+    #
+    # We deliberately do NOT match bare variable names to avoid wrapping function calls
+    # and BKA_ internal references inside the macro body.
+    # The N64 primitive cast types cover all decompiler-generated dereference patterns.
+
     N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
 
-    # Target: hex literal, or a parenthesised expression (pointer arithmetic like (base + offset))
-    # We explicitly do NOT match bare identifiers to avoid wrapping function calls and BKA_ internals.
+    # Parenthesised arithmetic expression: must contain at least one operator character
+    # so that bare casts like (u32) or ((u32)) are excluded.
+    # We allow one level of nested parentheses to support casts inside the expression: e.g., ((u32)a + b)
+    PAREN_ARITH = r'\((?=(?:[^()]+|\([^()]*\))*(?:[-+*/%&|^\[]|->|\.))(?:[^()]+|\([^()]*\))+\)'
+
     ptr_hex_pat = re.compile(
         r'\(\s*(' + N64_PRIM_CAST + r')\s*\)'
         r'\s*(?!BKA_TRANSLATE_ADDR)'
-        r'(0x[0-9a-fA-F]+|\([^)]+\))'
+        r'(0x[0-9a-fA-F]+|' + PAREN_ARITH + r')'
     )
     content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
 
@@ -416,9 +431,10 @@ def sanitize_codebase(root_path):
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
 
-                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed to avoid shadowing NDK paths.
-                # The crucial fix here enforces the removal of stale n64_* files from previous dirty builds,
-                # ensuring the checked-in header can always be renamed safely without failing an `exists()` block.
+                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed
+                # to avoid shadowing NDK paths. The crucial fix here enforces the removal of
+                # stale n64_* files from previous dirty builds, ensuring the checked-in header
+                # can always be renamed safely without failing an `exists()` block.
                 if os.path.exists(old_path):
                     if os.path.exists(new_path):
                         os.remove(new_path)
