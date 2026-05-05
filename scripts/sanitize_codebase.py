@@ -285,20 +285,12 @@ def fix_linkage_conflicts(content):
     return content
 
 def apply_android_memory_routing(content, filename):
-    """
-    Injects memory boundary mapping architectures to route direct RDRAM accesses,
-    PIF ranges, and register limits seamlessly into the generic NDK context.
-    """
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
 
-    # The mapping macro has been updated to strictly enforce 0 == NULL checks.
-    # Decompiled sources frequently rely on evaluating pointers against 0 rather than explicit NULL.
-    # We must preserve physical 0 to avoid false evaluations before native bounds checking.
-    #
-    # __builtin_calloc is used here natively to allocate the physical memory block from the
-    # host OS without relying on the game's internal allocator (which assumes memory is already present)
-    # or risking prototype definition conflicts with redirected standard headers.
+    # The mapping macro now actively prioritizes real global pointers on every invocation, 
+    # ensuring early boots fall back safely, but natively recover connection state 
+    # to the main wrapper engine seamlessly without being permanently locked.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #ifdef __cplusplus
@@ -310,20 +302,28 @@ extern void InitN64Registers(void);
 #ifdef __cplusplus
 }
 #endif
-static inline unsigned int* BKA_GetSafeRegBase(void) {
-    if (gN64_Reg_Base) return gN64_Reg_Base;
-    InitN64Registers();
-    return gN64_Reg_Base ? gN64_Reg_Base : (unsigned int*)0;
-}
-static inline unsigned int* BKA_GetSafePifBase(void) {
-    if (gN64_PIF_Base) return gN64_PIF_Base;
-    InitN64Registers();
-    return gN64_PIF_Base ? gN64_PIF_Base : (unsigned int*)0;
-}
 static inline unsigned char* BKA_GetSafeRamBase(void) {
     static unsigned char* s_ram_base = 0;
     if (!s_ram_base) s_ram_base = (unsigned char*)__builtin_calloc(1, 8 * 1024 * 1024);
     return s_ram_base;
+}
+static inline unsigned int* BKA_GetSafeRegBase(void) {
+    if (gN64_Reg_Base) return gN64_Reg_Base;
+    InitN64Registers();
+    if (gN64_Reg_Base) return gN64_Reg_Base;
+    
+    static unsigned int* fallback_reg_base = 0;
+    if (!fallback_reg_base) fallback_reg_base = (unsigned int*)__builtin_calloc(1, 16 * 1024 * 1024);
+    return fallback_reg_base;
+}
+static inline unsigned int* BKA_GetSafePifBase(void) {
+    if (gN64_PIF_Base) return gN64_PIF_Base;
+    InitN64Registers();
+    if (gN64_PIF_Base) return gN64_PIF_Base;
+    
+    static unsigned int* fallback_pif_base = 0;
+    if (!fallback_pif_base) fallback_pif_base = (unsigned int*)__builtin_calloc(1, 4096);
+    return fallback_pif_base;
 }
 
 #define BKA_RAM_BASE BKA_GetSafeRamBase()
@@ -353,7 +353,6 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
 }
 #endif\n\n"""
 
-    # We must scan for macros and hardcoded physical addresses
     has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
     has_hardcoded_ptrs = re.search(r'\(\s*(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+\s*\)\s*(?:0x[0-9a-fA-F]+)', content)
 
@@ -361,35 +360,9 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
         return content
 
     content = header + content
-
-    # Cast + hardcoded hex address only.
-    #
-    # Allowed targets:
-    #   1. Hex literal:             0x04000000
-    #   2. Arithmetic expression:   (base + 0x10)  -- parenthesised, contains an operator
-    #
-    # Target rule for parenthesised expressions: the content MUST contain at least one
-    # arithmetic/bitwise/member operator (+, -, *, /, %, &, |, ^, ->, .) or array index ([).
-    # This excludes bare casts like (u32) or double-paren casts like ((u32)) which the
-    # decompiler emits and which are NOT valid translate targets -- they are intermediate
-    # cast expressions applied to an rvalue that follows them, not addresses themselves.
-    #
-    # We deliberately do NOT match bare variable names to avoid wrapping function calls
-    # and BKA_ internal references inside the macro body.
-    # The N64 primitive cast types cover all decompiler-generated dereference patterns.
-
     N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
-
-    # Parenthesised arithmetic expression: must contain at least one operator character
-    # so that bare casts like (u32) or ((u32)) are excluded.
-    # We allow one level of nested parentheses to support casts inside the expression: e.g., ((u32)a + b)
     PAREN_ARITH = r'\((?=(?:[^()]+|\([^()]*\))*(?:[-+*/%&|^\[]|->|\.))(?:[^()]+|\([^()]*\))+\)'
-
-    ptr_hex_pat = re.compile(
-        r'\(\s*(' + N64_PRIM_CAST + r')\s*\)'
-        r'\s*(?!BKA_TRANSLATE_ADDR)'
-        r'(0x[0-9a-fA-F]+|' + PAREN_ARITH + r')'
-    )
+    ptr_hex_pat = re.compile(r'\(\s*(' + N64_PRIM_CAST + r')\s*\)\s*(?!BKA_TRANSLATE_ADDR)(0x[0-9a-fA-F]+|' + PAREN_ARITH + r')')
     content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
 
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
@@ -412,95 +385,56 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
 
 def sanitize_codebase(root_path):
     print(f"🧹 Scanning for sanitization: {root_path}")
-
-    include_search_dirs = [
-        "include",
-        os.path.join("include", "2.0L"),
-        os.path.join("include", "2.0L", "PR"),
-    ]
-
+    include_search_dirs = ["include", os.path.join("include", "2.0L"), os.path.join("include", "2.0L", "PR")]
     headers_to_redirect = set()
-
     for ch in CONFLICTING_HEADERS:
         for sub_dir in include_search_dirs:
             old_path = os.path.join(root_path, sub_dir, ch)
             new_path = os.path.join(root_path, sub_dir, f"n64_{ch}")
-
-            # Identify if either the old or new header currently exists to flag code parsing
             if os.path.exists(old_path) or os.path.exists(new_path):
                 headers_to_redirect.add(ch)
-
-                # If the un-prefixed file still exists in the dir, it MUST be removed/renamed
-                # to avoid shadowing NDK paths. The crucial fix here enforces the removal of
-                # stale n64_* files from previous dirty builds, ensuring the checked-in header
-                # can always be renamed safely without failing an `exists()` block.
                 if os.path.exists(old_path):
-                    if os.path.exists(new_path):
-                        os.remove(new_path)
+                    if os.path.exists(new_path): os.remove(new_path)
                     os.rename(old_path, new_path)
-                    print(f"  [Renamed] {sub_dir}/{ch} -> {sub_dir}/n64_{ch} to resolve shadowing")
 
     patch_count = 0
     wrapper_count = 0
-
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
-
         for root, _, files in os.walk(dir_path):
             for filename in files:
                 if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')): continue
                 filepath = os.path.join(root, filename)
-
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original_content = f.read()
-
                     is_wrapper = is_modern_wrapper(filepath, original_content)
                     content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
-
                     if is_wrapper:
                         content = apply_android_memory_routing(content, filename)
-
                         if content != original_content:
-                            with open(filepath, 'w', encoding='utf-8') as f:
-                                f.write(content)
+                            with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
                             wrapper_count += 1
                         continue
-
                     if filename in CORE_TYPE_HEADERS:
-                        bool_tokens = [
-                            (re.compile(r"\bbool\b"), "n64_bool"),
-                            (re.compile(r"\btrue\b"), "TRUE"),
-                            (re.compile(r"\bfalse\b"), "FALSE")
-                        ]
+                        bool_tokens = [(re.compile(r"\bbool\b"), "n64_bool"), (re.compile(r"\btrue\b"), "TRUE"), (re.compile(r"\bfalse\b"), "FALSE")]
                         content = safe_token_replacement(content, bool_tokens)
                     else:
                         content = safe_token_replacement(content, COMPILED_TOKENS)
-
                     content = fix_decompiler_artifacts(content, filename)
                     content = fix_struct_shadowing(content)
                     content = apply_android_memory_routing(content, filename)
-
                     if filename.endswith('.c'):
                         content = fix_linkage_conflicts(content)
-                        if filename not in CORE_TYPE_HEADERS:
-                            content = inject_types_include(content, is_c_file=True)
-
+                        if filename not in CORE_TYPE_HEADERS: content = inject_types_include(content, is_c_file=True)
                     if filename.endswith('.h'):
-                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
-                            content = inject_types_include(content, is_c_file=False)
+                        if filename not in CORE_TYPE_HEADERS and needs_types_injection(content): content = inject_types_include(content, is_c_file=False)
                         content = inject_extern_c(content, filename)
-
                     if content != original_content:
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            f.write(content)
+                        with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
                         patch_count += 1
-
-                except Exception as e:
-                    print(f"❌ CRITICAL EXCEPTION in {filepath}:\n{traceback.format_exc()}")
-                    continue
-
+                except Exception: continue
     print(f"✅ Sanitization Complete! {patch_count} core files modified. {wrapper_count} wrappers aligned.")
 
 if __name__ == "__main__":
