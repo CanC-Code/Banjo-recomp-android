@@ -296,15 +296,14 @@ def apply_android_memory_routing(content, filename):
     # Decompiled sources frequently rely on evaluating pointers against 0 rather than explicit NULL.
     # We must preserve physical 0 to avoid false evaluations before native bounds checking.
     #
-    # n64_calloc is used here (rather than calloc) because safe_token_replacement will have already
-    # renamed calloc -> n64_calloc in any .c/.h files processed before this function runs.
-    # Using calloc directly would produce a stale symbol in those translation units.
+    # __builtin_calloc is used here natively to allocate the physical memory block from the
+    # host OS without relying on the game's internal allocator (which assumes memory is already present)
+    # or risking prototype definition conflicts with redirected standard headers.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern void* n64_calloc(unsigned long, unsigned long);
 extern unsigned int* gN64_Reg_Base;
 extern unsigned int* gN64_PIF_Base;
 extern void InitN64Registers(void);
@@ -323,7 +322,7 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
 }
 static inline unsigned char* BKA_GetSafeRamBase(void) {
     static unsigned char* s_ram_base = 0;
-    if (!s_ram_base) s_ram_base = (unsigned char*)n64_calloc(1, 8 * 1024 * 1024);
+    if (!s_ram_base) s_ram_base = (unsigned char*)__builtin_calloc(1, 8 * 1024 * 1024);
     return s_ram_base;
 }
 
