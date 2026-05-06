@@ -8,7 +8,7 @@
 
 #define LOG_TAG "BKA_MEM"
 
-// Expanded RDRAM to 16MB to safely capture OOB offset accesses (e.g., 0x800018)
+// Expanded RDRAM to 16MB to safely capture OOB offset accesses
 #define N64_RDRAM_BASE_ADDR     0x80000000UL
 #define N64_RDRAM_SIZE          0x01000000UL   // 16 MB
 
