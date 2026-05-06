@@ -4,6 +4,7 @@
 #include <android/log.h>
 #include <cstdlib>
 #include <cstring>
+#include <stdint.h>
 
 #define LOG_TAG "BKA_MEM"
 
@@ -33,9 +34,8 @@ static void* safe_allocate(void* addr, size_t size, const char* name) {
         return p;
     }
 
-    __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "MAP_FIXED FAILED for %s at %p. Falling back to dynamic OS allocation.", name, addr);
+    __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "MAP_FIXED FAILED for %s at %p. Falling back to dynamic allocation.", name, addr);
     
-    // Because BKA_TRANSLATE_ADDR globally routes memory, we no longer abort. We allocate dynamically.
     p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     
     if (p != MAP_FAILED) {
@@ -43,7 +43,7 @@ static void* safe_allocate(void* addr, size_t size, const char* name) {
         return p;
     }
 
-    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "CRITICAL: Total allocation failure for %s. Aborting.", name);
+    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "CRITICAL: Total allocation failure for %s.", name);
     abort();
     return nullptr;
 }
@@ -55,18 +55,18 @@ extern "C" void InitN64Registers() {
 
     if (gN64_RDRAM == nullptr) {
         gN64_RDRAM = (uint8_t*)safe_allocate((void*)N64_RDRAM_BASE_ADDR, N64_RDRAM_SIZE, "RDRAM");
-        memset(gN64_RDRAM, 0, N64_RDRAM_SIZE);
+        if (gN64_RDRAM) memset(gN64_RDRAM, 0, N64_RDRAM_SIZE);
         gN64_RAM_Base = (uint32_t*)gN64_RDRAM;
     }
 
     if (gN64_Reg_Base == nullptr) {
         gN64_Reg_Base = (uint32_t*)safe_allocate((void*)N64_RCP_BASE_ADDR, N64_RCP_SPACE_SIZE, "RCP");
-        memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
+        if (gN64_Reg_Base) memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
     }
 
     if (gN64_PIF_Base == nullptr) {
         gN64_PIF_Base = (uint32_t*)safe_allocate((void*)N64_PIF_BASE_ADDR, N64_PIF_SPACE_SIZE, "PIF");
-        memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
+        if (gN64_PIF_Base) memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
     }
 }
 
@@ -74,14 +74,11 @@ void HardwareRegs_Shutdown() {
     if (gN64_RDRAM != nullptr) {
         munmap(gN64_RDRAM, N64_RDRAM_SIZE);
         gN64_RDRAM = nullptr;
-        gN64_RAM_Base = nullptr;
     }
-
     if (gN64_Reg_Base != nullptr) {
         munmap(gN64_Reg_Base, N64_RCP_SPACE_SIZE);
         gN64_Reg_Base = nullptr;
     }
-
     if (gN64_PIF_Base != nullptr) {
         munmap(gN64_PIF_Base, N64_PIF_SPACE_SIZE);
         gN64_PIF_Base = nullptr;
