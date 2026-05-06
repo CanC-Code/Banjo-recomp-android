@@ -125,6 +125,21 @@ def inject_extern_c(content, filename):
 
     return result.strip() + '\n'
 
+def expand_static_rdram(content):
+    """
+    Forces rigidly defined N64 engine RDRAM arrays and macros to 16MB 
+    to absorb physical over-fetches (e.g. 0x800018) in the generated C core.
+    """
+    # Array sizes in decimal
+    content = re.sub(r'(\b(?:u8|uint8_t|char|unsigned char)\s+[a-zA-Z0-9_]*rdram[a-zA-Z0-9_]*\s*\[\s*)8388608(\s*\])', r'\g<1>16777216\g<2>', content, flags=re.IGNORECASE)
+    # Array sizes in hex
+    content = re.sub(r'(\b(?:u8|uint8_t|char|unsigned char)\s+[a-zA-Z0-9_]*rdram[a-zA-Z0-9_]*\s*\[\s*)0x800000(\s*\])', r'\g<1>0x1000000\g<2>', content, flags=re.IGNORECASE)
+    
+    # Generic hardware size macros
+    content = re.sub(r'(#define\s+[a-zA-Z0-9_]*RDRAM[a-zA-Z0-9_]*SIZE\s+)0x800000\b', r'\g<1>0x1000000', content, flags=re.IGNORECASE)
+    content = re.sub(r'(#define\s+[a-zA-Z0-9_]*RDRAM[a-zA-Z0-9_]*SIZE\s+)8388608\b', r'\g<1>16777216', content, flags=re.IGNORECASE)
+    return content
+
 def redirect_legacy_includes(content, headers_to_redirect, is_wrapper=False, filename=""):
     if filename not in CORE_TYPE_HEADERS:
         content = re.sub(r'#\s*include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
@@ -387,6 +402,9 @@ def sanitize_codebase(root_path):
 
                     is_wrapper = is_modern_wrapper(filepath, original_content)
                     content = redirect_legacy_includes(original_content, headers_to_redirect, is_wrapper, filename)
+
+                    # Expand native static RDRAM arrays
+                    content = expand_static_rdram(content)
 
                     if is_wrapper:
                         content = apply_android_memory_routing(content, filename)
