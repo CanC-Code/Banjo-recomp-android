@@ -285,11 +285,9 @@ def fix_linkage_conflicts(content):
     return content
 
 def apply_android_memory_routing(content, filename):
-    if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
+    if not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
 
-    # The mapping macro now includes a dedicated validation helper with Android Log support.
-    # This captures the faulting N64 address AND source location before the hardware SEGV.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #include <android/log.h>
@@ -361,16 +359,12 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
 }
 #endif\n\n"""
 
-    has_memory_access = re.search(r'\b(HW_REG|IO_READ|IO_WRITE|OS_PHYSICAL_TO_K1|PHYS_TO_K1|OS_PHYSICAL_TO_K0|PHYS_TO_K0)\b', content)
-    has_hardcoded_ptrs = re.search(r'\(\s*(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+\s*\)\s*(?:0x[0-9a-fA-F]+)', content)
-
-    if not (has_memory_access or has_hardcoded_ptrs):
-        return content
-
-    content = header + content
     N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
-    PAREN_ARITH = r'\((?=(?:[^()]+|\([^()]*\))*(?:[-+*/%&|^\[]|->|\.))(?:[^()]+|\([^()]*\))+\)'
-    ptr_hex_pat = re.compile(r'\(\s*(' + N64_PRIM_CAST + r')\s*\)\s*(?!BKA_TRANSLATE_ADDR)(0x[0-9a-fA-F]+|' + PAREN_ARITH + r')')
+    
+    # Target raw hex pointers and simple parenthesized math (like 0x80000000 + offset)
+    # The negative lookahead (?!BKA_TRANSLATE_ADDR\() prevents double wrapping on repeated runs.
+    ptr_hex_pat = re.compile(r'\(\s*(' + N64_PRIM_CAST + r')\s*\)\s*(?!BKA_TRANSLATE_ADDR\()(0x[0-9a-fA-F]+|\(\s*0x[0-9a-fA-F]+[^)]*\))')
+    
     content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
 
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
@@ -388,6 +382,9 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
         content = re.sub(r'#define\s+PHYS_TO_K0\s*\(\s*x\s*\).*', r'#define PHYS_TO_K0(x) (BKA_TRANSLATE_ADDR(x))', content)
         content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
         content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
+
+    if "BKA_TRANSLATE_ADDR" in content and "BKA_SAFE_BASE_INCLUDED" not in content:
+        content = header + content
 
     return content
 
