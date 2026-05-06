@@ -124,6 +124,8 @@ TYPES_INCLUDE_PATTERNS = [
 TYPES_INCLUDE_RE = re.compile('|'.join(TYPES_INCLUDE_PATTERNS))
 
 CORE_TYPE_HEADERS = {"n64_types.h", "ultratypes.h", "ultra64.h", "types.h"}
+# Files that must never be processed by any sanitization pass
+SANITIZER_OWN_FILES = {"bka_safe_base.h"}
 
 # ---------------------------------------------------------------------------
 # BKA safe-base shared header content
@@ -694,7 +696,7 @@ _BKA_INCLUDE_RE   = re.compile(r'#\s*include\s*[<"]bka_safe_base\.h[">]')
 _N64_PRIM_CAST = (
     r'(?:volatile\s+)?'
     r'(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)'
-    r'\s*\++'
+    r'\s*\*+'
 )
 _PTR_HEX_RE = re.compile(
     r'\(\s*(' + _N64_PRIM_CAST + r')\s*\)'
@@ -709,6 +711,11 @@ _IO_WRITE_RE = re.compile(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*')
 
 def apply_android_memory_routing(content: str, filename: str) -> str:
     if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')):
+        return content
+    # Never patch the shared header itself – it defines BKA_TRANSLATE_ADDR,
+    # so the regex would fire and insert #include "bka_safe_base.h" at line 1,
+    # creating an infinite self-include cycle at compile time.
+    if filename == 'bka_safe_base.h':
         return content
 
     # Patch pointer-cast hex literals
@@ -828,6 +835,11 @@ def sanitize_codebase(
 
     for dirpath, filename in file_list:
         filepath = os.path.join(dirpath, filename)
+
+        # Never process files that the sanitizer itself writes
+        if filename in SANITIZER_OWN_FILES:
+            continue
+
         try:
             with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                 original = f.read()
