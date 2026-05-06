@@ -29,17 +29,17 @@ static void* safe_allocate(void* addr, size_t size, const char* name) {
     void* p = mmap(addr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 
     if (p != MAP_FAILED) {
-        __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Mapped %s at fixed addr %p (%zu KB)", name, p, size / 1024);
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Mapped %s at fixed addr %p (%zu KB)", name, p, size / 1024);
         return p;
     }
 
-    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "MAP_FIXED FAILED for %s at %p. Falling back to dynamic OS allocation.", name, addr);
+    __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "MAP_FIXED FAILED for %s at %p. Falling back to dynamic OS allocation.", name, addr);
     
-    // Fallback to standard dynamic allocation
+    // Because BKA_TRANSLATE_ADDR globally routes memory, we no longer abort. We allocate dynamically.
     p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     
     if (p != MAP_FAILED) {
-        __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Mapped %s dynamically at %p (%zu KB)", name, p, size / 1024);
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Mapped %s dynamically at %p (%zu KB)", name, p, size / 1024);
         return p;
     }
 
@@ -52,8 +52,6 @@ extern "C" void InitN64Registers() {
     if (gN64_Reg_Base != nullptr && gN64_PIF_Base != nullptr && gN64_RDRAM != nullptr) {
         return;
     }
-
-    __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "Hardware Base Initialization Triggered");
 
     if (gN64_RDRAM == nullptr) {
         gN64_RDRAM = (uint8_t*)safe_allocate((void*)N64_RDRAM_BASE_ADDR, N64_RDRAM_SIZE, "RDRAM");
