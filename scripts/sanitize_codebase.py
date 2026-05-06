@@ -288,11 +288,11 @@ def apply_android_memory_routing(content, filename):
     if "BKA_TRANSLATE_ADDR" in content or not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
 
-    # The mapping macro now actively prioritizes real global pointers on every invocation, 
-    # ensuring early boots fall back safely, but natively recover connection state 
-    # to the main wrapper engine seamlessly without being permanently locked.
+    # The mapping macro now includes a dedicated validation helper with Android Log support.
+    # This captures the faulting N64 address AND source location before the hardware SEGV.
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
+#include <android/log.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -302,6 +302,7 @@ extern void InitN64Registers(void);
 #ifdef __cplusplus
 }
 #endif
+
 static inline unsigned char* BKA_GetSafeRamBase(void) {
     static unsigned char* s_ram_base = 0;
     if (!s_ram_base) s_ram_base = (unsigned char*)__builtin_calloc(1, 8 * 1024 * 1024);
@@ -311,7 +312,6 @@ static inline unsigned int* BKA_GetSafeRegBase(void) {
     if (gN64_Reg_Base) return gN64_Reg_Base;
     InitN64Registers();
     if (gN64_Reg_Base) return gN64_Reg_Base;
-    
     static unsigned int* fallback_reg_base = 0;
     if (!fallback_reg_base) fallback_reg_base = (unsigned int*)__builtin_calloc(1, 16 * 1024 * 1024);
     return fallback_reg_base;
@@ -320,29 +320,37 @@ static inline unsigned int* BKA_GetSafePifBase(void) {
     if (gN64_PIF_Base) return gN64_PIF_Base;
     InitN64Registers();
     if (gN64_PIF_Base) return gN64_PIF_Base;
-    
     static unsigned int* fallback_pif_base = 0;
     if (!fallback_pif_base) fallback_pif_base = (unsigned int*)__builtin_calloc(1, 4096);
     return fallback_pif_base;
 }
 
-#define BKA_RAM_BASE BKA_GetSafeRamBase()
-#define BKA_GET_REG_BASE() BKA_GetSafeRegBase()
-#define BKA_GET_PIF_BASE() BKA_GetSafePifBase()
-#define BKA_MASK32(a) ((unsigned long)(a) & 0xFFFFFFFF)
-#define BKA_IS_NATIVE_PTR(addr) ((((unsigned long)(addr)) >> 32) != 0 && (((unsigned long)(addr)) >> 32) != 0xFFFFFFFF)
-#define BKA_TRANSLATE_ADDR(addr) ( \\
-    (BKA_MASK32(addr) == 0) ? 0 : \\
-    BKA_IS_NATIVE_PTR(addr) ? (unsigned long)(addr) : \\
-    (BKA_MASK32(addr) < 0x00800000) ? ((unsigned long)BKA_RAM_BASE + BKA_MASK32(addr)) : \\
-    (BKA_MASK32(addr) >= 0x80000000 && BKA_MASK32(addr) < 0x80800000) ? ((unsigned long)BKA_RAM_BASE + (BKA_MASK32(addr) - 0x80000000)) : \\
-    (BKA_MASK32(addr) >= 0xA0000000 && BKA_MASK32(addr) < 0xA0800000) ? ((unsigned long)BKA_RAM_BASE + (BKA_MASK32(addr) - 0xA0000000)) : \\
-    (BKA_MASK32(addr) >= 0x04000000 && BKA_MASK32(addr) < 0x05000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0x04000000))) : \\
-    (BKA_MASK32(addr) >= 0x1FC00000 && BKA_MASK32(addr) < 0x1FC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0x1FC00000))) : \\
-    (BKA_MASK32(addr) >= 0xA4000000 && BKA_MASK32(addr) < 0xA5000000) ? ((unsigned long)((unsigned char*)BKA_GET_REG_BASE() + (BKA_MASK32(addr) - 0xA4000000))) : \\
-    (BKA_MASK32(addr) >= 0xBFC00000 && BKA_MASK32(addr) < 0xBFC01000) ? ((unsigned long)((unsigned char*)BKA_GET_PIF_BASE() + (BKA_MASK32(addr) - 0xBFC00000))) : \\
-    (unsigned long)(addr) \\
-)
+static inline unsigned long BKA_Validate_And_Translate(unsigned long addr, const char* file, int line) {
+    unsigned long mask32 = addr & 0xFFFFFFFF;
+    if (mask32 == 0) return 0;
+
+    // Check for native/host pointers already resolved
+    if ((((unsigned long)addr) >> 32) != 0 && (((unsigned long)addr) >> 32) != 0xFFFFFFFF) return addr;
+
+    unsigned long ram = (unsigned long)BKA_GetSafeRamBase();
+    unsigned long reg = (unsigned long)BKA_GetSafeRegBase();
+    unsigned long pif = (unsigned long)BKA_GetSafePifBase();
+
+    // Range Logic
+    if (mask32 < 0x00800000) return ram + mask32;
+    if (mask32 >= 0x80000000 && mask32 < 0x80800000) return ram + (mask32 - 0x80000000);
+    if (mask32 >= 0xA0000000 && mask32 < 0xA0800000) return ram + (mask32 - 0xA0000000);
+    if (mask32 >= 0x04000000 && mask32 < 0x05000000) return reg + (mask32 - 0x04000000);
+    if (mask32 >= 0xA4000000 && mask32 < 0xA5000000) return reg + (mask32 - 0xA4000000);
+    if (mask32 >= 0x1FC00000 && mask32 < 0x1FC01000) return pif + (mask32 - 0x1FC00000);
+    if (mask32 >= 0xBFC00000 && mask32 < 0xBFC01000) return pif + (mask32 - 0xBFC00000);
+
+    // If we reach here, translation failed. Log and return raw for the SEGV to trigger.
+    __android_log_print(ANDROID_LOG_ERROR, "BKA_MEM_FAULT", "[%s:%d] UNMAPPED ACCESS: 0x%08lx", file, line, mask32);
+    return addr;
+}
+
+#define BKA_TRANSLATE_ADDR(addr) BKA_Validate_And_Translate((unsigned long)(addr), __FILE__, __LINE__)
 
 static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     unsigned char* ram = BKA_GetSafeRamBase();
