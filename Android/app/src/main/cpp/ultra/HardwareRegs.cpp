@@ -8,7 +8,7 @@
 
 #define LOG_TAG "BKA_MEM"
 
-// Expanded RDRAM to 16MB to safely capture OOB offset accesses
+// Expanded RDRAM to 16MB to safely capture OOB offset accesses (e.g., 0x800018)
 #define N64_RDRAM_BASE_ADDR     0x80000000UL
 #define N64_RDRAM_SIZE          0x01000000UL   // 16 MB
 
@@ -31,24 +31,30 @@ static void* safe_allocate(void* addr, size_t size, const char* name) {
         __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Mapped %s at fixed addr %p", name, p);
         return p;
     }
+    
     __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "MAP_FIXED FAILED for %s. Using dynamic allocation.", name);
     p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    
     if (p != MAP_FAILED) return p;
+    
     __android_log_print(ANDROID_LOG_FATAL, LOG_TAG, "CRITICAL: Allocation failure for %s", name);
     abort();
 }
 
 extern "C" void InitN64Registers() {
     if (gN64_RDRAM && gN64_Reg_Base && gN64_PIF_Base) return;
+    
     if (!gN64_RDRAM) {
         gN64_RDRAM = (uint8_t*)safe_allocate((void*)N64_RDRAM_BASE_ADDR, N64_RDRAM_SIZE, "RDRAM");
         memset(gN64_RDRAM, 0, N64_RDRAM_SIZE);
         gN64_RAM_Base = (uint32_t*)gN64_RDRAM;
     }
+    
     if (!gN64_Reg_Base) {
         gN64_Reg_Base = (uint32_t*)safe_allocate((void*)N64_RCP_BASE_ADDR, N64_RCP_SPACE_SIZE, "RCP");
         memset(gN64_Reg_Base, 0, N64_RCP_SPACE_SIZE);
     }
+    
     if (!gN64_PIF_Base) {
         gN64_PIF_Base = (uint32_t*)safe_allocate((void*)N64_PIF_BASE_ADDR, N64_PIF_SPACE_SIZE, "PIF");
         memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
@@ -59,5 +65,8 @@ void HardwareRegs_Shutdown() {
     if (gN64_RDRAM) munmap(gN64_RDRAM, N64_RDRAM_SIZE);
     if (gN64_Reg_Base) munmap(gN64_Reg_Base, N64_RCP_SPACE_SIZE);
     if (gN64_PIF_Base) munmap(gN64_PIF_Base, N64_PIF_SPACE_SIZE);
-    gN64_RDRAM = nullptr; gN64_Reg_Base = nullptr; gN64_PIF_Base = nullptr;
+    
+    gN64_RDRAM = nullptr; 
+    gN64_Reg_Base = nullptr; 
+    gN64_PIF_Base = nullptr;
 }
