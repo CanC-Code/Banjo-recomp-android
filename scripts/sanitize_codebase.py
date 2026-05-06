@@ -18,6 +18,38 @@ TOKEN_REPLACEMENTS = {
 }
 COMPILED_TOKENS = [(re.compile(k), v) for k, v in TOKEN_REPLACEMENTS.items()]
 
+def is_modern_wrapper(filepath):
+    if filepath.endswith(('.cpp', '.hpp', '.cc', '.cxx')): return True
+    path_lower = filepath.replace('\\', '/').lower()
+    if "/android/app/" in path_lower or "/jni/" in path_lower or "wrapper" in path_lower: return True
+    return False
+
+def rename_conflicting_headers(root_path):
+    headers_to_redirect = set(CONFLICTING_HEADERS)
+    for dir_name in TARGET_DIRS:
+        dir_path = os.path.join(root_path, dir_name)
+        if not os.path.exists(dir_path): continue
+        for root, _, files in os.walk(dir_path):
+            for ch in CONFLICTING_HEADERS:
+                if ch in files:
+                    old_path = os.path.join(root, ch)
+                    new_path = os.path.join(root, f"n64_{ch}")
+                    if os.path.exists(old_path):
+                        if os.path.exists(new_path): os.remove(new_path)
+                        os.rename(old_path, new_path)
+    return headers_to_redirect
+
+def redirect_legacy_includes(content, headers_to_redirect, is_wrapper):
+    if not is_wrapper:
+        for ch in headers_to_redirect:
+            escaped_ch = ch.replace('.', r'\.')
+            content = re.sub(rf'#include\s*[<"]{escaped_ch}[">]', f'/* Redirected */ #include <n64_{ch}>', content)
+            
+    # Always redirect ultratypes to n64_types regardless of where it lives
+    content = re.sub(r'#include\s*[<"]ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+    content = re.sub(r'#include\s*[<"]PR/ultratypes\.h[">]', '/* Redirected */ #include <n64_types.h>', content)
+    return content
+
 def apply_android_memory_routing(content, filename):
     if not filename.endswith(('.c', '.h', '.cpp', '.hpp')): return content
 
@@ -70,16 +102,13 @@ static inline uintptr_t BKA_Reverse_Addr(uintptr_t addr) {
 }
 #endif\n\n"""
 
-    # Aggressive strip of old headers
     if "BKA_SAFE_BASE_INCLUDED" in content:
         content = re.sub(r'#ifndef BKA_SAFE_BASE_INCLUDED.*?#endif\s*\n\n', '', content, flags=re.DOTALL)
 
-    # Apply macro wrapping
     N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
     ptr_hex_pat = re.compile(r'\(\s*(' + N64_PRIM_CAST + r')\s*\)\s*(?!BKA_TRANSLATE_ADDR\()(0x[0-9a-fA-F]+|\(\s*0x[0-9a-fA-F]+[^)]*\))')
     content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
 
-    # Apply IO Redirects
     content = re.sub(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*', r'#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))', content)
     content = re.sub(r'#define\s+IO_READ\s*\(\s*addr\s*\).*', r'#define IO_READ(addr) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)))', content)
     content = re.sub(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*', r'#define IO_WRITE(addr, data) (*((volatile u32 *)BKA_TRANSLATE_ADDR(addr)) = (u32)(data))', content)
@@ -89,6 +118,8 @@ static inline uintptr_t BKA_Reverse_Addr(uintptr_t addr) {
 
 def sanitize_codebase(root_path):
     print(f"🧹 Sanitizing: {root_path}")
+    headers_to_redirect = rename_conflicting_headers(root_path)
+    
     for dir_name in TARGET_DIRS:
         dir_path = os.path.join(root_path, dir_name)
         if not os.path.exists(dir_path): continue
@@ -99,7 +130,11 @@ def sanitize_codebase(root_path):
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                         original = f.read()
-                    content = apply_android_memory_routing(original, filename)
+                    
+                    is_wrapper = is_modern_wrapper(filepath)
+                    content = redirect_legacy_includes(original, headers_to_redirect, is_wrapper)
+                    content = apply_android_memory_routing(content, filename)
+                    
                     if content != original:
                         with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
                 except Exception: continue
