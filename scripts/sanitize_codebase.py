@@ -288,12 +288,6 @@ def apply_android_memory_routing(content, filename):
     if not filename.endswith(('.c', '.cpp', '.h', '.hpp')):
         return content
 
-    # STRIP ANY EXISTING HEADER FIRST TO AVOID DUPLICATES AND FORCED SKIPS
-    # This ensures files that were "partially sanitized" get upgraded.
-    content = re.sub(r'#ifndef BKA_SAFE_BASE_INCLUDED.*?BKA_Reverse_Addr\s*\([^)]*\)\s*\{[^\}]*\}\s*#endif\s*', '', content, flags=re.DOTALL)
-    # Catch any variants that didn't have BKA_Reverse_Addr
-    content = re.sub(r'#ifndef BKA_SAFE_BASE_INCLUDED.*?BKA_TRANSLATE_ADDR\s*\(.*?\)\s*#endif\s*', '', content, flags=re.DOTALL)
-
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #include <android/log.h>
@@ -313,24 +307,25 @@ static inline unsigned long BKA_Validate_And_Translate(unsigned long addr, const
     uint32_t mask32 = (uint32_t)(addr & 0xFFFFFFFF);
     if (mask32 == 0) return 0;
 
+    // Check for native/host pointers already resolved
     if ((addr >> 32) != 0 && (addr >> 32) != 0xFFFFFFFF) return addr;
 
-    if (!gN64_RDRAM || !gN64_Reg_Base || !gN64_PIF_Base) InitN64Registers();
+    if (!gN64_RDRAM) InitN64Registers();
 
     uintptr_t ram = (uintptr_t)gN64_RDRAM;
     uintptr_t reg = (uintptr_t)gN64_Reg_Base;
     uintptr_t pif = (uintptr_t)gN64_PIF_Base;
 
-    // RDRAM: Extended to 16MB mapped buffer.
+    // RDRAM Range Logic
     if (mask32 < 0x01000000) return ram + mask32;
     if (mask32 >= 0x80000000 && mask32 < 0x81000000) return ram + (mask32 - 0x80000000);
     if (mask32 >= 0xA0000000 && mask32 < 0xA1000000) return ram + (mask32 - 0xA0000000);
 
-    // RCP: Mapped to 32MB. 
-    if (mask32 >= 0x04000000 && mask32 < 0x06000000) return reg + (mask32 - 0x04000000);
-    if (mask32 >= 0xA4000000 && mask32 < 0xA6000000) return reg + (mask32 - 0xA4000000);
+    // RCP Registers
+    if (mask32 >= 0x04000000 && mask32 < 0x05000000) return reg + (mask32 - 0x04000000);
+    if (mask32 >= 0xA4000000 && mask32 < 0xA5000000) return reg + (mask32 - 0xA4000000);
 
-    // PIF: 4KB buffer.
+    // PIF
     if (mask32 >= 0x1FC00000 && mask32 < 0x1FC01000) return pif + (mask32 - 0x1FC00000);
     if (mask32 >= 0xBFC00000 && mask32 < 0xBFC01000) return pif + (mask32 - 0xBFC00000);
 
@@ -345,13 +340,17 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
     uintptr_t ram = (uintptr_t)gN64_RDRAM;
     uintptr_t reg = (uintptr_t)gN64_Reg_Base;
     if (addr >= ram && addr < ram + 0x01000000) return addr - ram;
-    if (addr >= reg && addr < reg + 0x02000000) return (addr - reg) + 0x04000000;
+    if (addr >= reg && addr < reg + 0x01000000) return (addr - reg) + 0x04000000;
     return addr;
 }
 #endif\n\n"""
 
+    # CRITICAL FIX: Aggressively strip any old implementations of the header block before applying 
+    # the new global translation logic so that the unified variables apply. 
+    if "#ifndef BKA_SAFE_BASE_INCLUDED" in content:
+        content = re.sub(r'#ifndef BKA_SAFE_BASE_INCLUDED.*?BKA_Reverse_Addr[^\n]*\n#endif\s*', '', content, flags=re.DOTALL)
+
     N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
-    
     ptr_hex_pat = re.compile(r'\(\s*(' + N64_PRIM_CAST + r')\s*\)\s*(?!BKA_TRANSLATE_ADDR\()(0x[0-9a-fA-F]+|\(\s*0x[0-9a-fA-F]+[^)]*\))')
     
     content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
@@ -372,7 +371,9 @@ static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
         content = re.sub(r'#define\s+K1_TO_PHYS\s*\(\s*x\s*\).*', r'#define K1_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
         content = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*', r'#define K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', content)
 
-    content = header + content
+    # Re-inject the pristine, updated header logic ensuring standard mappings.
+    if "BKA_TRANSLATE_ADDR" in content:
+        content = header + content
 
     return content
 
