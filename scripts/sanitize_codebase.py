@@ -39,6 +39,10 @@ Changes vs prior version
 
 10. sanitize_codebase() accepts an optional set of explicit file paths
     so CI can run single-file reruns without walking the whole tree.
+
+11. Fixed C++ linkage template errors by moving apply_android_memory_routing
+    to the end of the pass sequence, ensuring bka_safe_base.h is included
+    outside of extern "C" blocks.
 """
 
 import os
@@ -195,9 +199,9 @@ static inline uintptr_t BKA_Validate_And_Translate(
      * Acquire-load: if gN64_RDRAM was written by InitN64Registers() on
      * another thread, this load is guaranteed to observe the write.
      * (Still: callers must ensure InitN64Registers() has finished before
-     *  the first game-thread instruction runs.)
+     * the first game-thread instruction runs.)
      */
-    uint8_t*  ram_ptr = atomic_load_explicit(&gN64_RDRAM,    memory_order_acquire);
+    uint8_t* ram_ptr = atomic_load_explicit(&gN64_RDRAM,    memory_order_acquire);
     uint32_t* reg_ptr = atomic_load_explicit(&gN64_Reg_Base, memory_order_acquire);
     uint32_t* pif_ptr = atomic_load_explicit(&gN64_PIF_Base, memory_order_acquire);
 
@@ -244,7 +248,7 @@ static inline uintptr_t BKA_Validate_And_Translate(
 
 static inline uintptr_t BKA_Reverse_Addr(uintptr_t addr)
 {
-    uint8_t*  ram_ptr = atomic_load_explicit(&gN64_RDRAM,    memory_order_acquire);
+    uint8_t* ram_ptr = atomic_load_explicit(&gN64_RDRAM,    memory_order_acquire);
     uint32_t* reg_ptr = atomic_load_explicit(&gN64_Reg_Base, memory_order_acquire);
     if (!ram_ptr) return addr;
     uintptr_t ram = (uintptr_t)ram_ptr;
@@ -872,7 +876,6 @@ def sanitize_codebase(
             content = safe_token_replacement(content, tokens)
             content = fix_decompiler_artifacts(content, filename)
             content = fix_struct_shadowing(content)
-            content = apply_android_memory_routing(content, filename)
 
             if filename.endswith('.c'):
                 content = fix_linkage_conflicts(content)
@@ -884,6 +887,14 @@ def sanitize_codebase(
                 if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
                     content = inject_types_include(content, is_c_file=False)
                 content = inject_extern_c(content, filename)
+
+            # Apply Android memory routing LAST for legacy files.
+            # This ensures that if it prepends #include "bka_safe_base.h",
+            # it is placed at the absolute top of the file, completely
+            # outside of the extern "C" blocks injected by inject_extern_c.
+            # Otherwise, bka_safe_base.h (which brings in <stdatomic.h> and
+            # C++ templates) gets wrapped in C-linkage, causing Clang errors.
+            content = apply_android_memory_routing(content, filename)
 
             if content != original:
                 with open(filepath, 'w', encoding='utf-8') as f:
