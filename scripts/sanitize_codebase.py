@@ -291,78 +291,58 @@ def apply_android_memory_routing(content, filename):
     header = """#ifndef BKA_SAFE_BASE_INCLUDED
 #define BKA_SAFE_BASE_INCLUDED
 #include <android/log.h>
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern unsigned int* gN64_Reg_Base;
-extern unsigned int* gN64_PIF_Base;
+extern uint8_t* gN64_RDRAM;
+extern uint32_t* gN64_Reg_Base;
+extern uint32_t* gN64_PIF_Base;
 extern void InitN64Registers(void);
 #ifdef __cplusplus
 }
 #endif
 
-static inline unsigned char* BKA_GetSafeRamBase(void) {
-    static unsigned char* s_ram_base = 0;
-    if (!s_ram_base) s_ram_base = (unsigned char*)__builtin_calloc(1, 8 * 1024 * 1024);
-    return s_ram_base;
-}
-static inline unsigned int* BKA_GetSafeRegBase(void) {
-    if (gN64_Reg_Base) return gN64_Reg_Base;
-    InitN64Registers();
-    if (gN64_Reg_Base) return gN64_Reg_Base;
-    static unsigned int* fallback_reg_base = 0;
-    if (!fallback_reg_base) fallback_reg_base = (unsigned int*)__builtin_calloc(1, 16 * 1024 * 1024);
-    return fallback_reg_base;
-}
-static inline unsigned int* BKA_GetSafePifBase(void) {
-    if (gN64_PIF_Base) return gN64_PIF_Base;
-    InitN64Registers();
-    if (gN64_PIF_Base) return gN64_PIF_Base;
-    static unsigned int* fallback_pif_base = 0;
-    if (!fallback_pif_base) fallback_pif_base = (unsigned int*)__builtin_calloc(1, 4096);
-    return fallback_pif_base;
-}
-
 static inline unsigned long BKA_Validate_And_Translate(unsigned long addr, const char* file, int line) {
-    unsigned long mask32 = addr & 0xFFFFFFFF;
+    uint32_t mask32 = (uint32_t)(addr & 0xFFFFFFFF);
     if (mask32 == 0) return 0;
 
-    // Check for native/host pointers already resolved
-    if ((((unsigned long)addr) >> 32) != 0 && (((unsigned long)addr) >> 32) != 0xFFFFFFFF) return addr;
+    if ((addr >> 32) != 0 && (addr >> 32) != 0xFFFFFFFF) return addr;
 
-    unsigned long ram = (unsigned long)BKA_GetSafeRamBase();
-    unsigned long reg = (unsigned long)BKA_GetSafeRegBase();
-    unsigned long pif = (unsigned long)BKA_GetSafePifBase();
+    if (!gN64_RDRAM) InitN64Registers();
 
-    // Range Logic
-    if (mask32 < 0x00800000) return ram + mask32;
-    if (mask32 >= 0x80000000 && mask32 < 0x80800000) return ram + (mask32 - 0x80000000);
-    if (mask32 >= 0xA0000000 && mask32 < 0xA0800000) return ram + (mask32 - 0xA0000000);
+    uintptr_t ram = (uintptr_t)gN64_RDRAM;
+    uintptr_t reg = (uintptr_t)gN64_Reg_Base;
+    uintptr_t pif = (uintptr_t)gN64_PIF_Base;
+
+    if (mask32 < 0x01000000) return ram + mask32;
+    if (mask32 >= 0x80000000 && mask32 < 0x81000000) return ram + (mask32 - 0x80000000);
+    if (mask32 >= 0xA0000000 && mask32 < 0xA1000000) return ram + (mask32 - 0xA0000000);
+
     if (mask32 >= 0x04000000 && mask32 < 0x05000000) return reg + (mask32 - 0x04000000);
     if (mask32 >= 0xA4000000 && mask32 < 0xA5000000) return reg + (mask32 - 0xA4000000);
+
     if (mask32 >= 0x1FC00000 && mask32 < 0x1FC01000) return pif + (mask32 - 0x1FC00000);
     if (mask32 >= 0xBFC00000 && mask32 < 0xBFC01000) return pif + (mask32 - 0xBFC00000);
 
-    // If we reach here, translation failed. Log and return raw for the SEGV to trigger.
-    __android_log_print(ANDROID_LOG_ERROR, "BKA_MEM_FAULT", "[%s:%d] UNMAPPED ACCESS: 0x%08lx", file, line, mask32);
+    __android_log_print(ANDROID_LOG_FATAL, "BKA_MEM_FAULT", "[%s:%d] UNMAPPED OOB ACCESS: 0x%08x", file, line, mask32);
     return addr;
 }
 
 #define BKA_TRANSLATE_ADDR(addr) BKA_Validate_And_Translate((unsigned long)(addr), __FILE__, __LINE__)
 
 static inline unsigned long BKA_Reverse_Addr(unsigned long addr) {
-    unsigned char* ram = BKA_GetSafeRamBase();
-    unsigned int* reg = BKA_GetSafeRegBase();
-    if (ram && addr >= (unsigned long)ram && addr < (unsigned long)ram + 8*1024*1024) return addr - (unsigned long)ram;
-    if (reg && addr >= (unsigned long)reg && addr < (unsigned long)reg + 0x1000000) return (addr - (unsigned long)reg) + 0x04000000;
+    if (!gN64_RDRAM) return addr;
+    uintptr_t ram = (uintptr_t)gN64_RDRAM;
+    uintptr_t reg = (uintptr_t)gN64_Reg_Base;
+    if (addr >= ram && addr < ram + 0x01000000) return addr - ram;
+    if (addr >= reg && addr < reg + 0x01000000) return (addr - reg) + 0x04000000;
     return addr;
 }
 #endif\n\n"""
 
     N64_PRIM_CAST = r'(?:volatile\s+)?(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)\s*\*+'
     
-    # Target raw hex pointers and simple parenthesized math (like 0x80000000 + offset)
-    # The negative lookahead (?!BKA_TRANSLATE_ADDR\() prevents double wrapping on repeated runs.
     ptr_hex_pat = re.compile(r'\(\s*(' + N64_PRIM_CAST + r')\s*\)\s*(?!BKA_TRANSLATE_ADDR\()(0x[0-9a-fA-F]+|\(\s*0x[0-9a-fA-F]+[^)]*\))')
     
     content = ptr_hex_pat.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
