@@ -18,8 +18,10 @@ Changes vs prior version
     as function-call arguments (e.g. mmap / malloc / aligned_alloc
     calls with 0x800000 / 8388608) so the JNI allocator matches.
 
-4.  inject_extern_c rewritten: uses a proper state-machine to avoid
-    emitting empty extern-C blocks and double-wrapping.
+4.  inject_extern_c rewritten: uses an advanced state-machine to 
+    suspend the extern "C" wrapper around ALL #include directives. 
+    This prevents C++ standard library templates from being caught 
+    in C-linkage blocks, resolving NDK <stdatomic.h> compiler crashes.
 
 5.  fix_linkage_conflicts offset calculation no longer uses a shadow
     copy for position maths — it works directly on the real content
@@ -39,10 +41,6 @@ Changes vs prior version
 
 10. sanitize_codebase() accepts an optional set of explicit file paths
     so CI can run single-file reruns without walking the whole tree.
-
-11. Fixed C++ linkage template errors by moving apply_android_memory_routing
-    to the end of the pass sequence, ensuring bka_safe_base.h is included
-    outside of extern "C" blocks.
 """
 
 import os
@@ -341,9 +339,9 @@ def inject_types_include(content: str, is_c_file: bool = False) -> str:
 def inject_extern_c(content: str, filename: str) -> str:
     """
     Wrap a legacy N64 header in extern "C" so it is safe to include
-    from C++ translation units.  Handles the edge case where system
-    headers (#include <foo> with no extension) must temporarily close
-    the extern block.
+    from C++ translation units. Suspends the extern block for ALL
+    #include directives to prevent C++ standard library templates
+    (like <stdatomic.h>) from throwing linkage errors.
     """
     if not filename.endswith('.h'):
         return content
@@ -360,29 +358,32 @@ def inject_extern_c(content: str, filename: str) -> str:
     out.append('')
 
     inside_extern = True
-    sys_inc_re = re.compile(r'^[ \t]*#[ \t]*include[ \t]*<([^>]+)>')
+    inc_re = re.compile(r'^[ \t]*#[ \t]*include\b')
 
     for line in lines:
-        m = sys_inc_re.match(line)
-        if m and '.' not in m.group(1):
-            # Extensionless system header: close extern, include, reopen
+        if inc_re.match(line):
+            # Suspend extern "C" block for any include to avoid C++ template linkage errors
             if inside_extern:
                 out.append('#ifdef __cplusplus')
                 out.append('}')
                 out.append('#endif')
+                inside_extern = False
             out.append(line)
-            out.append('#ifdef __cplusplus')
-            out.append('extern "C" {')
-            out.append('#endif')
-            inside_extern = True
         else:
+            # Reopen extern "C" block when encountering actual code
+            if not inside_extern and line.strip() != '':
+                out.append('#ifdef __cplusplus')
+                out.append('extern "C" {')
+                out.append('#endif')
+                inside_extern = True
             out.append(line)
 
     # Closing wrapper
-    out.append('')
-    out.append('#ifdef __cplusplus')
-    out.append('}')
-    out.append('#endif')
+    if inside_extern:
+        out.append('')
+        out.append('#ifdef __cplusplus')
+        out.append('}')
+        out.append('#endif')
 
     return '\n'.join(out) + '\n'
 
@@ -691,7 +692,7 @@ def fix_linkage_conflicts(content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pass: Android memory routing  (now uses shared header, not inline blob)
+# Pass: Android memory routing
 # ---------------------------------------------------------------------------
 
 _BKA_INCLUDE_LINE = '#include "bka_safe_base.h"'
@@ -876,6 +877,7 @@ def sanitize_codebase(
             content = safe_token_replacement(content, tokens)
             content = fix_decompiler_artifacts(content, filename)
             content = fix_struct_shadowing(content)
+            content = apply_android_memory_routing(content, filename)
 
             if filename.endswith('.c'):
                 content = fix_linkage_conflicts(content)
@@ -887,14 +889,6 @@ def sanitize_codebase(
                 if filename not in CORE_TYPE_HEADERS and needs_types_injection(content):
                     content = inject_types_include(content, is_c_file=False)
                 content = inject_extern_c(content, filename)
-
-            # Apply Android memory routing LAST for legacy files.
-            # This ensures that if it prepends #include "bka_safe_base.h",
-            # it is placed at the absolute top of the file, completely
-            # outside of the extern "C" blocks injected by inject_extern_c.
-            # Otherwise, bka_safe_base.h (which brings in <stdatomic.h> and
-            # C++ templates) gets wrapped in C-linkage, causing Clang errors.
-            content = apply_android_memory_routing(content, filename)
 
             if content != original:
                 with open(filepath, 'w', encoding='utf-8') as f:
