@@ -69,11 +69,23 @@ extern "C" {
 // ============================================================
 // 2. STATIC MEMORY ALLOCATION
 // ============================================================
+
+// Main RDRAM - 16MB to allow for over-reads (as required by bka_safe_base.h)
+static uint8_t s_N64_RDRAM[16 * 1024 * 1024] __attribute__((aligned(4096)));
+
+// RCP/Hardware Registers
 static uint8_t s_N64_Reg_Memory[1024 * 1024] __attribute__((aligned(16)));
+
+// PIF RAM/ROM
+static uint8_t s_N64_PIF_Memory[0x1000] __attribute__((aligned(16)));
+
+// BKA Globals - Initialized at load-time to prevent race conditions
+uint8_t* gN64_RDRAM    = s_N64_RDRAM;
 uint32_t* gN64_Reg_Base = (uint32_t*)s_N64_Reg_Memory;
+uint32_t* gN64_PIF_Base = (uint32_t*)s_N64_PIF_Memory;
 
 void InitN64Registers() {
-    // Statically allocated; no logic required.
+    // Already initialized via static assignment above.
 }
 
 // ============================================================
@@ -133,8 +145,9 @@ RECOMP_SYMBOL uint32_t* DPC_BUFBUSY_REG       = (uint32_t*)(s_N64_Reg_Memory + 0
 RECOMP_SYMBOL uint32_t* DPC_PIPEBUSY_REG      = (uint32_t*)(s_N64_Reg_Memory + 0x9018);
 RECOMP_SYMBOL uint32_t* DPC_TMEM_REG          = (uint32_t*)(s_N64_Reg_Memory + 0x901C);
 
-RECOMP_SYMBOL uint32_t* PIF_RAM               = (uint32_t*)(s_N64_Reg_Memory + 0xA000);
-RECOMP_SYMBOL uint32_t* PIF_ROM               = (uint32_t*)(s_N64_Reg_Memory + 0xA000);
+// PIF symbols used by the recompiled code
+RECOMP_SYMBOL uint32_t* PIF_RAM               = (uint32_t*)(s_N64_PIF_Memory + 0x0000);
+RECOMP_SYMBOL uint32_t* PIF_ROM               = (uint32_t*)(s_N64_PIF_Memory + 0x0000);
 
 // ============================================================
 // 4. MATH & ENGINE GLOBALS
