@@ -5,13 +5,12 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <android/log.h>
-#include <stdio.h> // Required for snprintf
+#include <stdio.h>
 #include "rare_decompression.h"
 
 #define LOG_TAG "BKA_OTR"
 
 // --- 1. Shadow-Proof Kernel System Calls ---
-// These bypass the standard C library to prevent symbol shadowing by the recompiled game.
 static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
     return syscall(SYS_pread64, fd, buf, count, offset);
 }
@@ -60,12 +59,22 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
 }
 
 // --- 4. Endian-Aware Data Readers ---
-static uint32_t read_u32_be(const uint8_t* ptr) {
-    return (ptr[0] << 24) | (ptr[1] << 16) | (ptr[2] << 8) | ptr[3];
+// FIX: All bytes cast to uint32_t before shifting to prevent signed-integer
+// overflow UB when the high byte has bit 7 set (e.g. ptr[3] >= 0x80).
+// The original code used bare uint8_t shifts which are promoted to signed int,
+// causing ptr[n] << 24 to produce a negative value and corrupt the result.
+static uint32_t read_u32_le(const uint8_t* ptr) {
+    return  (uint32_t)ptr[0]        |
+           ((uint32_t)ptr[1] << 8)  |
+           ((uint32_t)ptr[2] << 16) |
+           ((uint32_t)ptr[3] << 24);
 }
 
-static uint32_t read_u32_le(const uint8_t* ptr) {
-    return (ptr[3] << 24) | (ptr[2] << 16) | (ptr[1] << 8) | ptr[0];
+static uint32_t read_u32_be(const uint8_t* ptr) {
+    return ((uint32_t)ptr[0] << 24) |
+           ((uint32_t)ptr[1] << 16) |
+           ((uint32_t)ptr[2] << 8)  |
+            (uint32_t)ptr[3];
 }
 
 void ensure_directories(const char* path) {
@@ -80,7 +89,7 @@ void ensure_directories(const char* path) {
 
 extern "C" {
 void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
-                                           int romFd, uint8_t* manifestPtr, uint32_t manifestSize, 
+                                           int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
                                            const char* outDirPath) {
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "STATUS: Initializing extraction...");
@@ -99,24 +108,44 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         return;
     }
 
-    // Heuristically detect endianness of the incoming manifest payload.
-    // N64 games rarely exceed 20,000 files. If reading as Little-Endian produces an astronomically 
-    // high number, the payload is Big-Endian.
-    bool isLittleEndian = true;
+    // FIX: Replace the arbitrary 100,000-entry heuristic with a structurally
+    // sound upper bound derived from the manifest's own size. The old threshold
+    // incorrectly rejected valid LE counts above 100k, fell through to a BE
+    // read that was also invalid, and then logged a nonsense entry count.
+    // Now: attempt LE first; only switch to BE if the LE count is physically
+    // impossible given the manifest size; reject both if neither fits.
+    const uint32_t RECORD_SIZE = 48;
+    const uint32_t maxPossible = (manifestSize - 4) / RECORD_SIZE;
+
     uint32_t entryCount = read_u32_le(manifestPtr);
-    if (entryCount > 100000) {
-        entryCount = read_u32_be(manifestPtr);
-        isLittleEndian = false;
+    bool isLittleEndian = true;
+
+    if (entryCount > maxPossible) {
+        uint32_t beCount = read_u32_be(manifestPtr);
+        if (beCount <= maxPossible) {
+            entryCount = beCount;
+            isLittleEndian = false;
+        } else {
+            char errMsg[160];
+            snprintf(errMsg, sizeof(errMsg),
+                "ERROR: Manifest corrupt — entry count invalid in both endiannesses "
+                "(LE=%u, BE=%u, max possible=%u)",
+                entryCount, beCount, maxPossible);
+            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "%s", errMsg);
+            debug_ui(env, callbackObj, progressMid, errMsg);
+            return;
+        }
     }
 
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Detected %u entries. LittleEndian=%d, ManifestSize=%u", 
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Detected %u entries. LittleEndian=%d, ManifestSize=%u",
                         entryCount, isLittleEndian, manifestSize);
 
-    const uint32_t RECORD_SIZE = 48;
+    // Bounds check is now always satisfied by construction (entryCount <= maxPossible),
+    // but kept explicitly for clarity and defence-in-depth.
     if (entryCount > (manifestSize - 4) / RECORD_SIZE) {
         char errMsg[128];
-        snprintf(errMsg, sizeof(errMsg), "ERROR: OOB! Count:%u requires %u bytes, but Size:%u", 
-                 entryCount, (entryCount * RECORD_SIZE) + 4, manifestSize);
+        snprintf(errMsg, sizeof(errMsg), "ERROR: OOB! Count:%u requires %llu bytes, but Size:%u",
+                 entryCount, (unsigned long long)entryCount * RECORD_SIZE + 4, manifestSize);
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "%s", errMsg);
         debug_ui(env, callbackObj, progressMid, errMsg);
         return;
@@ -129,8 +158,7 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         if (env->PushLocalFrame(16) < 0) return;
 
         uint8_t* record = recordStart + (i * RECORD_SIZE);
-        
-        // Use the dynamically selected endian reader for all loop properties
+
         uint32_t romOffset = isLittleEndian ? read_u32_le(record + 0) : read_u32_be(record + 0);
         uint32_t fileSize  = isLittleEndian ? read_u32_le(record + 4) : read_u32_be(record + 4);
 
@@ -161,10 +189,9 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         }
         ensure_directories(fullPath);
 
-        // Word-align the extraction boundaries to allow the chunk normalizer to swap the endianness safely
-        uint32_t alignedStart = romOffset & ~3;
-        uint32_t alignedEnd = (romOffset + fileSize + 3) & ~3;
-        uint32_t alignedSize = alignedEnd - alignedStart;
+        uint32_t alignedStart = romOffset & ~3u;
+        uint32_t alignedEnd   = (romOffset + fileSize + 3) & ~3u;
+        uint32_t alignedSize  = alignedEnd - alignedStart;
 
         uint8_t* workBuffer = (uint8_t*)::malloc(alignedSize);
         if (workBuffer) {
@@ -173,7 +200,7 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
                 normalize_chunk(workBuffer, alignedSize, format);
                 uint8_t* assetPtr = workBuffer + (romOffset - alignedStart);
                 uint32_t decompressedSize = 0;
-                
+
                 uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
 
                 uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
@@ -190,7 +217,6 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
             ::free(workBuffer);
         }
 
-        // Standardize UI updates
         if (i % 250 == 0 || i == entryCount - 1) {
             int percentage = (int)(((i + 1) * 100) / entryCount);
             jstring jName = env->NewStringUTF(fileName);
