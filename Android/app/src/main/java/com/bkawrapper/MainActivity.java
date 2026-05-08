@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -20,6 +21,8 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import android.opengl.GLSurfaceView;
 
 import java.io.File;
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -86,6 +89,9 @@ public class MainActivity extends AppCompatActivity {
             // First run: show ROM selection menu
             setContentView(R.layout.activity_main);
 
+            // Neutralize any uninitialized GLSurfaceView in the XML to prevent surfaceCreated crashes
+            neutralizeXmlGLSurfaceView((ViewGroup) findViewById(android.R.id.content));
+
             menuOverlay        = findViewById(R.id.menu_overlay);
             otrContainer       = findViewById(R.id.otr_ui_container);
             progressBar        = findViewById(R.id.otr_progress_bar);
@@ -123,10 +129,6 @@ public class MainActivity extends AppCompatActivity {
 
     // -----------------------------------------------------------------------
     // Extraction-complete sentinel
-    //
-    // otr_builder extracts assets as loose files — there is no single .otr
-    // file.  We detect a completed extraction by the presence of a small
-    // sentinel file that OtrService writes when runOtrGeneration returns.
     // -----------------------------------------------------------------------
 
     /**
@@ -152,6 +154,38 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception e) {
             Log.w(TAG, "Could not write sentinel: " + e.getMessage());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // UI safeguards
+    // -----------------------------------------------------------------------
+
+    /**
+     * Scans the inflated XML layout for any placeholder GLSurfaceViews and assigns
+     * a non-functional dummy renderer. This prevents the WindowManager from crashing 
+     * on a null GLThread while the app waits for the background extraction to finish.
+     */
+    private void neutralizeXmlGLSurfaceView(ViewGroup group) {
+        if (group == null) return;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof GLSurfaceView) {
+                GLSurfaceView dummy = (GLSurfaceView) child;
+                dummy.setEGLContextClientVersion(2);
+                dummy.setRenderer(new GLSurfaceView.Renderer() {
+                    @Override
+                    public void onSurfaceCreated(GL10 gl, EGLConfig config) {}
+                    @Override
+                    public void onSurfaceChanged(GL10 gl, int width, int height) {}
+                    @Override
+                    public void onDrawFrame(GL10 gl) {}
+                });
+                // Only render when explicitly told to, saving battery during extraction
+                dummy.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+            } else if (child instanceof ViewGroup) {
+                neutralizeXmlGLSurfaceView((ViewGroup) child);
+            }
         }
     }
 
@@ -230,7 +264,7 @@ public class MainActivity extends AppCompatActivity {
         final String assetDir    = getFilesDir().getAbsolutePath();
         final AssetManager mgr   = getAssets();
 
-        // Build and attach the GL surface
+        // Build and attach the GL surface (this dynamically replaces the dummy XML view)
         glSurfaceView = new GLSurfaceView(this);
         glSurfaceView.setEGLContextClientVersion(2);   // GLES 2.0 context
         glSurfaceView.setRenderer(new GLRenderer(this, assetDir, mgr));
