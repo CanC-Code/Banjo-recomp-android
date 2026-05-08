@@ -22,7 +22,6 @@ set(BRIDGE_SOURCES
     emulator/pi_hle.cpp
     emulator/resource_mgr.cpp
     tools/rare_decompression.cpp
-    ultra/HardwareRegs.cpp
     ultra/missing_stubs.c
 )
 
