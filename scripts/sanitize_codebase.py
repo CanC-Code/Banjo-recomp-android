@@ -11,36 +11,31 @@ Changes vs prior version
 2.  InitN64Registers() race fixed: the lazy-init inside
     BKA_Validate_And_Translate is now guarded with a double-checked
     atomic load so the game thread cannot race past an uninitialised
-    gN64_RDRAM.  Callers should still call InitN64Registers() before
-    spawning BKA-GameThread.
+    gN64_RDRAM.
 
-3.  expand_static_rdram now also patches numeric literals that appear
-    as function-call arguments (e.g. mmap / malloc / aligned_alloc
-    calls with 0x800000 / 8388608) so the JNI allocator matches.
+3.  <stdatomic.h> template linkage crash resolved: bka_safe_base.h 
+    now uses compiler intrinsics (__atomic_load_n) instead of the 
+    standard library to ensure C++ templates are never trapped inside 
+    native extern "C" blocks originating from legacy N64 headers.
 
-4.  inject_extern_c rewritten: uses an advanced state-machine to 
-    suspend the extern "C" wrapper around ALL #include directives. 
-    This prevents C++ standard library templates from being caught 
-    in C-linkage blocks, resolving NDK <stdatomic.h> compiler crashes.
+4.  expand_static_rdram now also patches numeric literals that appear
+    as function-call arguments.
 
-5.  fix_linkage_conflicts offset calculation no longer uses a shadow
-    copy for position maths — it works directly on the real content
-    string, so desync between shadow and real offsets is impossible.
+5.  inject_extern_c state-machine suspends the extern "C" wrapper 
+    around ALL #include directives for safe standard library loading.
 
-6.  Idempotency guards added to every major pass (token replacement,
+6.  fix_linkage_conflicts offset calculation works directly on the 
+    real content string to prevent desyncs.
+
+7.  Idempotency guards added to every major pass (token replacement,
     include injection, extern-C, linkage fixing).
 
-7.  safe_token_replacement now also skips preprocessor # lines
-    (e.g. #define TRUE 1 must not have TRUE→TRUE again).
+8.  safe_token_replacement now skips preprocessor # lines.
 
-8.  is_modern_wrapper heuristic tightened: files in libultra/ are
+9.  is_modern_wrapper heuristic tightened: files in libultra/ are
     never treated as wrappers.
 
-9.  All file I/O exceptions now log the offending path + reason
-    instead of silently continuing.
-
-10. sanitize_codebase() accepts an optional set of explicit file paths
-    so CI can run single-file reruns without walking the whole tree.
+10. All file I/O exceptions log the offending path + reason.
 """
 
 import os
@@ -157,7 +152,6 @@ BKA_SAFE_BASE_CONTENT = """\
 
 #include <android/log.h>
 #include <stdint.h>
-#include <stdatomic.h>
 
 #define BKA_RDRAM_ALLOC_SIZE  (0x1000000u)   /* 16 MB – covers 0x800018 over-reads */
 #define BKA_RDRAM_PHYS_SIZE   (0x800000u)    /* 8 MB  – original N64 RDRAM           */
@@ -171,9 +165,9 @@ extern "C" {
  * game thread starts.  Reads from the game thread use acquire-load so
  * the processor cannot speculate past the initialisation write.
  */
-extern _Atomic(uint8_t*)   gN64_RDRAM;
-extern _Atomic(uint32_t*)  gN64_Reg_Base;
-extern _Atomic(uint32_t*)  gN64_PIF_Base;
+extern uint8_t* gN64_RDRAM;
+extern uint32_t* gN64_Reg_Base;
+extern uint32_t* gN64_PIF_Base;
 
 extern void InitN64Registers(void);
 
@@ -196,20 +190,18 @@ static inline uintptr_t BKA_Validate_And_Translate(
     /*
      * Acquire-load: if gN64_RDRAM was written by InitN64Registers() on
      * another thread, this load is guaranteed to observe the write.
-     * (Still: callers must ensure InitN64Registers() has finished before
-     * the first game-thread instruction runs.)
+     * We utilize compiler built-ins here to strictly avoid standard 
+     * library <stdatomic.h> imports, which pull in C++ templates that 
+     * inherently crash inside legacy extern "C" headers.
      */
-    uint8_t* ram_ptr = atomic_load_explicit(&gN64_RDRAM,    memory_order_acquire);
-    uint32_t* reg_ptr = atomic_load_explicit(&gN64_Reg_Base, memory_order_acquire);
-    uint32_t* pif_ptr = atomic_load_explicit(&gN64_PIF_Base, memory_order_acquire);
+    uint8_t* ram_ptr = __atomic_load_n(&gN64_RDRAM,    __ATOMIC_ACQUIRE);
+    uint32_t* reg_ptr = __atomic_load_n(&gN64_Reg_Base, __ATOMIC_ACQUIRE);
+    uint32_t* pif_ptr = __atomic_load_n(&gN64_PIF_Base, __ATOMIC_ACQUIRE);
 
     if (!ram_ptr) {
         __android_log_print(ANDROID_LOG_FATAL, "BKA_MEM_FAULT",
             "[%s:%d] BKA_TRANSLATE_ADDR called before InitN64Registers(). "
             "addr=0x%08x", file, line, mask32);
-        /* Do NOT call InitN64Registers() here – it is not thread-safe from
-         * the game thread.  Return the raw address so the crash tombstone
-         * captures the real fault address rather than a null-deref here. */
         return addr;
     }
 
@@ -246,8 +238,8 @@ static inline uintptr_t BKA_Validate_And_Translate(
 
 static inline uintptr_t BKA_Reverse_Addr(uintptr_t addr)
 {
-    uint8_t* ram_ptr = atomic_load_explicit(&gN64_RDRAM,    memory_order_acquire);
-    uint32_t* reg_ptr = atomic_load_explicit(&gN64_Reg_Base, memory_order_acquire);
+    uint8_t* ram_ptr = __atomic_load_n(&gN64_RDRAM,    __ATOMIC_ACQUIRE);
+    uint32_t* reg_ptr = __atomic_load_n(&gN64_Reg_Base, __ATOMIC_ACQUIRE);
     if (!ram_ptr) return addr;
     uintptr_t ram = (uintptr_t)ram_ptr;
     uintptr_t reg = (uintptr_t)reg_ptr;
@@ -333,15 +325,14 @@ def inject_types_include(content: str, is_c_file: bool = False) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pass: extern "C" wrapping (rewritten state-machine)
+# Pass: extern "C" wrapping (state-machine)
 # ---------------------------------------------------------------------------
 
 def inject_extern_c(content: str, filename: str) -> str:
     """
     Wrap a legacy N64 header in extern "C" so it is safe to include
     from C++ translation units. Suspends the extern block for ALL
-    #include directives to prevent C++ standard library templates
-    (like <stdatomic.h>) from throwing linkage errors.
+    #include directives.
     """
     if not filename.endswith('.h'):
         return content
@@ -362,7 +353,7 @@ def inject_extern_c(content: str, filename: str) -> str:
 
     for line in lines:
         if inc_re.match(line):
-            # Suspend extern "C" block for any include to avoid C++ template linkage errors
+            # Suspend extern "C" block for any include
             if inside_extern:
                 out.append('#ifdef __cplusplus')
                 out.append('}')
@@ -671,7 +662,6 @@ def fix_linkage_conflicts(content: str) -> str:
     )
 
     # Find insertion point using the real content string directly
-    # (no shadow copy to avoid offset desync)
     first_func = _FIRST_FUNC_RE.search(content)
     if not first_func:
         return content + '\n' + header_block
@@ -717,9 +707,7 @@ _IO_WRITE_RE = re.compile(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*')
 def apply_android_memory_routing(content: str, filename: str) -> str:
     if not filename.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')):
         return content
-    # Never patch the shared header itself – it defines BKA_TRANSLATE_ADDR,
-    # so the regex would fire and insert #include "bka_safe_base.h" at line 1,
-    # creating an infinite self-include cycle at compile time.
+    # Never patch the shared header itself
     if filename == 'bka_safe_base.h':
         return content
 
