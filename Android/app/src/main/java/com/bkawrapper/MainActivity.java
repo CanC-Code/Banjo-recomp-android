@@ -184,7 +184,8 @@ public class MainActivity extends AppCompatActivity {
             Uri romUri = data.getData();
             if (romUri != null) {
                 // Grant persistable permissions to prevent security exception when backgrounding app
-                final int takeFlags = intent.getFlags()
+                // FIX: Use 'data' instead of 'intent' to access the returned intent's flags
+                final int takeFlags = data.getFlags()
                     & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                 try {
                     getContentResolver().takePersistableUriPermission(romUri, takeFlags);
