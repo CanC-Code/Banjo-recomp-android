@@ -59,10 +59,6 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
 }
 
 // --- 4. Endian-Aware Data Readers ---
-// FIX: All bytes cast to uint32_t before shifting to prevent signed-integer
-// overflow UB when the high byte has bit 7 set (e.g. ptr[3] >= 0x80).
-// The original code used bare uint8_t shifts which are promoted to signed int,
-// causing ptr[n] << 24 to produce a negative value and corrupt the result.
 static uint32_t read_u32_le(const uint8_t* ptr) {
     return  (uint32_t)ptr[0]        |
            ((uint32_t)ptr[1] << 8)  |
@@ -108,12 +104,6 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         return;
     }
 
-    // FIX: Replace the arbitrary 100,000-entry heuristic with a structurally
-    // sound upper bound derived from the manifest's own size. The old threshold
-    // incorrectly rejected valid LE counts above 100k, fell through to a BE
-    // read that was also invalid, and then logged a nonsense entry count.
-    // Now: attempt LE first; only switch to BE if the LE count is physically
-    // impossible given the manifest size; reject both if neither fits.
     const uint32_t RECORD_SIZE = 48;
     const uint32_t maxPossible = (manifestSize - 4) / RECORD_SIZE;
 
@@ -140,8 +130,6 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Detected %u entries. LittleEndian=%d, ManifestSize=%u",
                         entryCount, isLittleEndian, manifestSize);
 
-    // Bounds check is now always satisfied by construction (entryCount <= maxPossible),
-    // but kept explicitly for clarity and defence-in-depth.
     if (entryCount > (manifestSize - 4) / RECORD_SIZE) {
         char errMsg[128];
         snprintf(errMsg, sizeof(errMsg), "ERROR: OOB! Count:%u requires %llu bytes, but Size:%u",
@@ -165,7 +153,8 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         char fileName[33];
         for(int j = 0; j < 32; j++) {
             uint8_t ch = *(record + 8 + j);
-            if (ch >= 0x20 && ch < 0x7F && ch != '/' && ch != '\\') {
+            // Allow '/' to preserve nested directory structures required by the engine
+            if (ch >= 0x20 && ch < 0x7F && ch != '\\') {
                 fileName[j] = (char)ch;
             } else if (ch == '\0') {
                 for(int k = j; k < 32; k++) fileName[k] = '\0';
@@ -193,28 +182,30 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
         uint32_t alignedEnd   = (romOffset + fileSize + 3) & ~3u;
         uint32_t alignedSize  = alignedEnd - alignedStart;
 
-        uint8_t* workBuffer = (uint8_t*)::malloc(alignedSize);
-        if (workBuffer) {
-            if (safe_pread(romFd, workBuffer, alignedSize, alignedStart) == (ssize_t)alignedSize) {
+        if (alignedSize > 0) {
+            uint8_t* workBuffer = (uint8_t*)::malloc(alignedSize);
+            if (workBuffer) {
+                if (safe_pread(romFd, workBuffer, alignedSize, alignedStart) == (ssize_t)alignedSize) {
 
-                normalize_chunk(workBuffer, alignedSize, format);
-                uint8_t* assetPtr = workBuffer + (romOffset - alignedStart);
-                uint32_t decompressedSize = 0;
+                    normalize_chunk(workBuffer, alignedSize, format);
+                    uint8_t* assetPtr = workBuffer + (romOffset - alignedStart);
+                    uint32_t decompressedSize = 0;
 
-                uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
+                    uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
 
-                uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
-                uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
+                    uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
+                    uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
-                int outFd = safe_open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                if (outFd != -1) {
-                    safe_write(outFd, writePtr, writeSize);
-                    safe_close(outFd);
-                    successCount++;
+                    int outFd = safe_open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                    if (outFd != -1) {
+                        safe_write(outFd, writePtr, writeSize);
+                        safe_close(outFd);
+                        successCount++;
+                    }
+                    if (finalBuffer) ::free(finalBuffer);
                 }
-                if (finalBuffer) ::free(finalBuffer);
+                ::free(workBuffer);
             }
-            ::free(workBuffer);
         }
 
         if (i % 250 == 0 || i == entryCount - 1) {
