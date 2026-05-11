@@ -41,9 +41,7 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
     jstring jMsg = env->NewStringUTF(msg);
     env->CallVoidMethod(callbackObj, progressMid, 0, jMsg);
     
-    // Catch Android 13+ Notification SecurityExceptions to prevent JNI crashes
     if (env->ExceptionCheck()) env->ExceptionClear();
-    
     env->DeleteLocalRef(jMsg);
 }
 
@@ -80,34 +78,31 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "STATUS: Loading ROM to memory...");
     debug_ui(env, callbackObj, progressMid, "STATUS: Loading ROM to RAM...");
 
-    // 1. Load entire ROM into RAM to bypass IPC bottleneck
+    // 1. Safe rewind and load entire ROM into RAM
+    lseek(romFd, 0, SEEK_SET);
     std::vector<uint8_t> romData;
-    uint8_t tempBuf[65536]; // 64KB chunks
+    uint8_t tempBuf[65536];
     ssize_t bRead;
     
-    // Read sequentially from the FD stream
     while ((bRead = read(romFd, tempBuf, sizeof(tempBuf))) > 0) {
         romData.insert(romData.end(), tempBuf, tempBuf + bRead);
     }
 
     if (romData.size() < 4096) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: ROM file is too small or inaccessible.");
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: ROM file read failed.");
         debug_ui(env, callbackObj, progressMid, "ERROR: ROM Read Failed.");
         return;
     }
 
     RomFormat format = detect_format_from_buffer(romData.data());
     if (format == FORMAT_UNKNOWN) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: Unknown ROM Format.");
         debug_ui(env, callbackObj, progressMid, "ERROR: Unknown ROM Format.");
         return;
     }
 
-    // 2. Normalize entire ROM globally (eliminates per-chunk normalization overhead)
     normalize_entire_rom(romData, format);
 
     if (manifestSize < 4) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: Manifest too small.");
         debug_ui(env, callbackObj, progressMid, "ERROR: Manifest too small.");
         return;
     }
@@ -130,7 +125,8 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
 
     uint8_t* recordStart = manifestPtr + 4;
     uint32_t successCount = 0;
-    char lastCreatedDir[512] = {0}; // Directory cache
+    char lastCreatedDir[512] = {0}; 
+    int lastPercentage = -1; // Throttling variable
 
     for (uint32_t i = 0; i < entryCount; i++) {
         if (env->PushLocalFrame(16) < 0) return;
@@ -165,7 +161,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             continue;
         }
 
-        // 3. Directory Caching (Avoids 15,000 redundant mkdir syscalls)
+        // 2. Directory Caching
         char dirOnly[512];
         const char* lastSlash = strrchr(fullPath, '/');
         if (lastSlash) {
@@ -181,9 +177,8 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             }
         }
 
-        // 4. Memory-Mapped Extraction (Zero-copy where possible)
-        // Ensure the read does not exceed our RAM buffer
-        if (romOffset + fileSize <= romData.size()) {
+        // 3. 64-bit Overflow Bounds Checking 
+        if ((uint64_t)romOffset + (uint64_t)fileSize <= (uint64_t)romData.size()) {
             uint8_t* assetPtr = romData.data() + romOffset;
             uint32_t decompressedSize = 0;
 
@@ -201,9 +196,10 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             if (finalBuffer) ::free(finalBuffer);
         }
 
-        // Update UI every 50 assets to maintain responsive feedback
-        if (i % 50 == 0 || i == entryCount - 1) {
-            int percentage = (int)(((i + 1) * 100) / entryCount);
+        // 4. UI Rate Limiter - strictly 1 update per whole percentage change
+        int percentage = (int)(((i + 1) * 100) / entryCount);
+        if (percentage > lastPercentage || i == entryCount - 1) {
+            lastPercentage = percentage;
             jstring jName = env->NewStringUTF(fileName);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
             
