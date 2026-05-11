@@ -26,13 +26,10 @@ import javax.microedition.khronos.opengles.GL10;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG             = "BKA-MainActivity";
+    private static final String TAG              = "BKA-MainActivity";
     private static final int    PICK_ROM_REQUEST = 1001;
 
     // Name of a sentinel file we write when extraction finishes successfully.
-    // Checking for this one file is faster and more reliable than scanning
-    // for individual asset files (the asset directory can have hundreds of
-    // entries with no fixed extension).
     private static final String SENTINEL_FILENAME = "extraction_complete";
 
     private View        menuOverlay;
@@ -41,8 +38,12 @@ public class MainActivity extends AppCompatActivity {
     private TextView    progressText;
     private TextView    currentArtifactText;
 
-    // Kept so we can pause/resume the GL surface correctly
     private GLSurfaceView glSurfaceView;
+
+    // Load native library early to prevent UnsatisfiedLinkError during boot sequence
+    static {
+        System.loadLibrary("bkawrapper");
+    }
 
     // -----------------------------------------------------------------------
     // Broadcast receiver – listens for progress/completion from OtrService
@@ -92,10 +93,10 @@ public class MainActivity extends AppCompatActivity {
             // Neutralize any uninitialized GLSurfaceView in the XML to prevent surfaceCreated crashes
             neutralizeXmlGLSurfaceView((ViewGroup) findViewById(android.R.id.content));
 
-            menuOverlay        = findViewById(R.id.menu_overlay);
-            otrContainer       = findViewById(R.id.otr_ui_container);
-            progressBar        = findViewById(R.id.otr_progress_bar);
-            progressText       = findViewById(R.id.otr_progress_text);
+            menuOverlay         = findViewById(R.id.menu_overlay);
+            otrContainer        = findViewById(R.id.otr_ui_container);
+            progressBar         = findViewById(R.id.otr_progress_bar);
+            progressText        = findViewById(R.id.otr_progress_text);
             currentArtifactText = findViewById(R.id.otr_current_artifact);
 
             new MenuController(this);
@@ -131,41 +132,15 @@ public class MainActivity extends AppCompatActivity {
     // Extraction-complete sentinel
     // -----------------------------------------------------------------------
 
-    /**
-     * Returns true if the sentinel file created at the end of a successful
-     * extraction exists in getFilesDir().
-     */
     private boolean hasExtractionCompleted() {
         File sentinel = new File(getFilesDir(), SENTINEL_FILENAME);
         return sentinel.exists();
-    }
-
-    /**
-     * Creates the sentinel file.  Called by OtrService (via broadcast) after
-     * a successful extraction so subsequent launches skip re-extraction.
-     */
-    public void writeExtractionSentinel() {
-        try {
-            File sentinel = new File(getFilesDir(), SENTINEL_FILENAME);
-            if (!sentinel.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                sentinel.createNewFile();
-                Log.i(TAG, "Sentinel written: " + sentinel.getAbsolutePath());
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Could not write sentinel: " + e.getMessage());
-        }
     }
 
     // -----------------------------------------------------------------------
     // UI safeguards
     // -----------------------------------------------------------------------
 
-    /**
-     * Scans the inflated XML layout for any placeholder GLSurfaceViews and assigns
-     * a non-functional dummy renderer. This prevents the WindowManager from crashing 
-     * on a null GLThread while the app waits for the background extraction to finish.
-     */
     private void neutralizeXmlGLSurfaceView(ViewGroup group) {
         if (group == null) return;
         for (int i = 0; i < group.getChildCount(); i++) {
@@ -181,7 +156,6 @@ public class MainActivity extends AppCompatActivity {
                     @Override
                     public void onDrawFrame(GL10 gl) {}
                 });
-                // Only render when explicitly told to, saving battery during extraction
                 dummy.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
             } else if (child instanceof ViewGroup) {
                 neutralizeXmlGLSurfaceView((ViewGroup) child);
@@ -206,34 +180,47 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == PICK_ROM_REQUEST
                 && resultCode == RESULT_OK
                 && data != null) {
-            startExtraction(data.getData());
+            
+            Uri romUri = data.getData();
+            if (romUri != null) {
+                // Grant persistable permissions to prevent security exception when backgrounding app
+                final int takeFlags = intent.getFlags()
+                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                try {
+                    getContentResolver().takePersistableUriPermission(romUri, takeFlags);
+                } catch (SecurityException e) {
+                    Log.w(TAG, "Could not take persistable permissions, proceeding with temporary", e);
+                }
+                
+                startExtraction(romUri);
+            }
         }
     }
 
     private void startExtraction(Uri romUri) {
-        menuOverlay.setVisibility(View.GONE);
-        otrContainer.setVisibility(View.VISIBLE);
+        if (menuOverlay != null) menuOverlay.setVisibility(View.GONE);
+        if (otrContainer != null) otrContainer.setVisibility(View.VISIBLE);
 
         Intent serviceIntent = new Intent(this, OtrService.class);
         serviceIntent.putExtra("uri",    romUri.toString());
         serviceIntent.putExtra("outDir", getFilesDir().getAbsolutePath());
+        // Can add version parameter here if UI supports it, defaults to "us" in service
         startService(serviceIntent);
     }
 
     // -----------------------------------------------------------------------
-    // UI helpers (run on main thread via broadcast receiver)
+    // UI helpers
     // -----------------------------------------------------------------------
 
     private void updateUI(int percent, String fileName) {
-        if (progressBar        != null) progressBar.setProgress(percent);
-        if (progressText       != null) progressText.setText(percent + "%");
+        if (progressBar         != null) progressBar.setProgress(percent);
+        if (progressText        != null) progressText.setText(percent + "%");
         if (currentArtifactText != null) currentArtifactText.setText(fileName);
     }
 
     private void handleExtractionComplete() {
-        // Write the sentinel so next launch goes straight to the game
-        writeExtractionSentinel();
-
+        // The service now handles writing the sentinel file natively once successful.
+        // This prevents the application from entering a crash loop if it fails midway.
         if (currentArtifactText != null) {
             currentArtifactText.setText("Booting Banjo-Kazooie...");
         }
@@ -264,12 +251,9 @@ public class MainActivity extends AppCompatActivity {
         final String assetDir    = getFilesDir().getAbsolutePath();
         final AssetManager mgr   = getAssets();
 
-        // Build and attach the GL surface (this dynamically replaces the dummy XML view)
         glSurfaceView = new GLSurfaceView(this);
-        glSurfaceView.setEGLContextClientVersion(2);   // GLES 2.0 context
+        glSurfaceView.setEGLContextClientVersion(2);
         glSurfaceView.setRenderer(new GLRenderer(this, assetDir, mgr));
-        // RENDERMODE_CONTINUOUSLY: the renderer's onDrawFrame is called as
-        // fast as the display will allow (vsync-paced by the driver).
         glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
 
         setContentView(glSurfaceView);
