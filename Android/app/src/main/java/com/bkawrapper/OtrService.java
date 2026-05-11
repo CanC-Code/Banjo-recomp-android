@@ -1,3 +1,4 @@
+// File: Android/app/src/main/java/com/bkawrapper/OtrService.java
 package com.bkawrapper;
 
 import android.app.Notification;
@@ -37,7 +38,7 @@ public class OtrService extends Service {
     }
 
     /**
-     * Native method declared in otr_builder.cpp
+     * Native method declared in the JNI bridge
      * @param callback The object containing onProgressUpdate (this service)
      * @param romFd File descriptor for the ROM
      * @param outDir Destination path for extracted .bin files
@@ -58,9 +59,11 @@ public class OtrService extends Service {
         String uriString = intent.getStringExtra("uri");
         String outDir    = intent.getStringExtra("outDir");
         String version   = intent.getStringExtra("version");
-        
-        // Default to US 1.0 if no version is provided
-        if (version == null) version = "us"; 
+
+        // Safely validate version selection to match the binary manifest generation pipeline
+        if (version == null || version.isEmpty()) {
+            version = "us"; 
+        }
         final String finalVersion = version;
 
         startForeground(NOTIFICATION_ID,
@@ -135,12 +138,7 @@ public class OtrService extends Service {
         if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
     }
 
-    /**
-     * C++ uses syscalls (openat) which cannot access compressed APK assets.
-     * We must copy the manifest to the app's private files directory first.
-     */
     private void copyAssetToDisk(String assetName, File outFile) throws IOException {
-        // Only copy if it doesn't exist, to save time on subsequent boots
         if (outFile.exists()) return; 
 
         try (InputStream in = getAssets().open(assetName);
