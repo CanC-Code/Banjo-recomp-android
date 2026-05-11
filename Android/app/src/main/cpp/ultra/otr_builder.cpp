@@ -3,33 +3,18 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <android/log.h>
 #include <stdio.h>
 #include "rare_decompression.h"
 
 #define LOG_TAG "BKA_OTR"
 
-// --- 1. Shadow-Proof Kernel System Calls ---
-static ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset) {
-    return syscall(SYS_pread64, fd, buf, count, offset);
-}
-static int safe_open(const char *pathname, int flags, mode_t mode) {
-    return syscall(SYS_openat, AT_FDCWD, pathname, flags, mode);
-}
-static ssize_t safe_write(int fd, const void *buf, size_t count) {
-    return syscall(SYS_write, fd, buf, count);
-}
-static int safe_close(int fd) {
-    return syscall(SYS_close, fd);
-}
-
-// --- 2. Endianness Window Logic ---
+// --- 1. Endianness Window Logic ---
 enum RomFormat { FORMAT_Z64, FORMAT_N64, FORMAT_V64, FORMAT_UNKNOWN };
 
 static RomFormat detect_format(int romFd) {
     uint8_t magic[4] = {0};
-    safe_pread(romFd, magic, 4, 0);
+    pread(romFd, magic, 4, 0); // Using standard pread to avoid ABI register misalignment
     if (magic[0] == 0x80 && magic[1] == 0x37 && magic[2] == 0x12 && magic[3] == 0x40) return FORMAT_Z64;
     if (magic[0] == 0x40 && magic[1] == 0x12 && magic[2] == 0x37 && magic[3] == 0x80) return FORMAT_N64;
     if (magic[0] == 0x37 && magic[1] == 0x80 && magic[2] == 0x40 && magic[3] == 0x12) return FORMAT_V64;
@@ -50,15 +35,19 @@ static void normalize_chunk(uint8_t* data, size_t size, RomFormat format) {
     }
 }
 
-// --- 3. Visual Debugger Helper ---
+// --- 2. Visual Debugger Helper ---
 void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const char* msg) {
     if (!env || !callbackObj || !progressMid) return;
     jstring jMsg = env->NewStringUTF(msg);
     env->CallVoidMethod(callbackObj, progressMid, 0, jMsg);
+    
+    // Clear any potential exceptions (e.g., Notification permission failures)
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    
     env->DeleteLocalRef(jMsg);
 }
 
-// --- 4. Endian-Aware Data Readers ---
+// --- 3. Endian-Aware Data Readers ---
 static uint32_t read_u32_le(const uint8_t* ptr) {
     return  (uint32_t)ptr[0]        |
            ((uint32_t)ptr[1] << 8)  |
@@ -83,7 +72,7 @@ void ensure_directories(const char* path) {
     }
 }
 
-// --- 5. Core Extraction Engine (Internal) ---
+// --- 4. Core Extraction Engine (Internal) ---
 void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
                                         int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
                                         const char* outDirPath) {
@@ -153,7 +142,6 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         char fileName[33];
         for(int j = 0; j < 32; j++) {
             uint8_t ch = *(record + 8 + j);
-            // Allow '/' to preserve nested directory structures required by the engine
             if (ch >= 0x20 && ch < 0x7F && ch != '\\') {
                 fileName[j] = (char)ch;
             } else if (ch == '\0') {
@@ -185,7 +173,8 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         if (alignedSize > 0) {
             uint8_t* workBuffer = (uint8_t*)::malloc(alignedSize);
             if (workBuffer) {
-                if (safe_pread(romFd, workBuffer, alignedSize, alignedStart) == (ssize_t)alignedSize) {
+                // Using standard libc pread instead of raw syscalls
+                if (pread(romFd, workBuffer, alignedSize, alignedStart) == (ssize_t)alignedSize) {
 
                     normalize_chunk(workBuffer, alignedSize, format);
                     uint8_t* assetPtr = workBuffer + (romOffset - alignedStart);
@@ -196,10 +185,10 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
                     uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
                     uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
-                    int outFd = safe_open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                    int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                     if (outFd != -1) {
-                        safe_write(outFd, writePtr, writeSize);
-                        safe_close(outFd);
+                        write(outFd, writePtr, writeSize);
+                        close(outFd);
                         successCount++;
                     }
                     if (finalBuffer) ::free(finalBuffer);
@@ -212,6 +201,13 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             int percentage = (int)(((i + 1) * 100) / entryCount);
             jstring jName = env->NewStringUTF(fileName);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
+            
+            // THE CRITICAL FIX: Android 13+ Notification SecurityException Interceptor
+            if (env->ExceptionCheck()) {
+                __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Java threw an exception (likely Missing Notification Permission). Suppressing to prevent JNI crash.");
+                env->ExceptionClear(); 
+            }
+            
             env->DeleteLocalRef(jName);
         }
 
@@ -222,18 +218,16 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
 }
 
-// --- 6. The JNI Bridge (Entry Point from Java) ---
+// --- 5. The JNI Bridge (Entry Point from Java) ---
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz, 
                                                       jobject callback, jint romFd, 
                                                       jstring outDir, jstring manifestPath) {
-    
-    // Convert Java Strings to standard C strings
+
     const char* cOutDir = env->GetStringUTFChars(outDir, nullptr);
     const char* cManifestPath = env->GetStringUTFChars(manifestPath, nullptr);
 
-    // Look up the callback method in Java: public void onProgressUpdate(int, String)
     jclass callbackClass = env->GetObjectClass(callback);
     jmethodID progressMid = env->GetMethodID(callbackClass, "onProgressUpdate", "(ILjava/lang/String;)V");
 
@@ -244,8 +238,8 @@ Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz,
         return;
     }
 
-    // Open and load the manifest file from local storage into memory
-    int mfd = safe_open(cManifestPath, O_RDONLY, 0);
+    // Standard libc open
+    int mfd = open(cManifestPath, O_RDONLY);
     if (mfd < 0) {
         debug_ui(env, callback, progressMid, "ERROR: Could not open manifest file on disk.");
         env->ReleaseStringUTFChars(outDir, cOutDir);
@@ -256,16 +250,15 @@ Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz,
     struct stat st;
     fstat(mfd, &st);
     uint32_t mSize = (uint32_t)st.st_size;
-    
+
     if (mSize > 0) {
         uint8_t* mPtr = (uint8_t*)malloc(mSize);
         if (mPtr != nullptr) {
-            // Read the manifest into the buffer
-            safe_pread(mfd, mPtr, mSize, 0);
-            
-            // Execute the core logic
+            // Standard libc pread
+            pread(mfd, mPtr, mSize, 0);
+
             run_native_otr_generation_internal(env, callback, progressMid, romFd, mPtr, mSize, cOutDir);
-            
+
             free(mPtr);
         } else {
             debug_ui(env, callback, progressMid, "ERROR: Failed to allocate memory for manifest.");
@@ -274,9 +267,8 @@ Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz,
         debug_ui(env, callback, progressMid, "ERROR: Manifest file is empty.");
     }
 
-    safe_close(mfd);
-    
-    // Release JNI resources
+    close(mfd);
+
     env->ReleaseStringUTFChars(outDir, cOutDir);
     env->ReleaseStringUTFChars(manifestPath, cManifestPath);
 }
