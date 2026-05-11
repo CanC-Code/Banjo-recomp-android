@@ -83,10 +83,10 @@ void ensure_directories(const char* path) {
     }
 }
 
-extern "C" {
-void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
-                                           int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
-                                           const char* outDirPath) {
+// --- 5. Core Extraction Engine (Internal) ---
+void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
+                                        int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
+                                        const char* outDirPath) {
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "STATUS: Initializing extraction...");
     debug_ui(env, callbackObj, progressMid, "STATUS: Initializing extraction...");
@@ -221,4 +221,62 @@ void JNICALL run_native_otr_generation_with_callback(JNIEnv* env, jobject callba
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u assets.", successCount);
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
 }
+
+// --- 6. The JNI Bridge (Entry Point from Java) ---
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz, 
+                                                      jobject callback, jint romFd, 
+                                                      jstring outDir, jstring manifestPath) {
+    
+    // Convert Java Strings to standard C strings
+    const char* cOutDir = env->GetStringUTFChars(outDir, nullptr);
+    const char* cManifestPath = env->GetStringUTFChars(manifestPath, nullptr);
+
+    // Look up the callback method in Java: public void onProgressUpdate(int, String)
+    jclass callbackClass = env->GetObjectClass(callback);
+    jmethodID progressMid = env->GetMethodID(callbackClass, "onProgressUpdate", "(ILjava/lang/String;)V");
+
+    if (progressMid == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "CRITICAL: Could not find onProgressUpdate method ID");
+        env->ReleaseStringUTFChars(outDir, cOutDir);
+        env->ReleaseStringUTFChars(manifestPath, cManifestPath);
+        return;
+    }
+
+    // Open and load the manifest file from local storage into memory
+    int mfd = safe_open(cManifestPath, O_RDONLY, 0);
+    if (mfd < 0) {
+        debug_ui(env, callback, progressMid, "ERROR: Could not open manifest file on disk.");
+        env->ReleaseStringUTFChars(outDir, cOutDir);
+        env->ReleaseStringUTFChars(manifestPath, cManifestPath);
+        return;
+    }
+
+    struct stat st;
+    fstat(mfd, &st);
+    uint32_t mSize = (uint32_t)st.st_size;
+    
+    if (mSize > 0) {
+        uint8_t* mPtr = (uint8_t*)malloc(mSize);
+        if (mPtr != nullptr) {
+            // Read the manifest into the buffer
+            safe_pread(mfd, mPtr, mSize, 0);
+            
+            // Execute the core logic
+            run_native_otr_generation_internal(env, callback, progressMid, romFd, mPtr, mSize, cOutDir);
+            
+            free(mPtr);
+        } else {
+            debug_ui(env, callback, progressMid, "ERROR: Failed to allocate memory for manifest.");
+        }
+    } else {
+        debug_ui(env, callback, progressMid, "ERROR: Manifest file is empty.");
+    }
+
+    safe_close(mfd);
+    
+    // Release JNI resources
+    env->ReleaseStringUTFChars(outDir, cOutDir);
+    env->ReleaseStringUTFChars(manifestPath, cManifestPath);
 }
