@@ -14,13 +14,6 @@ import javax.microedition.khronos.opengles.GL10;
  * GLRenderer
  *
  * Drives the N64 framebuffer → Android display pipeline.
- *
- * Design:
- * onSurfaceCreated  → tell native side the GL context is alive (allocates
- * the RGBA8 320×240 texture on the GL thread).
- * onSurfaceChanged  → resize viewport.
- * onDrawFrame       → call NativeBridge.updateTexture() which uploads the
- * current screenBuffer and draws it as a fullscreen quad.
  */
 public class GLRenderer implements GLSurfaceView.Renderer {
 
@@ -29,10 +22,14 @@ public class GLRenderer implements GLSurfaceView.Renderer {
     private final Context context;
     private final String assetDir;
     private final AssetManager mgr;
+
+    // CRITICAL FIX: Make this static. C++ game engines typically cannot survive 
+    // a second boot in the same process memory space. This prevents double-booting 
+    // when Android recreates the Activity (e.g., on screen rotation).
+    private static boolean engineBooted = false;
     
-    private int surfaceWidth  = 320;
-    private int surfaceHeight = 240;
-    private boolean engineBooted = false;
+    // Gatekeeper to prevent native rendering before the viewport is established
+    private boolean isSurfaceReady = false;
 
     public GLRenderer(Context context, String assetDir, AssetManager mgr) {
         this.context = context;
@@ -50,13 +47,22 @@ public class GLRenderer implements GLSurfaceView.Renderer {
 
         // Set a black clear colour so we don't get garbage on first frame
         GLES20.glClearColor(0f, 0f, 0f, 1f);
+        
+        // Note: NativeBridge.surfaceReady is deferred to onSurfaceChanged 
+        // to ensure the C++ engine receives the true device resolution.
+    }
 
-        // Tell the native side: allocate the framebuffer texture now that
-        // we have a valid GL context.
-        NativeBridge.surfaceReady(surfaceWidth, surfaceHeight);
+    @Override
+    public void onSurfaceChanged(GL10 gl, int width, int height) {
+        Log.i(TAG, "onSurfaceChanged: " + width + "×" + height);
+        GLES20.glViewport(0, 0, width, height);
 
-        // Run the blocking game loop on a dedicated background thread so the
-        // GL / UI threads remain free, ensuring it only starts after the surface is bound.
+        // Tell the native side the GL context is alive and provide ACTUAL dimensions
+        NativeBridge.surfaceReady(width, height);
+        isSurfaceReady = true;
+
+        // Run the blocking game loop on a dedicated background thread.
+        // Protected by the static flag so it only runs once per app process.
         if (!engineBooted) {
             engineBooted = true;
             new Thread(() -> {
@@ -68,19 +74,12 @@ public class GLRenderer implements GLSurfaceView.Renderer {
     }
 
     @Override
-    public void onSurfaceChanged(GL10 gl, int width, int height) {
-        surfaceWidth  = width;
-        surfaceHeight = height;
-        GLES20.glViewport(0, 0, width, height);
-        Log.i(TAG, "onSurfaceChanged: " + width + "×" + height);
-    }
-
-    @Override
     public void onDrawFrame(GL10 gl) {
-        // updateTexture uploads gBridgeGlobals->screenBuffer → GL texture,
-        // then draws the fullscreen quad.  The native implementation guards
-        // against null pointers and an uninitialised surface, so it is safe
-        // to call unconditionally here.
-        NativeBridge.updateTexture(0);
+        // Guard against calling updateTexture before the native side knows about the surface
+        if (isSurfaceReady) {
+            // Clear the screen buffer before asking native to draw the quad
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            NativeBridge.updateTexture(0);
+        }
     }
 }
