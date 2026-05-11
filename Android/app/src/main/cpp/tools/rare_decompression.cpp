@@ -3,101 +3,95 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
 #include <zlib.h>
 #include <android/log.h>
 
 #define LOG_TAG "BKA_DECOMP"
-#define CHUNK_SIZE 32768 // 32KB chunks for dynamic buffer resizing
+#define CHUNK_SIZE 32768
 
 extern "C" {
 
 uint8_t* decompress_rare_asset(const uint8_t* src,
                                uint32_t src_size,
                                uint32_t* out_size) {
-    // 1. Safety Guard: Basic size check
-    if (!src || src_size < 6) {
-        return nullptr;
-    }
+    // 1. Safety Guard
+    if (!src || src_size < 6) return nullptr;
+    if (src[0] != 0x11 || src[1] != 0x72) return nullptr;
 
-    // 2. Magic Check: Rare compression starts with 0x1172.
-    if (src[0] != 0x11 || src[1] != 0x72) {
-        return nullptr;
-    }
-
-    // 3. Size Header: Big-endian 4-byte decompressed length
-    // We only use this as an initial capacity hint now, not a strict constraint.
-    uint32_t expectedLen =
-        (uint32_t(src[2]) << 24) |
-        (uint32_t(src[3]) << 16) |
-        (uint32_t(src[4]) << 8)  |
-        (uint32_t(src[5]));
-
-    // 4. Zlib Setup: Standard Deflate
+    // 2. Zlib Setup
     z_stream strm;
     std::memset(&strm, 0, sizeof(strm));
 
-    // Compressed payload starts immediately after the 6-byte header
     strm.next_in   = const_cast<Bytef*>(src + 6);
     strm.avail_in  = src_size - 6;
 
-    // Use -15 for raw DEFLATE (matches Python's wbits=-15)
-    if (inflateInit2(&strm, -15) != Z_OK) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "inflateInit2 failed");
+    if (inflateInit2(&strm, -15) != Z_OK) return nullptr;
+
+    // 3. Pure C Memory Allocation (Prevents std::bad_alloc crashes)
+    uint32_t currentCapacity = CHUNK_SIZE;
+    uint8_t* outBuf = static_cast<uint8_t*>(malloc(currentCapacity));
+    if (!outBuf) {
+        inflateEnd(&strm);
         return nullptr;
     }
 
-    // 5. Dynamic Chunked Decompression (Mimics Python's dynamic allocation)
-    std::vector<uint8_t> outData;
-    
-    // Reserve memory safely to prevent OOM on corrupt headers
-    if (expectedLen > 0 && expectedLen < 64u * 1024u * 1024u) {
-        outData.reserve(expectedLen);
-    } else {
-        outData.reserve(CHUNK_SIZE);
-    }
-
-    uint8_t outChunk[CHUNK_SIZE];
+    uint32_t totalOut = 0;
     int ret;
 
-    // Decompress chunk by chunk until the stream naturally ends
+    // 4. Dynamic Chunked Decompression Loop
     do {
-        strm.next_out = outChunk;
+        // Expand buffer safely if we are running out of room
+        if (totalOut + CHUNK_SIZE > currentCapacity) {
+            
+            // Hard Cap: Prevent runaway allocations over 64MB on corrupt assets
+            if (currentCapacity >= 64u * 1024u * 1024u) {
+                __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Decompression exceeded 64MB cap. Aborting.");
+                free(outBuf);
+                inflateEnd(&strm);
+                return nullptr;
+            }
+            
+            currentCapacity *= 2;
+            uint8_t* newBuf = static_cast<uint8_t*>(realloc(outBuf, currentCapacity));
+            
+            // If the Android heap denies the allocation, gracefully fail instead of crashing
+            if (!newBuf) {
+                __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "OOM: Failed to realloc to %u bytes.", currentCapacity);
+                free(outBuf);
+                inflateEnd(&strm);
+                return nullptr;
+            }
+            outBuf = newBuf;
+        }
+
+        strm.next_out = outBuf + totalOut;
         strm.avail_out = CHUNK_SIZE;
-        
-        // Z_NO_FLUSH allows zlib to dynamically adapt to padding
+
         ret = inflate(&strm, Z_NO_FLUSH);
-        
-        if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
-            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Zlib decompression failed: %d", ret);
+
+        // Catch corrupt zlib stream data
+        if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR || ret == Z_NEED_DICT) {
+            free(outBuf);
             inflateEnd(&strm);
             return nullptr;
         }
-        
+
         uint32_t bytesDecompressed = CHUNK_SIZE - strm.avail_out;
-        outData.insert(outData.end(), outChunk, outChunk + bytesDecompressed);
-        
-    } while (strm.avail_out == 0);
+        totalOut += bytesDecompressed;
+
+    // Continue until the stream ends naturally or runs out of valid input (Z_BUF_ERROR)
+    } while (ret != Z_STREAM_END && ret != Z_BUF_ERROR);
 
     inflateEnd(&strm);
 
-    // 6. Finalize and copy back to a standard C-buffer for the JNI bridge
-    if (outData.empty()) {
+    // 5. Validation
+    if (totalOut == 0) {
+        free(outBuf);
         return nullptr;
     }
 
-    uint8_t* finalBuf = static_cast<uint8_t*>(malloc(outData.size()));
-    if (!finalBuf) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Failed to allocate final buffer");
-        return nullptr;
-    }
-    
-    std::memcpy(finalBuf, outData.data(), outData.size());
-    if (out_size) {
-        *out_size = static_cast<uint32_t>(outData.size());
-    }
-
-    return finalBuf;
+    if (out_size) *out_size = totalOut;
+    return outBuf;
 }
 
 } // extern "C"
