@@ -16,34 +16,57 @@
 static JavaVM* g_jvm = nullptr;
 static std::string g_otrPath;
 
-// FIX 1: The manifest buffer must outlive nativeGameBoot's stack frame.
-// The game thread calls ResourceMgr_HandleDma which reads g_assetDir (set from
-// this buffer during ResourceMgr_Init). If this was a local std::vector it would
-// be destroyed when nativeGameBoot returned, leaving the game thread writing into
-// freed heap — the exact SEGV_ACCERR seen at fault addr 0x6ea21ca1c8.
-// Promoting to static ensures the buffer lives for the process lifetime.
+// The manifest buffer must outlive nativeGameBoot's stack frame.
+// Promoting to static ensures the buffer lives for the process lifetime,
+// preventing SEGV_ACCERR when the DMA thread reads it.
 static std::vector<uint8_t> g_manifestBuf;
 
 extern "C" {
     // The exact bootloader entry point defined in bk_boot_1050.c
-    // C-linkage is required because bk_boot_1050.c is compiled as a standard C file.
     void func_80000450(int32_t arg0);
 
     void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
-    
-    // NOTE: run_native_otr_generation_with_callback declaration removed here 
-    // as the JNI bridge is now entirely self-contained within otr_builder.cpp.
 }
 
+// --- 1. Global JVM Capture ---
+// Using JNI_OnLoad guarantees the JVM reference is captured the moment 
+// System.loadLibrary() is called in Java, avoiding race conditions.
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_jvm = vm;
+    LOGI("NativeBridge: JNI_OnLoad executed. JVM Reference captured.");
+    return JNI_VERSION_1_6;
+}
+
+// --- 2. Thread Execution & JVM Attachment ---
 // Background thread loop to prevent UI lockup
 void* game_thread_fn(void* arg) {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+
+    // Attach this pure C++ thread to the Dalvik/ART JVM.
+    // This is strictly required because internal game subsystems (like audio_bridge.cpp) 
+    // will need to make JNI calls. Unattached threads cause instant crashes on JNI invocation.
+    if (g_jvm != nullptr) {
+        jint res = g_jvm->AttachCurrentThread(&env, nullptr);
+        if (res == JNI_OK) {
+            attached = true;
+        } else {
+            LOGE("NativeBridge: Failed to attach game thread to JVM (Error %d). Audio/Input callbacks may crash.", res);
+        }
+    }
+
     LOGI("NativeBridge: Thread started. Launching game engine...");
 
     // Jump into the recompiled Banjo-Kazooie boot sequence.
-    // 0 is passed as the default thread argument, matching native hardware behavior.
     func_80000450(0);
 
     LOGI("NativeBridge: Game engine returned cleanly.");
+
+    // Detach thread to prevent memory leaks in the ART garbage collector
+    if (attached && g_jvm != nullptr) {
+        g_jvm->DetachCurrentThread();
+    }
+
     return nullptr;
 }
 
@@ -51,8 +74,11 @@ extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_nativeInit(JNIEnv* env, jclass clazz, jobject context) {
-    env->GetJavaVM(&g_jvm);
-    LOGI("NativeBridge: VM Reference captured.");
+    // Left for backwards compatibility if called from Java, 
+    // but g_jvm is already safely captured in JNI_OnLoad.
+    if (g_jvm == nullptr) {
+        env->GetJavaVM(&g_jvm);
+    }
 }
 
 JNIEXPORT void JNICALL
@@ -61,8 +87,7 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     g_otrPath = otrPath;
     env->ReleaseStringUTFChars(otrPathStr, otrPath);
 
-    // FIX 2: Dynamically detect which ROM version manifest exists.
-    // Hardcoding "manifest_us.bin" will crash if the user extracted the PAL ROM.
+    // Dynamically detect which ROM version manifest exists.
     std::string mPathUs = g_otrPath + "/manifest_us.bin";
     std::string mPathPal = g_otrPath + "/manifest_pal.bin";
     std::string mPath = "";
@@ -76,7 +101,7 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
         return;
     }
 
-    // FIX 3: Load the manifest into the static g_manifestBuf, not a local vector.
+    // Load the manifest into the static g_manifestBuf
     FILE* f = fopen(mPath.c_str(), "rb");
     if (!f) {
         LOGE("NativeBridge: Failed to open manifest at %s. Aborting boot.", mPath.c_str());
@@ -106,16 +131,9 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     ResourceMgr_Init(g_otrPath.c_str(), g_manifestBuf.data(), (uint32_t)size);
     LOGI("NativeBridge: Resource Manager active with manifest: %s", mPath.c_str());
 
-    // FIX 4: Use pthread_join instead of pthread_detach.
-    //
-    // pthread_detach caused nativeGameBoot to return immediately while the game
-    // thread was still executing. The GL renderer then logged "nativeGameBoot
-    // returned" and began teardown — freeing surfaces and GL state the game
-    // thread was actively using. pthread_join blocks until func_80000450 exits,
-    // so teardown only begins after the game has fully stopped.
-    //
-    // This is safe because nativeGameBoot is called from the GL thread's
-    // dedicated BKA-GameThread (not the UI thread), so blocking here does not ANR.
+    // Use pthread_join to synchronize engine shutdown with the Android lifecycle.
+    // This blocks the Java background thread (BKA-GameThread) safely until the native
+    // execution completes, preventing premature surface/buffer teardown.
     pthread_t gameThread;
     int rc = pthread_create(&gameThread, nullptr, game_thread_fn, nullptr);
     if (rc != 0) {
@@ -124,15 +142,15 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
         return;
     }
 
-    // Block the thread here until the game engine exits cleanly.
+    // Block the GL thread's executor wrapper until the native game engine exits.
     pthread_join(gameThread, nullptr);
     LOGI("NativeBridge: Game thread joined. Boot sequence complete.");
 
-    // Safe to release the manifest buffer now that the game thread has exited.
+    // Safe to release the manifest buffer now that the game thread has fully detached and exited.
     g_manifestBuf.clear();
 }
 
-// Stubs for graphics/input pipeline. These must be filled with your actual 
+// Stubs for graphics/input pipeline. These must be populated with your actual 
 // OpenGL ES rendering logic (e.g., eglSwapBuffers/glTexImage2D bridges) 
 // for the game to display anything other than a black screen.
 JNIEXPORT void JNICALL Java_com_bkawrapper_NativeBridge_surfaceReady(JNIEnv* env, jclass clazz, jint w, jint h) {}
