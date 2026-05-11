@@ -32,18 +32,14 @@ public class OtrService extends Service {
     public static final String ACTION_OTR_PROGRESS = "OTR_PROGRESS";
     public static final String ACTION_OTR_COMPLETE = "OTR_COMPLETE";
     public static final String ACTION_OTR_ERROR    = "OTR_ERROR";
+    
+    // Throttle mechanism to prevent Android OS from killing the app due to notification spam
+    private long lastNotificationTime = 0;
 
     static {
         System.loadLibrary("bkawrapper");
     }
 
-    /**
-     * Native method declared in the JNI bridge
-     * @param callback The object containing onProgressUpdate (this service)
-     * @param romFd File descriptor for the ROM
-     * @param outDir Destination path for extracted .bin files
-     * @param manifestPath Path to the manifest_*.bin on the local filesystem
-     */
     private native void runNativeOtrGeneration(Object callback, int romFd, String outDir, String manifestPath);
 
     @Override
@@ -60,7 +56,6 @@ public class OtrService extends Service {
         String outDir    = intent.getStringExtra("outDir");
         String version   = intent.getStringExtra("version");
 
-        // Safely validate version selection to match the binary manifest generation pipeline
         if (version == null || version.isEmpty()) {
             version = "us"; 
         }
@@ -85,15 +80,12 @@ public class OtrService extends Service {
                 int fd = pfd.detachFd();
                 Log.i(TAG, "ROM fd detached: " + fd);
 
-                // 1. Move manifest from APK Assets to local storage so C++ safe_open can see it
                 String manifestName = "manifest_" + finalVersion + ".bin";
                 File internalManifest = new File(getFilesDir(), manifestName);
                 copyAssetToDisk(manifestName, internalManifest);
 
-                // 2. Call the native extraction engine
                 runNativeOtrGeneration(this, fd, outDir, internalManifest.getAbsolutePath());
 
-                // 3. Cleanup and Signal Completion
                 writeSentinel(outDir);
                 Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
                 LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(ACTION_OTR_COMPLETE));
@@ -112,30 +104,34 @@ public class OtrService extends Service {
         return START_NOT_STICKY;
     }
 
-    /**
-     * Helper to bridge the JNI callback to the existing progress logic
-     */
     public void onProgressUpdate(int percent, String status) {
         updateOtrProgress(percent, status);
     }
 
     public void updateOtrProgress(int percent, String status) {
+        // Always broadcast to the UI immediately (this is lightweight and safe)
         Intent intent = new Intent(ACTION_OTR_PROGRESS);
         intent.putExtra("percent", percent);
         intent.putExtra("status",  status);
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
 
-        Notification notification =
-            new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Extracting Banjo-Kazooie Assets")
-                .setContentText(percent + "% — " + status)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setProgress(100, percent, false)
-                .setOngoing(true)
-                .build();
+        // Throttle the heavy OS Notification to update only once every 500ms
+        long now = System.currentTimeMillis();
+        if (now - lastNotificationTime >= 500 || percent == 100 || percent == 0) {
+            lastNotificationTime = now;
+            
+            Notification notification =
+                new NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setContentTitle("Extracting Banjo-Kazooie Assets")
+                    .setContentText(percent + "% — " + status)
+                    .setSmallIcon(android.R.drawable.stat_sys_download)
+                    .setProgress(100, percent, false)
+                    .setOngoing(true)
+                    .build();
 
-        NotificationManager mgr = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
+            NotificationManager mgr = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
+        }
     }
 
     private void copyAssetToDisk(String assetName, File outFile) throws IOException {
