@@ -32,7 +32,7 @@ public class OtrService extends Service {
     public static final String ACTION_OTR_PROGRESS = "OTR_PROGRESS";
     public static final String ACTION_OTR_COMPLETE = "OTR_COMPLETE";
     public static final String ACTION_OTR_ERROR    = "OTR_ERROR";
-    
+
     // Throttle mechanism to prevent Android OS from killing the app due to notification spam
     private long lastNotificationTime = 0;
 
@@ -69,16 +69,17 @@ public class OtrService extends Service {
                 .build());
 
         new Thread(() -> {
-            try {
-                Uri uri = Uri.parse(uriString);
-                ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
-
+            // Using try-with-resources ensures the ParcelFileDescriptor is closed automatically,
+            // preventing memory and file descriptor leaks.
+            try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(Uri.parse(uriString), "r")) {
+                
                 if (pfd == null) {
                     throw new Exception("Could not open ROM file descriptor.");
                 }
 
-                int fd = pfd.detachFd();
-                Log.i(TAG, "ROM fd detached: " + fd);
+                // Use getFd() instead of detachFd() so Java retains ownership and closes it safely.
+                int fd = pfd.getFd();
+                Log.i(TAG, "ROM fd established: " + fd);
 
                 String manifestName = "manifest_" + finalVersion + ".bin";
                 File internalManifest = new File(getFilesDir(), manifestName);
@@ -119,7 +120,7 @@ public class OtrService extends Service {
         long now = System.currentTimeMillis();
         if (now - lastNotificationTime >= 500 || percent == 100 || percent == 0) {
             lastNotificationTime = now;
-            
+
             Notification notification =
                 new NotificationCompat.Builder(this, CHANNEL_ID)
                     .setContentTitle("Extracting Banjo-Kazooie Assets")
@@ -135,7 +136,11 @@ public class OtrService extends Service {
     }
 
     private void copyAssetToDisk(String assetName, File outFile) throws IOException {
-        if (outFile.exists()) return; 
+        // Force delete the old manifest if it exists to ensure the engine always uses 
+        // the correct data from the newly installed APK update.
+        if (outFile.exists()) {
+            outFile.delete();
+        }
 
         try (InputStream in = getAssets().open(assetName);
              OutputStream out = new FileOutputStream(outFile)) {
