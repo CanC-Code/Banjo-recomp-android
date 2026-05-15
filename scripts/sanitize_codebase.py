@@ -40,6 +40,12 @@ Changes vs prior version
 11. UPGRADE: Forward-compatible memory routing regex now correctly maps 
     custom structs, typedefs, and macro pointer arithmetic instead of 
     just standard scalar primitives.
+
+12. FIX: Scope-aware compilation filter blocks pointer translation inside 
+    global static initializers to prevent 'initializer element is not a constant' errors.
+
+13. FIX: Relocated bka_safe_base.h include placement to bind post-type resolution,
+    preventing host standard header pollution and type collisions.
 """
 
 import os
@@ -91,7 +97,7 @@ TOKEN_REPLACEMENTS = {
     r"\brealloc\b":  "n64_realloc",
     r"\bcalloc\b":   "n64_calloc",
     r"\bsprintf\b":  "n64_sprintf",
-    r"\bprintf\b":   "n64_printf",
+    r"\bprintf\b",   "n64_printf",
     r"\bsin\b":      "n64_sin",
     r"\bcos\b":      "n64_cos",
     r"\bvu8\b":      "volatile u8",
@@ -713,10 +719,38 @@ def apply_android_memory_routing(content: str, filename: str) -> str:
     if filename == 'bka_safe_base.h':
         return content
 
-    # Patches ALL pointer casts targeting hex constants or hex expressions safely
-    patched = _PTR_HEX_RE.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
+    lines = content.split('\n')
+    patched_lines = []
+    in_global_array = False
 
-    # Patch hardware-register macros
+    for line in lines:
+        # Preprocessor blocks do not represent standard variable execution paths
+        if line.strip().startswith('#define'):
+            patched_lines.append(line)
+            continue
+
+        # Scope Detection: Block modifications inside global array initialization maps
+        if '=' in line and '{' in line and not any(k in line for k in ['if', 'for', 'while']):
+            in_global_array = True
+        
+        if in_global_array:
+            patched_lines.append(line)
+            if '}' in line and ';' in line:
+                in_global_array = False
+            continue
+
+        # Prevent alterations on trailing structural comma declarations inside lists
+        if line.strip().endswith(','):
+            patched_lines.append(line)
+            continue
+
+        # Apply the dynamic pointer translation safely inside execution logic contexts
+        patched_line = _PTR_HEX_RE.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', line)
+        patched_lines.append(patched_line)
+
+    patched = '\n'.join(patched_lines)
+
+    # Patch hardware-register macros globally
     patched = _HW_REG_RE.sub(
         '#define HW_REG(reg, type) (*((volatile type *)BKA_TRANSLATE_ADDR(reg)))',
         patched,
@@ -750,9 +784,14 @@ def apply_android_memory_routing(content: str, filename: str) -> str:
         patched = re.sub(r'#define\s+K0_TO_PHYS\s*\(\s*x\s*\).*',
                          '#define K0_TO_PHYS(x) (BKA_Reverse_Addr(BKA_TRANSLATE_ADDR(x)))', patched)
 
-    # Only add the #include if we actually inserted BKA_TRANSLATE_ADDR calls
+    # Deferred Include System: Bind after target type headers are fully resolved
     if 'BKA_TRANSLATE_ADDR' in patched and not _BKA_INCLUDE_RE.search(patched):
-        patched = _BKA_INCLUDE_LINE + '\n' + patched
+        if 'n64_types.h' in patched:
+            patched = re.sub(r'(#\s*include\s*[<"]n64_types\.h[">])', r'\1\n#include "bka_safe_base.h"', patched, count=1)
+        elif 'ultra64.h' in patched:
+            patched = re.sub(r'(#\s*include\s*[<"](?:PR/|2\.0L/)?ultra64\.h[">])', r'\1\n#include "bka_safe_base.h"', patched, count=1)
+        else:
+            patched = _BKA_INCLUDE_LINE + '\n' + patched
 
     return patched
 
