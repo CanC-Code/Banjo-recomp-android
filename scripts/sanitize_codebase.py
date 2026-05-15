@@ -36,6 +36,10 @@ Changes vs prior version
     never treated as wrappers.
 
 10. All file I/O exceptions log the offending path + reason.
+
+11. UPGRADE: Forward-compatible memory routing regex now correctly maps 
+    custom structs, typedefs, and macro pointer arithmetic instead of 
+    just standard scalar primitives.
 """
 
 import os
@@ -682,21 +686,19 @@ def fix_linkage_conflicts(content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pass: Android memory routing
+# Pass: Android memory routing (Upgraded Forward Compatible Engine)
 # ---------------------------------------------------------------------------
 
 _BKA_INCLUDE_LINE = '#include "bka_safe_base.h"'
 _BKA_INCLUDE_RE   = re.compile(r'#\s*include\s*[<"]bka_safe_base\.h[">]')
 
-_N64_PRIM_CAST = (
-    r'(?:volatile\s+)?'
-    r'(?:u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|int|char|short|long|float|double|void)'
-    r'\s*\*+'
-)
+# Matches any valid C identifier type name, including struct/union tags and asterisks
+_DYNAMIC_CAST_PATTERN = r'(?:volatile\s+)?(?:struct\s+|union\s+)?(?:[a-zA-Z_]\w*)\s*\*+'
+
 _PTR_HEX_RE = re.compile(
-    r'\(\s*(' + _N64_PRIM_CAST + r')\s*\)'
-    r'\s*(?!BKA_TRANSLATE_ADDR\()'
-    r'(0x[0-9a-fA-F]+|\(\s*0x[0-9a-fA-F]+[^)]*\))'
+    r'\(\s*(' + _DYNAMIC_CAST_PATTERN + r')\s*\)'   # Captures any pointer cast expression
+    r'\s*(?!BKA_TRANSLATE_ADDR\()'                 # Idempotency guard
+    r'(\s*0x[0-9a-fA-F]+\b|\s*\([^\)]*0x[0-9a-fA-F]+[^\)]*\))' # Captures raw hex or hex expressions
 )
 
 _HW_REG_RE  = re.compile(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*')
@@ -711,7 +713,7 @@ def apply_android_memory_routing(content: str, filename: str) -> str:
     if filename == 'bka_safe_base.h':
         return content
 
-    # Patch pointer-cast hex literals
+    # Patches ALL pointer casts targeting hex constants or hex expressions safely
     patched = _PTR_HEX_RE.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', content)
 
     # Patch hardware-register macros
