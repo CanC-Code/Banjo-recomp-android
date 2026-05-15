@@ -48,6 +48,10 @@ Changes vs prior version
     preventing host standard header pollution and type collisions.
     
 14. FIX: Corrected syntax error (comma to colon) in TOKEN_REPLACEMENTS dictionary.
+
+15. FIX: Upgraded memory routing regex to properly parse balanced nested parentheses 
+    during pointer math casts (e.g. `(type*)(offset + (cast)var)`), preventing C compiler 
+    syntax errors like 'expected expression'.
 """
 
 import os
@@ -703,15 +707,33 @@ _BKA_INCLUDE_RE   = re.compile(r'#\s*include\s*[<"]bka_safe_base\.h[">]')
 # Matches any valid C identifier type name, including struct/union tags and asterisks
 _DYNAMIC_CAST_PATTERN = r'(?:volatile\s+)?(?:struct\s+|union\s+)?(?:[a-zA-Z_]\w*)\s*\*+'
 
+# Balanced parenthesis matching system capable of capturing up to 3 nested layers
+_L0 = r'[^)(]+'
+_L1 = r'\([^)(]*\)'
+_L2 = r'\((?:[^)(]+|\([^)(]*\))*\)'
+_L3 = r'\((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*\)'
+
 _PTR_HEX_RE = re.compile(
     r'\(\s*(' + _DYNAMIC_CAST_PATTERN + r')\s*\)'   # Captures any pointer cast expression
     r'\s*(?!BKA_TRANSLATE_ADDR\()'                 # Idempotency guard
-    r'(\s*0x[0-9a-fA-F]+\b|\s*\([^\)]*0x[0-9a-fA-F]+[^\)]*\))' # Captures raw hex or hex expressions
+    r'(\s*0x[0-9a-fA-F]+\b|\s*' + _L3 + r')'       # Captures raw hex or balanced parenthesized expressions
 )
 
 _HW_REG_RE  = re.compile(r'#define\s+HW_REG\s*\(\s*reg\s*,\s*type\s*\).*')
 _IO_READ_RE = re.compile(r'#define\s+IO_READ\s*\(\s*addr\s*\).*')
 _IO_WRITE_RE = re.compile(r'#define\s+IO_WRITE\s*\(\s*addr\s*,\s*data\s*\).*')
+
+
+def _ptr_cast_repl(match):
+    """
+    Evaluates the matched balanced parenthesized string, checking if it includes a hex literal
+    offset, ensuring only valid absolute addresses or pointers arithmetic casts are intercepted.
+    """
+    type_cast = match.group(1)
+    rhs = match.group(2)
+    if re.search(r'0x[0-9a-fA-F]+', rhs, re.IGNORECASE):
+        return f"({type_cast})BKA_TRANSLATE_ADDR({rhs})"
+    return match.group(0)
 
 
 def apply_android_memory_routing(content: str, filename: str) -> str:
@@ -747,7 +769,7 @@ def apply_android_memory_routing(content: str, filename: str) -> str:
             continue
 
         # Apply the dynamic pointer translation safely inside execution logic contexts
-        patched_line = _PTR_HEX_RE.sub(r'(\1)BKA_TRANSLATE_ADDR(\2)', line)
+        patched_line = _PTR_HEX_RE.sub(_ptr_cast_repl, line)
         patched_lines.append(patched_line)
 
     patched = '\n'.join(patched_lines)
