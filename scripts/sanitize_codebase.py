@@ -46,6 +46,8 @@ Changes vs prior version
 
 13. FIX: Relocated bka_safe_base.h include placement to bind post-type resolution,
     preventing host standard header pollution and type collisions.
+    
+14. FIX: Corrected syntax error (comma to colon) in TOKEN_REPLACEMENTS dictionary.
 """
 
 import os
@@ -97,7 +99,7 @@ TOKEN_REPLACEMENTS = {
     r"\brealloc\b":  "n64_realloc",
     r"\bcalloc\b":   "n64_calloc",
     r"\bsprintf\b":  "n64_sprintf",
-    r"\bprintf\b",   "n64_printf",
+    r"\bprintf\b":   "n64_printf",
     r"\bsin\b":      "n64_sin",
     r"\bcos\b":      "n64_cos",
     r"\bvu8\b":      "volatile u8",
