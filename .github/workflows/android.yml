@@ -40,15 +40,9 @@ jobs:
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
+          # The Python script inherently handles the routing to Android/app/src/main/assets/
+          # and generates region-specific manifests (e.g., manifest_us.bin, manifest_pal.bin)
           python3 scripts/generate_manifest.py
-          
-          # Explicitly package the generated manifest into the Android project
-          # to ensure it is bundled into the final APK as a self-building asset.
-          mkdir -p Android/app/src/main/assets/
-          
-          # Move the binary manifest output to the assets folder. 
-          # (Adjust 'manifest.bin' if your python script uses a different extension)
-          mv manifest.bin Android/app/src/main/assets/ || cp *.bin Android/app/src/main/assets/
 
       - name: 🐘 Build Verification APK
         run: |
