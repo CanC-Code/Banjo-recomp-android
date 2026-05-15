@@ -147,7 +147,8 @@ public class MainActivity extends AppCompatActivity {
             View child = group.getChildAt(i);
             if (child instanceof GLSurfaceView) {
                 GLSurfaceView dummy = (GLSurfaceView) child;
-                dummy.setEGLContextClientVersion(2);
+                // Upgraded to 3 to match engine expectations and avoid mixed-context states
+                dummy.setEGLContextClientVersion(3);
                 dummy.setRenderer(new GLSurfaceView.Renderer() {
                     @Override
                     public void onSurfaceCreated(GL10 gl, EGLConfig config) {}
@@ -180,11 +181,10 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == PICK_ROM_REQUEST
                 && resultCode == RESULT_OK
                 && data != null) {
-            
+
             Uri romUri = data.getData();
             if (romUri != null) {
                 // Grant persistable permissions to prevent security exception when backgrounding app
-                // FIX: Use 'data' instead of 'intent' to access the returned intent's flags
                 final int takeFlags = data.getFlags()
                     & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                 try {
@@ -192,7 +192,7 @@ public class MainActivity extends AppCompatActivity {
                 } catch (SecurityException e) {
                     Log.w(TAG, "Could not take persistable permissions, proceeding with temporary", e);
                 }
-                
+
                 startExtraction(romUri);
             }
         }
@@ -253,7 +253,16 @@ public class MainActivity extends AppCompatActivity {
         final AssetManager mgr   = getAssets();
 
         glSurfaceView = new GLSurfaceView(this);
-        glSurfaceView.setEGLContextClientVersion(2);
+        
+        // 1. Upgrade to OpenGL ES 3.0 context for modern shader support
+        glSurfaceView.setEGLContextClientVersion(3);
+        
+        // 2. Explicitly define Red, Green, Blue, Alpha (8 bits each), Depth (24 bits), and Stencil (8 bits)
+        glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 24, 8);
+        
+        // 3. Prevent the mobile OS from destroying the EGL context when backgrounded
+        glSurfaceView.setPreserveEGLContextOnPause(true);
+        
         glSurfaceView.setRenderer(new GLRenderer(this, assetDir, mgr));
         glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
 
