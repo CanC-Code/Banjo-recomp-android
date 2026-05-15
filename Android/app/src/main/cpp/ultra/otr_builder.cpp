@@ -40,7 +40,7 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
     if (!env || !callbackObj || !progressMid) return;
     jstring jMsg = env->NewStringUTF(msg);
     env->CallVoidMethod(callbackObj, progressMid, 0, jMsg);
-    
+
     if (env->ExceptionCheck()) env->ExceptionClear();
     env->DeleteLocalRef(jMsg);
 }
@@ -83,7 +83,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     std::vector<uint8_t> romData;
     uint8_t tempBuf[65536];
     ssize_t bRead;
-    
+
     while ((bRead = read(romFd, tempBuf, sizeof(tempBuf))) > 0) {
         romData.insert(romData.end(), tempBuf, tempBuf + bRead);
     }
@@ -107,7 +107,10 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         return;
     }
 
-    const uint32_t RECORD_SIZE = 48;
+    // FIXED: Record size mathematically matched to struct footprint (4 + 4 + 32 = 40)
+    // Prevents offset shifting and out-of-bounds extraction mapping.
+    const uint32_t RECORD_SIZE = 40; 
+    
     const uint32_t maxPossible = (manifestSize - 4) / RECORD_SIZE;
     uint32_t entryCount = read_u32_le(manifestPtr);
     bool isLittleEndian = true;
@@ -169,7 +172,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             if (dirLen < sizeof(dirOnly)) {
                 strncpy(dirOnly, fullPath, dirLen);
                 dirOnly[dirLen] = '\0';
-                
+
                 if (strcmp(dirOnly, lastCreatedDir) != 0) {
                     ensure_directories(fullPath);
                     strncpy(lastCreatedDir, dirOnly, sizeof(lastCreatedDir));
@@ -202,7 +205,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             lastPercentage = percentage;
             jstring jName = env->NewStringUTF(fileName);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
-            
+
             if (env->ExceptionCheck()) env->ExceptionClear(); 
             env->DeleteLocalRef(jName);
         }
