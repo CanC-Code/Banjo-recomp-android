@@ -37,17 +37,23 @@ jobs:
       - name: 🧹 Pre-Patching (Sanitizer)
         run: python3 scripts/sanitize_codebase.py .
 
-      # --- NEW STEP ADDED HERE ---
       - name: 🗺️ Generate Asset Manifests
         run: |
           pip3 install pyyaml
           python3 scripts/generate_manifest.py
-      # ---------------------------
+          
+          # Explicitly package the generated manifest into the Android project
+          # to ensure it is bundled into the final APK as a self-building asset.
+          mkdir -p Android/app/src/main/assets/
+          
+          # Move the binary manifest output to the assets folder. 
+          # (Adjust 'manifest.bin' if your python script uses a different extension)
+          mv manifest.bin Android/app/src/main/assets/ || cp *.bin Android/app/src/main/assets/
 
       - name: 🐘 Build Verification APK
         run: |
           cd Android
-          # Passing EXCLUDE_GAME_SRC to skip the massive /src folder
+          # Passing EXCLUDE_GAME_SRC=OFF to INCLUDE the game source for functional on-device testing
           gradle assembleDebug \
             -Pandroid.externalNativeBuild.cmake.arguments="-DEXCLUDE_GAME_SRC=OFF" \
             --stacktrace
