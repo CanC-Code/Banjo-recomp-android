@@ -78,7 +78,6 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "STATUS: Loading ROM to memory...");
     debug_ui(env, callbackObj, progressMid, "STATUS: Loading ROM to RAM...");
 
-    // 1. Safe rewind and load entire ROM into RAM
     lseek(romFd, 0, SEEK_SET);
     std::vector<uint8_t> romData;
     uint8_t tempBuf[65536];
@@ -107,10 +106,10 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         return;
     }
 
-    // FIXED: Record size mathematically matched to struct footprint (4 + 4 + 32 = 40)
-    // Prevents offset shifting and out-of-bounds extraction mapping.
-    const uint32_t RECORD_SIZE = 40; 
-    
+    // FIXED: Corrected alignment to 48 bytes to safely absorb 'char type[8]' metadata block.
+    // Prevents severe out-of-bounds shifting across structural layers.
+    const uint32_t RECORD_SIZE = 48; 
+
     const uint32_t maxPossible = (manifestSize - 4) / RECORD_SIZE;
     uint32_t entryCount = read_u32_le(manifestPtr);
     bool isLittleEndian = true;
@@ -126,13 +125,18 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         }
     }
 
+    // Open a dynamic index registry to completely untether the Resource Manager from static files
+    char idxPath[512];
+    snprintf(idxPath, sizeof(idxPath), "%s/assets.idx", outDirPath);
+    FILE* idxFile = fopen(idxPath, "wb");
+
     uint8_t* recordStart = manifestPtr + 4;
     uint32_t successCount = 0;
     char lastCreatedDir[512] = {0}; 
-    int lastPercentage = -1; // Throttling variable
+    int lastPercentage = -1; 
 
     for (uint32_t i = 0; i < entryCount; i++) {
-        if (env->PushLocalFrame(16) < 0) return;
+        if (env->PushLocalFrame(16) < 0) break;
 
         uint8_t* record = recordStart + (i * RECORD_SIZE);
         uint32_t romOffset = isLittleEndian ? read_u32_le(record + 0) : read_u32_be(record + 0);
@@ -164,7 +168,6 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             continue;
         }
 
-        // 2. Directory Caching
         char dirOnly[512];
         const char* lastSlash = strrchr(fullPath, '/');
         if (lastSlash) {
@@ -180,7 +183,6 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             }
         }
 
-        // 3. 64-bit Overflow Bounds Checking 
         if ((uint64_t)romOffset + (uint64_t)fileSize <= (uint64_t)romData.size()) {
             uint8_t* assetPtr = romData.data() + romOffset;
             uint32_t decompressedSize = 0;
@@ -195,11 +197,18 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
                 write(outFd, writePtr, writeSize);
                 close(outFd);
                 successCount++;
+
+                // Seamlessly build the map file for the Resource Manager runtime mapping
+                if (idxFile) {
+                    fwrite(&romOffset, 4, 1, idxFile);
+                    uint8_t nameLen = (uint8_t)strlen(fileName);
+                    fwrite(&nameLen, 1, 1, idxFile);
+                    fwrite(fileName, 1, nameLen, idxFile);
+                }
             }
             if (finalBuffer) ::free(finalBuffer);
         }
 
-        // 4. UI Rate Limiter - strictly 1 update per whole percentage change
         int percentage = (int)(((i + 1) * 100) / entryCount);
         if (percentage > lastPercentage || i == entryCount - 1) {
             lastPercentage = percentage;
@@ -212,6 +221,8 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
 
         env->PopLocalFrame(NULL);
     }
+
+    if (idxFile) fclose(idxFile);
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u assets.", successCount);
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
