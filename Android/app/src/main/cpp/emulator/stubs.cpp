@@ -285,18 +285,16 @@ static void* HLE_PiManagerWorker(void* arg) {
     
     while (true) {
         OSMesg msg = nullptr;
-        // Block until a processing task is queued. osRecvMesg naturally handles GIL cycling.
         s32 ret = osRecvMesg(s_hlePiCmdQueue, &msg, OS_MESG_BLOCK);
         if (ret != 0 || msg == nullptr) continue;
 
         OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
 
-        // Execute raw memory transaction securely
-        osPiRawStartDma(ioMsg->hdr.direction, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->hdr.size);
+        // Map standard libultra structure elements safely
+        osPiRawStartDma(ioMsg->hdr.type, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->size);
 
-        // If a return sync queue is attached, post completion to resume the calling thread
         if (ioMsg->hdr.retQueue != nullptr) {
-            osSendMesg(ioMsg->hdr.retQueue, ioMsg->hdr.retMsg, OS_MESG_NOBLOCK);
+            osSendMesg(ioMsg->hdr.retQueue, ioMsg->retMsg, OS_MESG_NOBLOCK);
         }
     }
     
@@ -307,8 +305,7 @@ static void* HLE_PiManagerWorker(void* arg) {
 void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
     s_hlePiCmdQueue = cmdQ;
     
-    // Spawn the asynchronous HLE worker thread to handle game requests
-    pthread_create(&s_hlePiMgrThread, nullptr, HLE_TriggerN64Event, nullptr); // Wait, fix parameter mapping
+    // Spawn background asset router thread cleanly
     pthread_create(&s_hlePiMgrThread, nullptr, HLE_PiManagerWorker, nullptr);
     pthread_detach(s_hlePiMgrThread);
     LOGI("BKA-HLE: osCreatePiManager successfully generated background processing engine.");
@@ -345,7 +342,6 @@ s32 osAiSetFrequency(u32 frequency) { return 0; }
 
 /* ============================================================
    6. SECURE ENGINE IGNITION ENTRY POINT
-   Mandates the single-core GIL constraint from microsecond zero.
    ============================================================ */
 
 extern void func_80000450(int32_t arg0); 
