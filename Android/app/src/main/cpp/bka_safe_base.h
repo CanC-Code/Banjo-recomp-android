@@ -93,10 +93,12 @@ static inline uintptr_t BKA_Validate_And_Translate(
                                                    return pif + (mask32 - 0x1FC00000u);
     if (mask32 >= 0xBFC00000u && mask32 < 0xBFC01000u)
                                                    return pif + (mask32 - 0xBFC00000u);
+                                                   
     /* Cartridge ROM – Physical (0x10000000) and K1 Uncached (0xB0000000) */
-    if (mask32 >= 0x10000000u && mask32 < 0x10010000u)
+    /* 64MB Boundary Limits: 0x14000000u & 0xB4000000u */
+    if (mask32 >= 0x10000000u && mask32 < 0x14000000u)
                                                    return rom + (mask32 - 0x10000000u);
-    if (mask32 >= 0xB0000000u && mask32 < 0xB0010000u)
+    if (mask32 >= 0xB0000000u && mask32 < 0xB4000000u)
                                                    return rom + (mask32 - 0xB0000000u);
 
     __android_log_print(ANDROID_LOG_FATAL, "BKA_MEM_FAULT",
@@ -121,7 +123,9 @@ static inline uintptr_t BKA_Reverse_Addr(uintptr_t addr)
     
     if (addr >= ram && addr < ram + BKA_RDRAM_ALLOC_SIZE) return addr - ram;
     if (addr >= reg && addr < reg + 0x01000000u) return (addr - reg) + 0x04000000u;
-    if (addr >= rom && addr < rom + 0x00010000u) return (addr - rom) + 0x10000000u;
+    
+    /* 64MB ROM reverse lookup boundary */
+    if (addr >= rom && addr < rom + 0x04000000u) return (addr - rom) + 0x10000000u;
     
     return addr;
 }
