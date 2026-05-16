@@ -278,8 +278,7 @@ s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramA
 }
 
 /* ============================================================
-   5. PHASE 8: SAFE AUDIO/VIDEO ENDPOINTS (DROP LOGIC)
-   Prevents queue stagnation by faking instant hardware passes.
+   5. SAFE AUDIO/VIDEO ENDPOINTS (DROP LOGIC)
    ============================================================ */
 
 void osSpTaskLoad(OSTask *tp) {
@@ -293,29 +292,30 @@ void osSpTaskStartGo(OSTask *tp) {
     // M_GFXTASK = 1 (Graphics Display List Processing)
     // M_AUDTASK = 2 (Audio Command Buffer Processing)
     if (tp->t.type == M_GFXTASK) {
-        // Echo-signal native scheduler components that rendering completed safely
-        HLE_TriggerN64Event(1); // OS_EVENT_SP (Signal Processor Clean)
-        HLE_TriggerN64Event(3); // OS_EVENT_DP (Display Processor Sync Clean)
+        HLE_TriggerN64Event(1); // OS_EVENT_SP
+        HLE_TriggerN64Event(3); // OS_EVENT_DP
     } 
     else if (tp->t.type == M_AUDTASK) {
-        HLE_TriggerN64Event(1); // OS_EVENT_SP (Audio Synthesis Pipeline Clean)
+        HLE_TriggerN64Event(1); // OS_EVENT_SP
     }
 }
 
 void osSpTaskYield(void) {}
-void* osSpTaskYielded(OSTask *tp) { return nullptr; }
+
+// Return type matches OSYieldResult to prevent redefinition errors
+OSYieldResult osSpTaskYielded(OSTask *tp) { 
+    return (OSYieldResult)0; 
+}
 
 s32 osAiSetNextBuffer(void *bufPtr, u32 size) {
     if (size == 0 || bufPtr == nullptr) return 0;
     
-    // Drop the audio bytes into the void for now, but immediately trigger 
-    // OS_EVENT_AI (9) so the libultra Audio Thread continues streaming uninterrupted.
-    HLE_TriggerN64Event(9); 
+    HLE_TriggerN64Event(9); // OS_EVENT_AI
     return 0;
 }
 
 u32 osAiGetLength(void) {
-    return 0; // Reports buffer as consumed, allowing immediate feed loops
+    return 0; 
 }
 
 s32 osAiSetFrequency(u32 frequency) {
