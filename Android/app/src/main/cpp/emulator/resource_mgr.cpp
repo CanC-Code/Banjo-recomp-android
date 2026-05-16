@@ -7,6 +7,9 @@
 #include <android/log.h>
 #include <string>
 
+// Correctly include the macro and inline functions for memory translation
+#include "bka_safe_base.h"
+
 #define LOG_TAG "ResourceMgr"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
@@ -15,9 +18,6 @@
 static std::string g_assetDir;
 
 extern "C" {
-
-// Access the host physical mapper from bka_safe_base.h
-extern uintptr_t BKA_TRANSLATE_ADDR(uintptr_t addr);
 
 /**
  * Initializes the Resource Manager in Absolute Self-Building Mode.
