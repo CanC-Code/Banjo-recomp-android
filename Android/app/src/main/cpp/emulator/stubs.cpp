@@ -8,6 +8,8 @@
 #include <sched.h>
 #include <unordered_map>
 #include <mutex>
+#include <deque>
+#include <condition_variable>
 
 #include "n64_types.h"
 
@@ -20,9 +22,21 @@ struct NativeThread {
     OSPri pri;
 };
 
-// Registry to map raw N64 OSThread pointers to native Android threads
+// High-Level Emulation message queue structures
+struct NativeQueue {
+    std::deque<OSMesg> buffer;
+    int capacity;
+    std::mutex mtx;
+    std::condition_variable cv_recv;
+    std::condition_variable cv_send;
+};
+
+// Registries to map raw N64 OS pointers to native Android POSIX/C++ structures
 static std::unordered_map<OSThread*, NativeThread*> s_threadRegistry;
 static std::mutex s_threadMutex;
+
+static std::unordered_map<OSMesgQueue*, NativeQueue*> s_queueRegistry;
+static std::mutex s_queueMutex;
 
 extern "C" {
 // Recompiled OS headers
@@ -139,14 +153,25 @@ void __osDequeueThread(OSThread **queue, OSThread *t) {
 
 /* ============================================================
    3. HLE MESSAGE QUEUE (Anti-Deadlock)
-   These replace the blocking N64 OS calls.
+   Fully synchronized C++ condition variables to manage N64 IPC.
    ============================================================ */
 
 void osCreateMesgQueue(OSMesgQueue *mq, OSMesg *msgBuf, s32 count) {
+    // Keep the N64 struct updated for internal engine checks
     mq->validCount = 0;
     mq->first = 0;
     mq->msgCount = count;
     mq->msg = msgBuf;
+
+    std::lock_guard<std::mutex> lock(s_queueMutex);
+    if (s_queueRegistry.find(mq) != s_queueRegistry.end()) {
+        delete s_queueRegistry[mq];
+    }
+    
+    NativeQueue* nq = new NativeQueue();
+    nq->capacity = count;
+    s_queueRegistry[mq] = nq;
+    LOGI("BKA-HLE: osCreateMesgQueue registered queue with capacity %d", count);
 }
 
 void osSetEventMesg(OSEvent e, OSMesgQueue *mq, OSMesg msg) {
@@ -154,21 +179,77 @@ void osSetEventMesg(OSEvent e, OSMesgQueue *mq, OSMesg msg) {
     LOGI("BKA-HLE: osSetEventMesg bound event %d", (int)e);
 }
 
-s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
-    // STUB Phase: Returning 0 indicates a message was "received". 
-    // This prevents the engine from hanging on osRecvMesg(..., OS_MESG_BLOCK).
-    if (msg != nullptr) {
-        *msg = (OSMesg)0xDEADC0DE; 
-    }
-    return 0; 
-}
-
 s32 osSendMesg(OSMesgQueue *mq, OSMesg msg, s32 flag) {
-    return 0; 
+    NativeQueue* nq = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_queueMutex);
+        auto it = s_queueRegistry.find(mq);
+        if (it == s_queueRegistry.end()) return -1;
+        nq = it->second;
+    }
+
+    std::unique_lock<std::mutex> lock(nq->mtx);
+    if (flag == OS_MESG_BLOCK) {
+        nq->cv_send.wait(lock, [nq]() { return nq->buffer.size() < nq->capacity; });
+    } else {
+        if (nq->buffer.size() >= nq->capacity) return -1;
+    }
+
+    nq->buffer.push_back(msg);
+    mq->validCount = nq->buffer.size(); // Keep struct semi-accurate for raw reads
+    nq->cv_recv.notify_one();
+    
+    return 0;
 }
 
 s32 osJamMesg(OSMesgQueue *mq, OSMesg msg, s32 flag) {
-    return 0; 
+    NativeQueue* nq = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_queueMutex);
+        auto it = s_queueRegistry.find(mq);
+        if (it == s_queueRegistry.end()) return -1;
+        nq = it->second;
+    }
+
+    std::unique_lock<std::mutex> lock(nq->mtx);
+    if (flag == OS_MESG_BLOCK) {
+        nq->cv_send.wait(lock, [nq]() { return nq->buffer.size() < nq->capacity; });
+    } else {
+        if (nq->buffer.size() >= nq->capacity) return -1;
+    }
+
+    // Jamming pushes the message to the absolute front of the line
+    nq->buffer.push_front(msg);
+    mq->validCount = nq->buffer.size();
+    nq->cv_recv.notify_one();
+    
+    return 0;
+}
+
+s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
+    NativeQueue* nq = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_queueMutex);
+        auto it = s_queueRegistry.find(mq);
+        if (it == s_queueRegistry.end()) return -1;
+        nq = it->second;
+    }
+
+    std::unique_lock<std::mutex> lock(nq->mtx);
+    if (flag == OS_MESG_BLOCK) {
+        nq->cv_recv.wait(lock, [nq]() { return !nq->buffer.empty(); });
+    } else {
+        if (nq->buffer.empty()) return -1;
+    }
+
+    if (msg != nullptr) {
+        *msg = nq->buffer.front();
+    }
+    nq->buffer.pop_front();
+    mq->validCount = nq->buffer.size();
+    nq->cv_send.notify_one();
+    
+    return 0;
 }
 
 /* ============================================================
