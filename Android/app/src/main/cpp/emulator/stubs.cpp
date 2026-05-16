@@ -13,7 +13,9 @@
 
 #include "n64_types.h"
 
-// High-Level Emulation native thread tracking structures
+// -------------------------------------------------------------------------
+// HIGH-LEVEL EMULATION NATIVE STRUCTURES
+// -------------------------------------------------------------------------
 struct NativeThread {
     pthread_t thread;
     void (*entry)(void *);
@@ -22,7 +24,6 @@ struct NativeThread {
     OSPri pri;
 };
 
-// High-Level Emulation message queue structures
 struct NativeQueue {
     std::deque<OSMesg> buffer;
     int capacity;
@@ -31,12 +32,26 @@ struct NativeQueue {
     std::condition_variable cv_send;
 };
 
-// Registries to map raw N64 OS pointers to native Android POSIX/C++ structures
+struct EventRoute {
+    OSMesgQueue* mq;
+    OSMesg msg;
+};
+
+// -------------------------------------------------------------------------
+// REGISTRIES & SYNCHRONIZATION (THE GIL)
+// -------------------------------------------------------------------------
+// The N64 Global Interpreter Lock (GIL). 
+// Enforces single-core execution on a multi-core Android processor.
+static std::recursive_mutex s_n64_gil;
+
 static std::unordered_map<OSThread*, NativeThread*> s_threadRegistry;
 static std::mutex s_threadMutex;
 
 static std::unordered_map<OSMesgQueue*, NativeQueue*> s_queueRegistry;
 static std::mutex s_queueMutex;
+
+static std::unordered_map<int, EventRoute> s_eventRegistry;
+static std::mutex s_eventMutex;
 
 extern "C" {
 // Recompiled OS headers
@@ -58,8 +73,6 @@ OSPiHandle* __osPiTable = sPiTablePool;
 void* __osViNext = nullptr; 
 void* __osViCurr = nullptr;
 OSDevMgr __osPiDevMgr;
-
-// Dummy state table for internal libultra interrupt handlers (leointerrupt.c)
 u32 __osEventStateTab[16];
 
 void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
@@ -71,13 +84,11 @@ void __osViInit(void) {
 }
 
 /* ============================================================
-   2. HLE NATIVE THREADING (POSIX Pthreads)
-   Intercepts MIPS hardware context switches and routes to POSIX.
+   2. HLE NATIVE THREADING WITH GIL
    ============================================================ */
 
 void osCreateThread(OSThread *t, OSId id, void (*entry)(void *), void *arg, void *sp, OSPri p) {
     std::lock_guard<std::mutex> lock(s_threadMutex);
-    
     t->id = id;
     t->priority = p;
     
@@ -89,15 +100,16 @@ void osCreateThread(OSThread *t, OSId id, void (*entry)(void *), void *arg, void
     nt->thread = 0;
     
     s_threadRegistry[t] = nt;
-    LOGI("BKA-HLE: osCreateThread mapped POSIX Thread ID %d", id);
 }
 
 static void* NativeThreadWrapper(void* arg) {
     NativeThread* nt = static_cast<NativeThread*>(arg);
     LOGI("BKA-HLE: Native Thread ID %d starting execution.", nt->id);
     
-    // Execute the recompiled N64 thread function
+    // Acquire the N64 CPU Lock. Only ONE thread runs N64 logic at a time.
+    s_n64_gil.lock();
     nt->entry(nt->arg);
+    s_n64_gil.unlock();
     
     LOGI("BKA-HLE: Native Thread ID %d terminated cleanly.", nt->id);
     return nullptr;
@@ -105,22 +117,14 @@ static void* NativeThreadWrapper(void* arg) {
 
 void osStartThread(OSThread *t) {
     std::lock_guard<std::mutex> lock(s_threadMutex);
-    
-    // Sometimes the N64 passes NULL to start the idle thread, but in recompiled ports
-    // we explicitly track and boot the passed thread structure.
     if (t != nullptr && s_threadRegistry.find(t) != s_threadRegistry.end()) {
         NativeThread* nt = s_threadRegistry[t];
         pthread_create(&nt->thread, nullptr, NativeThreadWrapper, nt);
-        
-        // Detach so the Android kernel can automatically clean up resources when the thread finishes
         pthread_detach(nt->thread);
-        LOGI("BKA-HLE: osStartThread launched Thread ID %d", nt->id);
     }
 }
 
 void osStopThread(OSThread *t) {
-    // N64 uses this to kill threads. True POSIX pthread_cancel is unsafe for C++ memory.
-    // For HLE, we let the thread function hit its natural exit or blocking condition.
     LOGW("BKA-HLE: osStopThread intercepted. Letting thread wind down natively.");
 }
 
@@ -129,76 +133,74 @@ void osDestroyThread(OSThread *t) {
     if (s_threadRegistry.find(t) != s_threadRegistry.end()) {
         delete s_threadRegistry[t];
         s_threadRegistry.erase(t);
-        LOGI("BKA-HLE: osDestroyThread cleaned up resources.");
     }
 }
 
 void osYieldThread(void) {
-    // Relinquish CPU time back to the Android scheduler
+    // Release the N64 CPU lock, yield Android CPU time, and re-acquire.
+    s_n64_gil.unlock();
     sched_yield();
+    s_n64_gil.lock();
 }
 
-void osSetThreadPri(OSThread *t, OSPri pri) {
-    if (t) t->priority = pri;
-}
-
-OSPri osGetThreadPri(OSThread *t) {
-    return t ? t->priority : 0;
-}
-
-void __osDequeueThread(OSThread **queue, OSThread *t) {
-    // Internal libultra linked-list stub used by settreadpri.c
-    // HLE threading bypasses the raw software scheduler.
-}
+void osSetThreadPri(OSThread *t, OSPri pri) { if (t) t->priority = pri; }
+OSPri osGetThreadPri(OSThread *t) { return t ? t->priority : 0; }
+void __osDequeueThread(OSThread **queue, OSThread *t) {}
 
 /* ============================================================
-   3. HLE MESSAGE QUEUE (Anti-Deadlock)
-   Fully synchronized C++ condition variables to manage N64 IPC.
+   3. EVENT ROUTING & MESSAGE QUEUES
    ============================================================ */
 
 void osCreateMesgQueue(OSMesgQueue *mq, OSMesg *msgBuf, s32 count) {
-    // Keep the N64 struct updated for internal engine checks
     mq->validCount = 0;
     mq->first = 0;
     mq->msgCount = count;
     mq->msg = msgBuf;
 
     std::lock_guard<std::mutex> lock(s_queueMutex);
-    if (s_queueRegistry.find(mq) != s_queueRegistry.end()) {
-        delete s_queueRegistry[mq];
-    }
+    if (s_queueRegistry.find(mq) != s_queueRegistry.end()) delete s_queueRegistry[mq];
     
     NativeQueue* nq = new NativeQueue();
     nq->capacity = count;
     s_queueRegistry[mq] = nq;
-    LOGI("BKA-HLE: osCreateMesgQueue registered queue with capacity %d", count);
 }
 
 void osSetEventMesg(OSEvent e, OSMesgQueue *mq, OSMesg msg) {
-    // Hooks hardware events (like VI VBlank or DMA complete) to specific queues
-    LOGI("BKA-HLE: osSetEventMesg bound event %d", (int)e);
+    std::lock_guard<std::mutex> lock(s_eventMutex);
+    s_eventRegistry[(int)e] = {mq, msg};
+    LOGI("BKA-HLE: Bound hardware event %d to queue", (int)e);
+}
+
+// Global Trigger to be called by Android Native Bridge (e.g., Virtual VBlank)
+void HLE_TriggerN64Event(int event_id) {
+    std::lock_guard<std::mutex> lock(s_eventMutex);
+    if (s_eventRegistry.count(event_id)) {
+        EventRoute route = s_eventRegistry[event_id];
+        osSendMesg(route.mq, route.msg, OS_MESG_NOBLOCK);
+    }
 }
 
 s32 osSendMesg(OSMesgQueue *mq, OSMesg msg, s32 flag) {
     NativeQueue* nq = nullptr;
     {
         std::lock_guard<std::mutex> lock(s_queueMutex);
-        auto it = s_queueRegistry.find(mq);
-        if (it == s_queueRegistry.end()) return -1;
-        nq = it->second;
+        if (s_queueRegistry.find(mq) == s_queueRegistry.end()) return -1;
+        nq = s_queueRegistry[mq];
     }
 
     std::unique_lock<std::mutex> lock(nq->mtx);
     if (flag == OS_MESG_BLOCK) {
+        // Yield the GIL so other threads can process while we sleep
+        s_n64_gil.unlock();
         nq->cv_send.wait(lock, [nq]() { return nq->buffer.size() < nq->capacity; });
+        s_n64_gil.lock();
     } else {
         if (nq->buffer.size() >= nq->capacity) return -1;
     }
 
     nq->buffer.push_back(msg);
-    mq->validCount = nq->buffer.size(); // Keep struct semi-accurate for raw reads
+    mq->validCount = nq->buffer.size();
     nq->cv_recv.notify_one();
-    
     return 0;
 }
 
@@ -206,23 +208,22 @@ s32 osJamMesg(OSMesgQueue *mq, OSMesg msg, s32 flag) {
     NativeQueue* nq = nullptr;
     {
         std::lock_guard<std::mutex> lock(s_queueMutex);
-        auto it = s_queueRegistry.find(mq);
-        if (it == s_queueRegistry.end()) return -1;
-        nq = it->second;
+        if (s_queueRegistry.find(mq) == s_queueRegistry.end()) return -1;
+        nq = s_queueRegistry[mq];
     }
 
     std::unique_lock<std::mutex> lock(nq->mtx);
     if (flag == OS_MESG_BLOCK) {
+        s_n64_gil.unlock();
         nq->cv_send.wait(lock, [nq]() { return nq->buffer.size() < nq->capacity; });
+        s_n64_gil.lock();
     } else {
         if (nq->buffer.size() >= nq->capacity) return -1;
     }
 
-    // Jamming pushes the message to the absolute front of the line
-    nq->buffer.push_front(msg);
+    nq->buffer.push_front(msg); // Jam to front
     mq->validCount = nq->buffer.size();
     nq->cv_recv.notify_one();
-    
     return 0;
 }
 
@@ -230,25 +231,23 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
     NativeQueue* nq = nullptr;
     {
         std::lock_guard<std::mutex> lock(s_queueMutex);
-        auto it = s_queueRegistry.find(mq);
-        if (it == s_queueRegistry.end()) return -1;
-        nq = it->second;
+        if (s_queueRegistry.find(mq) == s_queueRegistry.end()) return -1;
+        nq = s_queueRegistry[mq];
     }
 
     std::unique_lock<std::mutex> lock(nq->mtx);
     if (flag == OS_MESG_BLOCK) {
+        s_n64_gil.unlock();
         nq->cv_recv.wait(lock, [nq]() { return !nq->buffer.empty(); });
+        s_n64_gil.lock();
     } else {
         if (nq->buffer.empty()) return -1;
     }
 
-    if (msg != nullptr) {
-        *msg = nq->buffer.front();
-    }
+    if (msg != nullptr) *msg = nq->buffer.front();
     nq->buffer.pop_front();
     mq->validCount = nq->buffer.size();
     nq->cv_send.notify_one();
-    
     return 0;
 }
 
@@ -268,23 +267,23 @@ s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramA
 extern void func_80000450(int32_t arg0); 
 AndroidBridgeGlobals* gBridgeGlobals = nullptr;
 
-void core1_reset(void) {
-    LOGI("BKA-CORE: System Reset.");
-}
+void core1_reset(void) { LOGI("BKA-CORE: System Reset."); }
 
 void core1_stepCPU(void) {
     static bool engine_ignited = false;
     if (!engine_ignited) {
         LOGI("BKA-STUBS: >>> IGNITING ENGINE (func_80000450) <<<");
         engine_ignited = true;
+        
+        s_n64_gil.lock();
         func_80000450(0); 
+        s_n64_gil.unlock();
     }
 }
 
 void mainLoop(void) {
     LOGI("BKA-STUBS: mainLoop starting.");
     core1_reset();
-
     static const uint32_t TARGET_FRAME_US = 33333u; 
     uint32_t frameCount = 0;
 
@@ -293,24 +292,12 @@ void mainLoop(void) {
         clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
         core1_stepCPU();    
-
-        if (gBridgeGlobals != nullptr) {
-            gBridgeGlobals->frameCount++;
-        }
+        if (gBridgeGlobals != nullptr) gBridgeGlobals->frameCount++;
 
         clock_gettime(CLOCK_MONOTONIC, &ts_end);
-        uint32_t elapsed_us = (uint32_t)(
-            (uint64_t)(ts_end.tv_sec  - ts_start.tv_sec)  * 1000000u +
-            (uint64_t)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000u
-        );
+        uint32_t elapsed_us = (uint32_t)((uint64_t)(ts_end.tv_sec - ts_start.tv_sec) * 1000000u + (uint64_t)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000u);
 
-        if (elapsed_us < TARGET_FRAME_US) {
-            usleep(TARGET_FRAME_US - elapsed_us);
-        }
-
-        if ((++frameCount % 300) == 0) {
-            LOGI("BKA-STUBS: %u frames processed", frameCount);
-        }
+        if (elapsed_us < TARGET_FRAME_US) usleep(TARGET_FRAME_US - elapsed_us);
     }
 }
 
