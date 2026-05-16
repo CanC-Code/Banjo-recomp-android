@@ -43,9 +43,13 @@ extern "C" {
 
     void InitN64Registers(void);
     void HardwareRegs_Shutdown(void);
-    
+
     // Redirect Target: Secure engine ignition wrapper from emulator/stubs.cpp
     void BKA_StartEngine(void);
+    
+    // Core GIL lock cycle hooks exposed from emulator/stubs.cpp
+    void BKA_DropEngineLock(void);
+    void BKA_ClaimEngineLock(void);
 
     // Updated signature: The engine dynamically builds assets from the target directory 
     // without requiring a static manifest buffer.
@@ -64,10 +68,19 @@ extern "C" {
         pthread_mutex_lock(&g_vblankMutex);
         g_vblankRequested = true;
 
+        // 1. RELEASE THE ENGINE LOCK before going to sleep.
+        // This unblocks the HLE PI Manager and Audio threads to run on other cores.
+        BKA_DropEngineLock();
+
         // Block the recompiled game thread until the Android screen tick/render swap occurs
         while (g_vblankRequested) {
             pthread_cond_wait(&g_vblankCond, &g_vblankMutex);
         }
+
+        // 2. RE-ACQUIRE THE ENGINE LOCK immediately upon waking up.
+        // Ensures the main thread safely holds exclusive access to RDRAM once more.
+        BKA_ClaimEngineLock();
+
         pthread_mutex_unlock(&g_vblankMutex);
     }
 }
@@ -160,8 +173,6 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint t
     pthread_mutex_unlock(&g_vblankMutex);
 
     // C: Modern Native GPU Buffer Intercept
-    // Instead of copying slow CPU memory arrays over JNI, let the hardware RDP plugin 
-    // pipe its completed frame buffer straight into the active OpenGL Texture identity.
     VideoPlugin_OutputFrameTexture((uint32_t)textureId);
 }
 
