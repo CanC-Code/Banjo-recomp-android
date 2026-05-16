@@ -12,6 +12,7 @@
 #include <condition_variable>
 
 #include "n64_types.h"
+#include "bka_safe_base.h" // Injected for physical-to-host address translation
 
 // -------------------------------------------------------------------------
 // HIGH-LEVEL EMULATION NATIVE STRUCTURES
@@ -91,26 +92,26 @@ void osCreateThread(OSThread *t, OSId id, void (*entry)(void *), void *arg, void
     std::lock_guard<std::mutex> lock(s_threadMutex);
     t->id = id;
     t->priority = p;
-    
+
     NativeThread* nt = new NativeThread();
     nt->entry = entry;
     nt->arg = arg;
     nt->id = id;
     nt->pri = p;
     nt->thread = 0;
-    
+
     s_threadRegistry[t] = nt;
 }
 
 static void* NativeThreadWrapper(void* arg) {
     NativeThread* nt = static_cast<NativeThread*>(arg);
     LOGI("BKA-HLE: Native Thread ID %d starting execution.", nt->id);
-    
+
     // Acquire the N64 CPU Lock. Only ONE thread runs N64 logic at a time.
     s_n64_gil.lock();
     nt->entry(nt->arg);
     s_n64_gil.unlock();
-    
+
     LOGI("BKA-HLE: Native Thread ID %d terminated cleanly.", nt->id);
     return nullptr;
 }
@@ -159,7 +160,7 @@ void osCreateMesgQueue(OSMesgQueue *mq, OSMesg *msgBuf, s32 count) {
 
     std::lock_guard<std::mutex> lock(s_queueMutex);
     if (s_queueRegistry.find(mq) != s_queueRegistry.end()) delete s_queueRegistry[mq];
-    
+
     NativeQueue* nq = new NativeQueue();
     nq->capacity = count;
     s_queueRegistry[mq] = nq;
@@ -253,9 +254,47 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
 
 /* ============================================================
    4. HLE DMA REDIRECTION
+   Memory-Safe Direct Memory Access Operations via Translation
    ============================================================ */
 
-extern s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size);
+s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
+    if (size == 0) return 0;
+
+    // Resolve structural target regions using the core architecture safety bridge
+    uintptr_t host_dram = BKA_TRANSLATE_ADDR((uintptr_t)dramAddr);
+    uintptr_t host_dev  = BKA_TRANSLATE_ADDR((uintptr_t)devAddr);
+
+    if (!host_dram || !host_dev) {
+        LOGW("BKA-DMA: High-level translation returned null pointers. DMA Aborted. RAM=%p, Dev=0x%08X", dramAddr, devAddr);
+        return -1;
+    }
+
+    void* src_ptr = nullptr;
+    void* dest_ptr = nullptr;
+
+    if (direction == OS_READ) { // Cartridge ROM to Main System RDRAM
+        src_ptr  = reinterpret_cast<void*>(host_dev);
+        dest_ptr = reinterpret_cast<void*>(host_dram);
+    } else { // Main System RDRAM back to Cartridge SRAM/Save-space
+        src_ptr  = reinterpret_cast<void*>(host_dram);
+        dest_ptr = reinterpret_cast<void*>(host_dev);
+    }
+
+    // Safety Bounds Verification to guard against memory fault overruns
+    uint8_t* ram_base = __atomic_load_n(&gN64_RDRAM, __ATOMIC_ACQUIRE);
+    if (dest_ptr >= ram_base && dest_ptr < (ram_base + BKA_RDRAM_ALLOC_SIZE)) {
+        size_t space_remaining = (ram_base + BKA_RDRAM_ALLOC_SIZE) - reinterpret_cast<uint8_t*>(dest_ptr);
+        if (size > space_remaining) {
+            LOGW("BKA-DMA: Size limit truncated to fit memory frame allocation allocation! Size=%u, Max=%zu", size, space_remaining);
+            size = space_remaining;
+        }
+    }
+
+    // Execute the direct synchronous engine transaction
+    memcpy(dest_ptr, src_ptr, size);
+    return 0;
+}
+
 s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramAddr, u32 size) {
     return osPiRawStartDma(direction, devAddr, dramAddr, size);
 }
@@ -274,7 +313,7 @@ void core1_stepCPU(void) {
     if (!engine_ignited) {
         LOGI("BKA-STUBS: >>> IGNITING ENGINE (func_80000450) <<<");
         engine_ignited = true;
-        
+
         s_n64_gil.lock();
         func_80000450(0); 
         s_n64_gil.unlock();
