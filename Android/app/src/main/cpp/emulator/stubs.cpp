@@ -41,8 +41,6 @@ struct EventRoute {
 // -------------------------------------------------------------------------
 // REGISTRIES & SYNCHRONIZATION (THE GIL)
 // -------------------------------------------------------------------------
-// The N64 Global Interpreter Lock (GIL). 
-// Enforces single-core execution on a multi-core Android processor.
 static std::recursive_mutex s_n64_gil;
 
 static std::unordered_map<OSThread*, NativeThread*> s_threadRegistry;
@@ -290,7 +288,7 @@ static void* HLE_PiManagerWorker(void* arg) {
 
         OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
 
-        // Map standard libultra structure elements safely
+        // Fixed field mappings: direction uses inner hdr.type, size and retMsg are parent-level members
         osPiRawStartDma(ioMsg->hdr.type, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->size);
 
         if (ioMsg->hdr.retQueue != nullptr) {
@@ -305,7 +303,7 @@ static void* HLE_PiManagerWorker(void* arg) {
 void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
     s_hlePiCmdQueue = cmdQ;
     
-    // Spawn background asset router thread cleanly
+    // Cleaned up stray signature call; spawning target asynchronous HLE worker exclusively
     pthread_create(&s_hlePiMgrThread, nullptr, HLE_PiManagerWorker, nullptr);
     pthread_detach(s_hlePiMgrThread);
     LOGI("BKA-HLE: osCreatePiManager successfully generated background processing engine.");
