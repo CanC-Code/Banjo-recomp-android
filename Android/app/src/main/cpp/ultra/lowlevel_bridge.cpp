@@ -11,7 +11,7 @@
 #define BKA_RDRAM_ALLOC_SIZE  0x1000000 // 16MB (Covers speculative over-reads)
 #define N64_REG_SPACE_SIZE    0x1000000 // 16MB (Covers RCP/RCP register ranges)
 #define N64_PIF_SPACE_SIZE    0x0010000 // 64KB (Abundantly covers PIF ROM/RAM)
-#define N64_ROM_SPACE_SIZE    0x0010000 // 64KB (Covers the Cartridge ROM Header space)
+#define N64_ROM_SPACE_SIZE    0x04000000 // 64MB (Covers the full N64 physical ROM limit)
 
 // Hardware Register Offsets
 // MI_INTR_REG physical address is 0x0430000C.
@@ -62,7 +62,7 @@ extern "C" {
             -1, 0
         );
 
-        // 4. Allocate Virtual Cartridge ROM Header Space
+        // 4. Allocate Virtual Cartridge ROM Header Space (Now 64MB)
         gN64_ROM_Base = (uint8_t*)mmap(
             nullptr, 
             N64_ROM_SPACE_SIZE, 
