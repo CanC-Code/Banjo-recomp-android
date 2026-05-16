@@ -25,7 +25,7 @@ extern "C" {
  */
 void ResourceMgr_Init(const char* assetDir) {
     if (!assetDir) {
-        LOGE("ResourceMgr_Init: Invalid asset directory path.");
+        LOGE("FATAL: ResourceMgr_Init received an invalid asset directory path.");
         return;
     }
 
@@ -39,7 +39,8 @@ void ResourceMgr_Init(const char* assetDir) {
     std::string idxPath = g_assetDir + "assets.idx";
     FILE* f = fopen(idxPath.c_str(), "rb");
     if (!f) {
-        LOGW("ResourceMgr_Init: assets.idx not found. The OTR pipeline may not have completed.");
+        // Enforce a hard failure warning. A missing registry will cause the PI manager to starve.
+        LOGE("FATAL: assets.idx not found at %s. The OTR pipeline failed to generate the asset map.", idxPath.c_str());
         return;
     }
 
