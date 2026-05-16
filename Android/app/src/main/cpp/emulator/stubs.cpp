@@ -288,11 +288,12 @@ static void* HLE_PiManagerWorker(void* arg) {
 
         OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
 
-        // Fixed field mappings: direction uses inner hdr.type, size and retMsg are parent-level members
+        // Process synchronous memory block shift
         osPiRawStartDma(ioMsg->hdr.type, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->size);
 
+        // Map acknowledgment: the block pointer acts as its own completion token
         if (ioMsg->hdr.retQueue != nullptr) {
-            osSendMesg(ioMsg->hdr.retQueue, ioMsg->retMsg, OS_MESG_NOBLOCK);
+            osSendMesg(ioMsg->hdr.retQueue, reinterpret_cast<OSMesg>(ioMsg), OS_MESG_NOBLOCK);
         }
     }
     
@@ -303,7 +304,6 @@ static void* HLE_PiManagerWorker(void* arg) {
 void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
     s_hlePiCmdQueue = cmdQ;
     
-    // Cleaned up stray signature call; spawning target asynchronous HLE worker exclusively
     pthread_create(&s_hlePiMgrThread, nullptr, HLE_PiManagerWorker, nullptr);
     pthread_detach(s_hlePiMgrThread);
     LOGI("BKA-HLE: osCreatePiManager successfully generated background processing engine.");
