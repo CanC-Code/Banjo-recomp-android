@@ -287,11 +287,8 @@ static void* HLE_PiManagerWorker(void* arg) {
         if (ret != 0 || msg == nullptr) continue;
 
         OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
-
-        // Process synchronous memory block shift
         osPiRawStartDma(ioMsg->hdr.type, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->size);
 
-        // Map acknowledgment: the block pointer acts as its own completion token
         if (ioMsg->hdr.retQueue != nullptr) {
             osSendMesg(ioMsg->hdr.retQueue, reinterpret_cast<OSMesg>(ioMsg), OS_MESG_NOBLOCK);
         }
@@ -339,7 +336,7 @@ u32 osAiGetLength(void) { return 0; }
 s32 osAiSetFrequency(u32 frequency) { return 0; }
 
 /* ============================================================
-   6. SECURE ENGINE IGNITION ENTRY POINT
+   6. SECURE ENGINE IGNITION & LOCK MANIPULATION
    ============================================================ */
 
 extern void func_80000450(int32_t arg0); 
@@ -349,6 +346,15 @@ void BKA_StartEngine(void) {
     s_n64_gil.lock();
     func_80000450(0);
     s_n64_gil.unlock();
+}
+
+// Thread context bridge hooks used by NativeBridge to cycle execution constraints
+void BKA_DropEngineLock(void) {
+    s_n64_gil.unlock();
+}
+
+void BKA_ClaimEngineLock(void) {
+    s_n64_gil.lock();
 }
 
 void mainLoop(void) {}
