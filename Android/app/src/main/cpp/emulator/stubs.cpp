@@ -63,6 +63,7 @@ extern "C" {
 #include <PR/os_message.h>
 #include <PR/sptask.h>  
 #include <PR/os_ai.h>      
+#include <PR/os_eeprom.h>
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -280,27 +281,42 @@ s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramA
 static void* HLE_PiManagerWorker(void* arg) {
     LOGI("BKA-HLE: Peripheral Interface (PI) Async Manager Thread Engaged.");
     s_n64_gil.lock();
-    
+
     while (true) {
         OSMesg msg = nullptr;
         s32 ret = osRecvMesg(s_hlePiCmdQueue, &msg, OS_MESG_BLOCK);
         if (ret != 0 || msg == nullptr) continue;
 
         OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
-        osPiRawStartDma(ioMsg->hdr.type, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->size);
+
+        // FIX: Map OS_MESG_TYPE values back to hardware OS_READ/OS_WRITE signals.
+        // Prevents the DMA from evaluating all loads as writes and zeroing the ROM buffer.
+        s32 direction = OS_READ;
+#ifdef OS_MESG_TYPE_DMAWRITE
+        if (ioMsg->hdr.type == OS_MESG_TYPE_DMAWRITE) {
+            direction = OS_WRITE;
+        }
+#else
+        // Common fallback values for write operations across various Libultra headers
+        if (ioMsg->hdr.type == 16 || ioMsg->hdr.type == 2) {
+            direction = OS_WRITE;
+        }
+#endif
+
+        osPiRawStartDma(direction, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->size);
 
         if (ioMsg->hdr.retQueue != nullptr) {
             osSendMesg(ioMsg->hdr.retQueue, reinterpret_cast<OSMesg>(ioMsg), OS_MESG_NOBLOCK);
         }
     }
-    
+
     s_n64_gil.unlock();
     return nullptr;
 }
 
 void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
     s_hlePiCmdQueue = cmdQ;
-    
+
     pthread_create(&s_hlePiMgrThread, nullptr, HLE_PiManagerWorker, nullptr);
     pthread_detach(s_hlePiMgrThread);
     LOGI("BKA-HLE: osCreatePiManager successfully generated background processing engine.");
@@ -335,8 +351,37 @@ s32 osAiSetNextBuffer(void *bufPtr, u32 size) {
 u32 osAiGetLength(void) { return 0; }
 s32 osAiSetFrequency(u32 frequency) { return 0; }
 
+
 /* ============================================================
-   6. SECURE ENGINE IGNITION & LOCK MANIPULATION
+   6. PHASE 11: EEPROM / SAVE SYSTEM STUBS (EARLY BOOT LOCK FIX)
+   ============================================================ */
+
+s32 osEepromProbe(OSMesgQueue *mq) {
+    // Banjo-Kazooie expects a 4Kbit (returns 1) or 16Kbit (returns 2) EEPROM.
+    // Returning 1 bypasses the hardware lock and allows the bootloader to proceed.
+    return 1; 
+}
+
+s32 osEepromLongRead(OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes) {
+    memset(buffer, 0, nbytes); // Return a clean, empty save file
+    return 0; // 0 = Success
+}
+
+s32 osEepromLongWrite(OSMesgQueue *mq, u8 address, u8 *buffer, int nbytes) {
+    return 0; // Pretend the save to the cartridge was successful
+}
+
+s32 osEepromRead(OSMesgQueue *mq, u8 address, u8 *buffer) {
+    memset(buffer, 0, 8); // Standard EEPROM blocks are 8 bytes
+    return 0;
+}
+
+s32 osEepromWrite(OSMesgQueue *mq, u8 address, u8 *buffer) {
+    return 0; 
+}
+
+/* ============================================================
+   7. SECURE ENGINE IGNITION & LOCK MANIPULATION
    ============================================================ */
 
 extern void func_80000450(int32_t arg0); 
