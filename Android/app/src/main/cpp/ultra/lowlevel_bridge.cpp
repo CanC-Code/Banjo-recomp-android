@@ -13,6 +13,13 @@
 #define N64_PIF_SPACE_SIZE    0x0010000 // 64KB (Abundantly covers PIF ROM/RAM)
 #define N64_ROM_SPACE_SIZE    0x0010000 // 64KB (Covers the Cartridge ROM Header space)
 
+// Hardware Register Offsets
+// MI_INTR_REG physical address is 0x0430000C.
+// Mapped against our 0x04000000 base, the byte offset is 0x30000C. 
+// As a uint32_t array index, we divide by 4.
+#define MI_INTR_REG_IDX       (0x0030000C / 4)
+#define MI_INTR_VI            0x08
+
 // Instantiate the global translation pointers defined as externs by the sanitizer
 uint8_t*  gN64_RDRAM    = nullptr;
 uint32_t* gN64_Reg_Base = nullptr;
@@ -138,12 +145,20 @@ extern "C" {
     // Allocate the physical memory array for all 4 standard controller ports.
     BKA_ControllerPad gN64_ControllerData[4] = {{0, 0, 0, 0}};
 
+    // Function mapped into the recompiled source to push events to the VI queue
+    extern void __osViIntrPostMesg(void);
+
     // 3. Engine Clock Signal Stub:
     // Connects the asynchronous Android OpenGL thread to the synchronous N64 OS.
     void N64_TriggerVirtualVBlankInterrupt(void) {
-        // STUB: This must eventually be wired into the recompiled engine's 
-        // internal OS event queue (e.g., triggering osViIntrSignal) to advance 
-        // the game's internal tick logic.
+        if (gN64_Reg_Base == nullptr) return;
+
+        // Assert the VI Interrupt bit inside the emulated hardware register space
+        gN64_Reg_Base[MI_INTR_REG_IDX] |= MI_INTR_VI;
+
+        // High-Level Emulation: Force-post a mock interrupt message straight to the 
+        // recompiled OS scheduler event queues to immediately resume the game loop.
+        __osViIntrPostMesg();
     }
 
     // 4. Hardware Renderer Stub:
