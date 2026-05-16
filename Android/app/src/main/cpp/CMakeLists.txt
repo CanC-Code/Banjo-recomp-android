@@ -32,12 +32,31 @@ option(EXCLUDE_GAME_SRC "Skip compiling the recompiled game source tree" OFF)
 
 set(GAME_SOURCES "")
 if(NOT EXCLUDE_GAME_SRC)
-    # Safely glob all source files. The recompilation architecture 
-    # natively handles the C translations via exceptasm.cpp.
-    file(GLOB_RECURSE GAME_SOURCES 
+    file(GLOB_RECURSE ALL_GAME_FILES 
         "${REPO_ROOT}/src/*.c"
         "${REPO_ROOT}/src/*.cpp"
     )
+
+    # Filter out the raw MIPS threading and message queue implementations.
+    # The linker will now automatically utilize the POSIX HLE wrappers in stubs.cpp.
+    set(EXCLUSION_LIST
+        # Low-Level OS Threading
+        "createthread.c" "startthread.c" "stopthread.c" "destroythread.c" 
+        "yieldthread.c" "settreadpri.c" "getthreadpri.c"
+        
+        # Message Queues & Events
+        "createmesgqueue.c" "seteventmesg.c" 
+        "recvmesg.c" "sendmesg.c" "jammesg.c"
+    )
+
+    foreach(FILE_PATH ${ALL_GAME_FILES})
+        get_filename_component(FILENAME ${FILE_PATH} NAME)
+        if(NOT FILENAME IN_LIST EXCLUSION_LIST)
+            list(APPEND GAME_SOURCES ${FILE_PATH})
+        else()
+            message(STATUS "BKA-BUILD: Routing to HLE stub, excluding: ${FILENAME}")
+        endif()
+    endforeach()
 endif()
 
 # ============================================================
