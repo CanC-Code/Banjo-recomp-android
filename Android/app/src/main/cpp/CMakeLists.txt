@@ -32,35 +32,12 @@ option(EXCLUDE_GAME_SRC "Skip compiling the recompiled game source tree" OFF)
 
 set(GAME_SOURCES "")
 if(NOT EXCLUDE_GAME_SRC)
-    file(GLOB_RECURSE ALL_GAME_FILES 
+    # Safely glob all source files. The recompilation architecture 
+    # natively handles the C translations via exceptasm.cpp.
+    file(GLOB_RECURSE GAME_SOURCES 
         "${REPO_ROOT}/src/*.c"
         "${REPO_ROOT}/src/*.cpp"
     )
-
-    # Completely filter out raw MIPS hardware, threading, and message queue implementations.
-    # This forces the linker to use our HLE fiber wrappers.
-    set(EXCLUSION_LIST
-        # Hardware & DMA
-        "pirawdma.c" "epirawdma.c" "pimgr.c" "vi.c" "vicurrent.c" 
-        
-        # Message Queues & Events
-        "recvmesg.c" "sendmesg.c" "jammesg.c" 
-        "createmesgqueue.c" "seteventmesg.c"
-        
-        # Low-Level OS Threading (MIPS Context Switches)
-        "osYield.c" "createthread.c" "startthread.c" 
-        "stopthread.c" "destroythread.c" "thread.c" 
-        "yieldthread.c" "setthreadpri.c" "getthreadpri.c"
-    )
-
-    foreach(FILE_PATH ${ALL_GAME_FILES})
-        get_filename_component(FILENAME ${FILE_PATH} NAME)
-        if(NOT FILENAME IN_LIST EXCLUSION_LIST)
-            list(APPEND GAME_SOURCES ${FILE_PATH})
-        else()
-            message(STATUS "BKA-BUILD: Excluding N64 OS/HW file: ${FILENAME}")
-        endif()
-    endforeach()
 endif()
 
 # ============================================================
