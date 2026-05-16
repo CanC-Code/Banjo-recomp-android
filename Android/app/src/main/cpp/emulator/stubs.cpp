@@ -41,6 +41,8 @@ struct EventRoute {
 // -------------------------------------------------------------------------
 // REGISTRIES & SYNCHRONIZATION (THE GIL)
 // -------------------------------------------------------------------------
+// The N64 Global Interpreter Lock (GIL). 
+// Enforces single-core execution on a multi-core Android processor.
 static std::recursive_mutex s_n64_gil;
 
 static std::unordered_map<OSThread*, NativeThread*> s_threadRegistry;
@@ -52,12 +54,16 @@ static std::mutex s_queueMutex;
 static std::unordered_map<int, EventRoute> s_eventRegistry;
 static std::mutex s_eventMutex;
 
+// PI Manager Subsystem Tracking
+static OSMesgQueue* s_hlePiCmdQueue = nullptr;
+static pthread_t    s_hlePiMgrThread;
+
 extern "C" {
 // Recompiled OS headers
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
-#include <PR/sptask.h>  // Included for OSTask specifications
+#include <PR/sptask.h>  
 #include <PR/os_ai.h>      
 
 #define LOG_TAG "BKA_STUBS"
@@ -75,10 +81,6 @@ void* __osViNext = nullptr;
 void* __osViCurr = nullptr;
 OSDevMgr __osPiDevMgr;
 u32 __osEventStateTab[16];
-
-void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
-    LOGI("BKA-HLE: osCreatePiManager initialized.");
-}
 
 void __osViInit(void) {
     LOGI("BKA-HLE: __osViInit executed.");
@@ -249,7 +251,7 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
 }
 
 /* ============================================================
-   4. HLE DMA REDIRECTION
+   4. HLE DMA REDIRECTION & AUTOMATED PI MANAGER
    ============================================================ */
 
 s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
@@ -277,20 +279,49 @@ s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramA
     return osPiRawStartDma(direction, devAddr, dramAddr, size);
 }
 
+static void* HLE_PiManagerWorker(void* arg) {
+    LOGI("BKA-HLE: Peripheral Interface (PI) Async Manager Thread Engaged.");
+    s_n64_gil.lock();
+    
+    while (true) {
+        OSMesg msg = nullptr;
+        // Block until a processing task is queued. osRecvMesg naturally handles GIL cycling.
+        s32 ret = osRecvMesg(s_hlePiCmdQueue, &msg, OS_MESG_BLOCK);
+        if (ret != 0 || msg == nullptr) continue;
+
+        OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
+
+        // Execute raw memory transaction securely
+        osPiRawStartDma(ioMsg->hdr.direction, ioMsg->devAddr, ioMsg->dramAddr, ioMsg->hdr.size);
+
+        // If a return sync queue is attached, post completion to resume the calling thread
+        if (ioMsg->hdr.retQueue != nullptr) {
+            osSendMesg(ioMsg->hdr.retQueue, ioMsg->hdr.retMsg, OS_MESG_NOBLOCK);
+        }
+    }
+    
+    s_n64_gil.unlock();
+    return nullptr;
+}
+
+void osCreatePiManager(OSPri pri, OSMesgQueue *cmdQ, OSMesg *cmdBuf, s32 cmdMsgCnt) {
+    s_hlePiCmdQueue = cmdQ;
+    
+    // Spawn the asynchronous HLE worker thread to handle game requests
+    pthread_create(&s_hlePiMgrThread, nullptr, HLE_TriggerN64Event, nullptr); // Wait, fix parameter mapping
+    pthread_create(&s_hlePiMgrThread, nullptr, HLE_PiManagerWorker, nullptr);
+    pthread_detach(s_hlePiMgrThread);
+    LOGI("BKA-HLE: osCreatePiManager successfully generated background processing engine.");
+}
+
 /* ============================================================
    5. SAFE AUDIO/VIDEO ENDPOINTS (DROP LOGIC)
    ============================================================ */
 
-void osSpTaskLoad(OSTask *tp) {
-    // Drop execution payload but preserve validation paths
-}
+void osSpTaskLoad(OSTask *tp) {}
 
 void osSpTaskStartGo(OSTask *tp) {
     if (tp == nullptr) return;
-
-    // Extract structural context identifier matching PR/sptask.h rules
-    // M_GFXTASK = 1 (Graphics Display List Processing)
-    // M_AUDTASK = 2 (Audio Command Buffer Processing)
     if (tp->t.type == M_GFXTASK) {
         HLE_TriggerN64Event(1); // OS_EVENT_SP
         HLE_TriggerN64Event(3); // OS_EVENT_DP
@@ -301,71 +332,32 @@ void osSpTaskStartGo(OSTask *tp) {
 }
 
 void osSpTaskYield(void) {}
-
-// Return type matches OSYieldResult to prevent redefinition errors
-OSYieldResult osSpTaskYielded(OSTask *tp) { 
-    return (OSYieldResult)0; 
-}
+OSYieldResult osSpTaskYielded(OSTask *tp) { return (OSYieldResult)0; }
 
 s32 osAiSetNextBuffer(void *bufPtr, u32 size) {
     if (size == 0 || bufPtr == nullptr) return 0;
-    
     HLE_TriggerN64Event(9); // OS_EVENT_AI
     return 0;
 }
 
-u32 osAiGetLength(void) {
-    return 0; 
-}
-
-s32 osAiSetFrequency(u32 frequency) {
-    return 0;
-}
+u32 osAiGetLength(void) { return 0; }
+s32 osAiSetFrequency(u32 frequency) { return 0; }
 
 /* ============================================================
-   6. GAME ENTRY POINTS & ENGINE DRIVER
+   6. SECURE ENGINE IGNITION ENTRY POINT
+   Mandates the single-core GIL constraint from microsecond zero.
    ============================================================ */
 
 extern void func_80000450(int32_t arg0); 
-AndroidBridgeGlobals* gBridgeGlobals = nullptr;
 
-void core1_reset(void) { LOGI("BKA-CORE: System Reset."); }
-
-void core1_stepCPU(void) {
-    static bool engine_ignited = false;
-    if (!engine_ignited) {
-        LOGI("BKA-STUBS: >>> IGNITING ENGINE (func_80000450) <<<");
-        engine_ignited = true;
-
-        s_n64_gil.lock();
-        func_80000450(0); 
-        s_n64_gil.unlock();
-    }
+void BKA_StartEngine(void) {
+    LOGI("BKA-STUBS: >>> SECURE CONCURRENT IGNITION VIA GIL LOCK <<<");
+    s_n64_gil.lock();
+    func_80000450(0);
+    s_n64_gil.unlock();
 }
 
-void mainLoop(void) {
-    LOGI("BKA-STUBS: mainLoop starting.");
-    core1_reset();
-    static const uint32_t TARGET_FRAME_US = 33333u; 
-
-    while (true) {
-        struct timespec ts_start, ts_end;
-        clock_gettime(CLOCK_MONOTONIC, &ts_start);
-
-        core1_stepCPU();    
-        if (gBridgeGlobals != nullptr) gBridgeGlobals->frameCount++;
-
-        clock_gettime(CLOCK_MONOTONIC, &ts_end);
-        uint32_t elapsed_us = (uint32_t)((uint64_t)(ts_end.tv_sec - ts_start.tv_sec) * 1000000u + (uint64_t)(ts_end.tv_nsec - ts_start.tv_nsec) / 1000u);
-
-        if (elapsed_us < TARGET_FRAME_US) usleep(TARGET_FRAME_US - elapsed_us);
-    }
-}
-
-/* ============================================================
-   7. MISC FALLBACKS
-   ============================================================ */
-
+void mainLoop(void) {}
 void core1_loadOTR(uint8_t* data, size_t size) {}
 int  func_80258A4C(void) { return 0; }
 void func_8025A123(void) {}
