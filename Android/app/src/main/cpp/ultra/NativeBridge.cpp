@@ -43,8 +43,10 @@ extern "C" {
 
     void InitN64Registers(void);
     void HardwareRegs_Shutdown(void);
-    void func_80000450(int32_t arg0);
     
+    // Redirect Target: Secure engine ignition wrapper from emulator/stubs.cpp
+    void BKA_StartEngine(void);
+
     // Updated signature: The engine dynamically builds assets from the target directory 
     // without requiring a static manifest buffer.
     void ResourceMgr_Init(const char* assetDir);
@@ -87,8 +89,8 @@ void* game_thread_fn(void* arg) {
         }
     }
 
-    // Execute core recompiled engine game logic loops
-    func_80000450(0);
+    // Execute core recompiled engine game logic loops inside the GIL safe-zone
+    BKA_StartEngine();
 
     LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
     HardwareRegs_Shutdown();
@@ -178,4 +180,4 @@ Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* env, jclass clazz, ji
     pthread_mutex_unlock(&g_inputMutex);
 }
 
-}
+} // extern "C"
