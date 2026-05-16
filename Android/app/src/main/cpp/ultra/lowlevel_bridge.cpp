@@ -28,6 +28,9 @@ uint8_t*  gN64_ROM_Base = nullptr;
 
 extern "C" {
 
+    // Forward declaration of the native event routing bridge from emulator/stubs.cpp
+    void HLE_TriggerN64Event(int event_id);
+
     void InitN64Registers() {
         // Idempotency guard: Prevent double allocation if called repeatedly
         if (gN64_RDRAM != nullptr && gN64_Reg_Base != nullptr && 
@@ -151,9 +154,11 @@ extern "C" {
         if (gN64_Reg_Base == nullptr) return;
 
         // Assert the VI Interrupt bit inside the emulated hardware register space.
-        // The recompilation engine's background thread will detect this register 
-        // change and organically dispatch the OS_EVENT_VI message to the VI Manager.
         gN64_Reg_Base[MI_INTR_REG_IDX] |= MI_INTR_VI;
+
+        // Pump the OS_EVENT_VI (ID: 14) message straight into the POSIX HLE event queues.
+        // This instantly wakes up the blocked scheduler threads to step the system forward.
+        HLE_TriggerN64Event(14);
     }
 
     // 4. Hardware Renderer Stub:
