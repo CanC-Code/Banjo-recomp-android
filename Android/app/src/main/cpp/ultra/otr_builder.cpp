@@ -45,14 +45,6 @@ void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const cha
     env->DeleteLocalRef(jMsg);
 }
 
-// --- 3. Endian-Aware Data Readers ---
-static uint32_t read_u32_le(const uint8_t* ptr) {
-    return  (uint32_t)ptr[0]        |
-           ((uint32_t)ptr[1] << 8)  |
-           ((uint32_t)ptr[2] << 16) |
-           ((uint32_t)ptr[3] << 24);
-}
-
 static uint32_t read_u32_be(const uint8_t* ptr) {
     return ((uint32_t)ptr[0] << 24) |
            ((uint32_t)ptr[1] << 16) |
@@ -70,10 +62,9 @@ void ensure_directories(const char* path) {
     }
 }
 
-// --- 4. Core Extraction Engine ---
+// --- 3. Absolutely Self-Building Engine ---
 void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
-                                        int romFd, uint8_t* manifestPtr, uint32_t manifestSize,
-                                        const char* outDirPath) {
+                                        int romFd, const char* outDirPath) {
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "STATUS: Loading ROM to memory...");
     debug_ui(env, callbackObj, progressMid, "STATUS: Loading ROM to RAM...");
@@ -88,7 +79,6 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     }
 
     if (romData.size() < 4096) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "ERROR: ROM file read failed.");
         debug_ui(env, callbackObj, progressMid, "ERROR: ROM Read Failed.");
         return;
     }
@@ -100,158 +90,89 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     }
 
     normalize_entire_rom(romData, format);
+    ensure_directories(outDirPath);
 
-    if (manifestSize < 4) {
-        debug_ui(env, callbackObj, progressMid, "ERROR: Manifest too small.");
-        return;
-    }
+    // Dynamic ASetup Pattern Scanner
+    uint32_t tableOffset = 0x5E98; // Default US 1.0 Table
+    uint32_t firstAssetOffset = 0x10CD0; 
 
-    uint32_t entryCount = read_u32_le(manifestPtr);
-    bool isLittleEndian = true;
-
-    // Safety fallback to Big-Endian count detection
-    if (entryCount > (manifestSize - 4) / 40) {
-        uint32_t beCount = read_u32_be(manifestPtr);
-        if (beCount <= (manifestSize - 4) / 40) {
-            entryCount = beCount;
-            isLittleEndian = false;
-        } else {
-            debug_ui(env, callbackObj, progressMid, "ERROR: Manifest Corrupt.");
-            return;
+    for (uint32_t i = 0x5000; i < 0x8000; i += 4) {
+        uint32_t v1 = read_u32_be(romData.data() + i);
+        uint32_t v2 = read_u32_be(romData.data() + i + 4);
+        if (v1 >= 0x10000 && v1 <= 0x12000 && v2 > v1 && v2 < 0x15000) {
+            tableOffset = i;
+            firstAssetOffset = 0x10CD0; 
+            break;
         }
     }
 
-    // Dynamic Structure Stride Detection
-    // Automatically resolves alignment conflicts between 40-byte and 48-byte manifest formats.
-    uint32_t RECORD_SIZE = 40; 
-    if ((manifestSize - 4) == entryCount * 48) {
-        RECORD_SIZE = 48;
-    } else if ((manifestSize - 4) == entryCount * 40) {
-        RECORD_SIZE = 40;
-    } else {
-        // Fallback mathematically deduced stride
-        RECORD_SIZE = (manifestSize - 4) / entryCount;
+    // Measure table length bounds
+    uint32_t entryCount = 0;
+    uint32_t lastOffset = firstAssetOffset;
+    while (tableOffset + (entryCount * 4) < romData.size()) {
+        uint32_t nextOffset = read_u32_be(romData.data() + tableOffset + (entryCount * 4));
+        if (nextOffset <= lastOffset || nextOffset > romData.size()) break;
+        lastOffset = nextOffset;
+        entryCount++;
     }
 
-    // Guarantee the base target directory tree exists before file handlers are opened
-    char idxPath[512];
-    snprintf(idxPath, sizeof(idxPath), "%s/assets.idx", outDirPath);
-    ensure_directories(idxPath); 
-    
-    FILE* idxFile = fopen(idxPath, "wb");
-    if (!idxFile) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "FATAL: Could not create assets.idx registry file.");
+    if (entryCount == 0) {
+        debug_ui(env, callbackObj, progressMid, "ERROR: Failed to locate ROM File Table.");
+        return;
     }
 
-    uint8_t* recordStart = manifestPtr + 4;
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Found BK Asset Table at 0x%X. Total Files: %u", tableOffset, entryCount);
+
+    uint32_t currentOffset = firstAssetOffset;
     uint32_t successCount = 0;
-    char lastCreatedDir[512] = {0}; 
-    int lastPercentage = -1; 
+    int lastPercentage = -1;
 
     for (uint32_t i = 0; i < entryCount; i++) {
         if (env->PushLocalFrame(16) < 0) break;
 
-        uint8_t* record = recordStart + (i * RECORD_SIZE);
-        uint32_t romOffset = isLittleEndian ? read_u32_le(record + 0) : read_u32_be(record + 0);
-        uint32_t fileSize  = isLittleEndian ? read_u32_le(record + 4) : read_u32_be(record + 4);
+        uint32_t nextOffset = read_u32_be(romData.data() + tableOffset + (i * 4));
+        uint32_t fileSize = nextOffset - currentOffset;
 
-        char fileName[33];
-        for(int j = 0; j < 32; j++) {
-            uint8_t ch = *(record + 8 + j);
-            if (ch >= 0x20 && ch < 0x7F && ch != '\\') {
-                fileName[j] = (char)ch;
-            } else if (ch == '\0') {
-                for(int k = j; k < 32; k++) fileName[k] = '\0';
-                break;
-            } else {
-                fileName[j] = '_';
-            }
-        }
-        fileName[32] = '\0';
-
-        // Allowed fileSize == 0 to pass through so empty/placeholder assets are mapped.
-        if (fileName[0] == '\0') {
-            env->PopLocalFrame(NULL);
-            continue;
-        }
-
-        char fullPath[512];
-        int written = snprintf(fullPath, sizeof(fullPath), "%s/%s", outDirPath, fileName);
-        if (written < 0 || written >= (int)sizeof(fullPath)) {
-            env->PopLocalFrame(NULL);
-            continue;
-        }
-
-        char dirOnly[512];
-        const char* lastSlash = strrchr(fullPath, '/');
-        if (lastSlash) {
-            size_t dirLen = lastSlash - fullPath;
-            if (dirLen < sizeof(dirOnly)) {
-                strncpy(dirOnly, fullPath, dirLen);
-                dirOnly[dirLen] = '\0';
-
-                if (strcmp(dirOnly, lastCreatedDir) != 0) {
-                    ensure_directories(fullPath);
-                    strncpy(lastCreatedDir, dirOnly, sizeof(lastCreatedDir));
-                }
-            }
-        }
-
-        if ((uint64_t)romOffset + (uint64_t)fileSize <= (uint64_t)romData.size()) {
+        // Only decompress and extract if the file holds the Rare 1172 compression magic.
+        // Uncompressed files are safely ignored here to be natively piped by the Resource Manager later.
+        if (fileSize >= 2 && romData[currentOffset] == 0x11 && romData[currentOffset + 1] == 0x72) {
+            uint32_t decompressedSize = 0;
+            uint8_t* outBuf = decompress_rare_asset(romData.data() + currentOffset, fileSize, &decompressedSize);
             
-            // Only process extraction physics if the file holds actual byte weight
-            if (fileSize > 0) {
-                uint8_t* assetPtr = romData.data() + romOffset;
-                uint32_t decompressedSize = 0;
-
-                uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
-
-                uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
-                uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
-
+            if (outBuf) {
+                char fullPath[512];
+                snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, currentOffset);
                 int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                 if (outFd != -1) {
-                    write(outFd, writePtr, writeSize);
+                    write(outFd, outBuf, decompressedSize);
                     close(outFd);
+                    successCount++;
                 }
-                if (finalBuffer) ::free(finalBuffer);
-            } else {
-                // Generate blank touch file for 0-byte assets to fulfill engine requirements
-                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                if (outFd != -1) close(outFd);
-            }
-
-            successCount++;
-
-            // Seamlessly build the map file for the Resource Manager runtime mapping
-            if (idxFile) {
-                fwrite(&romOffset, 4, 1, idxFile);
-                uint8_t nameLen = (uint8_t)strlen(fileName);
-                fwrite(&nameLen, 1, 1, idxFile);
-                fwrite(fileName, 1, nameLen, idxFile);
+                free(outBuf);
             }
         }
+
+        currentOffset = nextOffset;
 
         int percentage = (int)(((i + 1) * 100) / entryCount);
         if (percentage > lastPercentage || i == entryCount - 1) {
             lastPercentage = percentage;
-            jstring jName = env->NewStringUTF(fileName);
+            char uiMsg[64];
+            snprintf(uiMsg, sizeof(uiMsg), "Extracted asset_%08X.bin", currentOffset);
+            jstring jName = env->NewStringUTF(uiMsg);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
-
-            if (env->ExceptionCheck()) env->ExceptionClear(); 
+            if (env->ExceptionCheck()) env->ExceptionClear();
             env->DeleteLocalRef(jName);
         }
 
         env->PopLocalFrame(NULL);
     }
 
-    if (idxFile) fclose(idxFile);
-
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u assets.", successCount);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u compressed assets.", successCount);
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
 }
 
-// --- 5. The JNI Bridge ---
+// --- 4. The JNI Bridge ---
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz, 
@@ -259,41 +180,14 @@ Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz,
                                                       jstring outDir, jstring manifestPath) {
 
     const char* cOutDir = env->GetStringUTFChars(outDir, nullptr);
-    const char* cManifestPath = env->GetStringUTFChars(manifestPath, nullptr);
-
+    
     jclass callbackClass = env->GetObjectClass(callback);
     jmethodID progressMid = env->GetMethodID(callbackClass, "onProgressUpdate", "(ILjava/lang/String;)V");
 
-    if (progressMid == nullptr) {
-        env->ReleaseStringUTFChars(outDir, cOutDir);
-        env->ReleaseStringUTFChars(manifestPath, cManifestPath);
-        return;
+    if (progressMid != nullptr) {
+        // Ignored manifestPath completely. The engine relies solely on the internal ROM filesystem.
+        run_native_otr_generation_internal(env, callback, progressMid, romFd, cOutDir);
     }
 
-    int mfd = open(cManifestPath, O_RDONLY);
-    if (mfd < 0) {
-        debug_ui(env, callback, progressMid, "ERROR: Could not open manifest file on disk.");
-        env->ReleaseStringUTFChars(outDir, cOutDir);
-        env->ReleaseStringUTFChars(manifestPath, cManifestPath);
-        return;
-    }
-
-    struct stat st;
-    fstat(mfd, &st);
-    uint32_t mSize = (uint32_t)st.st_size;
-
-    if (mSize > 0) {
-        uint8_t* mPtr = (uint8_t*)malloc(mSize);
-        if (mPtr != nullptr) {
-            pread(mfd, mPtr, mSize, 0);
-            run_native_otr_generation_internal(env, callback, progressMid, romFd, mPtr, mSize, cOutDir);
-            free(mPtr);
-        } else {
-            debug_ui(env, callback, progressMid, "ERROR: Failed to allocate memory for manifest.");
-        }
-    }
-
-    close(mfd);
     env->ReleaseStringUTFChars(outDir, cOutDir);
-    env->ReleaseStringUTFChars(manifestPath, cManifestPath);
 }
