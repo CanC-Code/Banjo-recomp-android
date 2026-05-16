@@ -12,7 +12,7 @@
 #include <condition_variable>
 
 #include "n64_types.h"
-#include "bka_safe_base.h" // Injected for physical-to-host address translation
+#include "bka_safe_base.h" 
 
 // -------------------------------------------------------------------------
 // HIGH-LEVEL EMULATION NATIVE STRUCTURES
@@ -41,8 +41,6 @@ struct EventRoute {
 // -------------------------------------------------------------------------
 // REGISTRIES & SYNCHRONIZATION (THE GIL)
 // -------------------------------------------------------------------------
-// The N64 Global Interpreter Lock (GIL). 
-// Enforces single-core execution on a multi-core Android processor.
 static std::recursive_mutex s_n64_gil;
 
 static std::unordered_map<OSThread*, NativeThread*> s_threadRegistry;
@@ -59,6 +57,8 @@ extern "C" {
 #include <PR/os_pi.h>
 #include <PR/os_thread.h>
 #include <PR/os_message.h>
+#include <PR/sptask.h>  // Included for OSTask specifications
+#include <PR/os_ai.h>      
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -107,7 +107,6 @@ static void* NativeThreadWrapper(void* arg) {
     NativeThread* nt = static_cast<NativeThread*>(arg);
     LOGI("BKA-HLE: Native Thread ID %d starting execution.", nt->id);
 
-    // Acquire the N64 CPU Lock. Only ONE thread runs N64 logic at a time.
     s_n64_gil.lock();
     nt->entry(nt->arg);
     s_n64_gil.unlock();
@@ -126,7 +125,7 @@ void osStartThread(OSThread *t) {
 }
 
 void osStopThread(OSThread *t) {
-    LOGW("BKA-HLE: osStopThread intercepted. Letting thread wind down natively.");
+    LOGW("BKA-HLE: osStopThread intercepted.");
 }
 
 void osDestroyThread(OSThread *t) {
@@ -138,7 +137,6 @@ void osDestroyThread(OSThread *t) {
 }
 
 void osYieldThread(void) {
-    // Release the N64 CPU lock, yield Android CPU time, and re-acquire.
     s_n64_gil.unlock();
     sched_yield();
     s_n64_gil.lock();
@@ -172,7 +170,6 @@ void osSetEventMesg(OSEvent e, OSMesgQueue *mq, OSMesg msg) {
     LOGI("BKA-HLE: Bound hardware event %d to queue", (int)e);
 }
 
-// Global Trigger to be called by Android Native Bridge (e.g., Virtual VBlank)
 void HLE_TriggerN64Event(int event_id) {
     std::lock_guard<std::mutex> lock(s_eventMutex);
     if (s_eventRegistry.count(event_id)) {
@@ -191,7 +188,6 @@ s32 osSendMesg(OSMesgQueue *mq, OSMesg msg, s32 flag) {
 
     std::unique_lock<std::mutex> lock(nq->mtx);
     if (flag == OS_MESG_BLOCK) {
-        // Yield the GIL so other threads can process while we sleep
         s_n64_gil.unlock();
         nq->cv_send.wait(lock, [nq]() { return nq->buffer.size() < nq->capacity; });
         s_n64_gil.lock();
@@ -222,7 +218,7 @@ s32 osJamMesg(OSMesgQueue *mq, OSMesg msg, s32 flag) {
         if (nq->buffer.size() >= nq->capacity) return -1;
     }
 
-    nq->buffer.push_front(msg); // Jam to front
+    nq->buffer.push_front(msg); 
     mq->validCount = nq->buffer.size();
     nq->cv_recv.notify_one();
     return 0;
@@ -254,43 +250,25 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
 
 /* ============================================================
    4. HLE DMA REDIRECTION
-   Memory-Safe Direct Memory Access Operations via Translation
    ============================================================ */
 
 s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
     if (size == 0) return 0;
 
-    // Resolve structural target regions using the core architecture safety bridge
     uintptr_t host_dram = BKA_TRANSLATE_ADDR((uintptr_t)dramAddr);
     uintptr_t host_dev  = BKA_TRANSLATE_ADDR((uintptr_t)devAddr);
 
-    if (!host_dram || !host_dev) {
-        LOGW("BKA-DMA: High-level translation returned null pointers. DMA Aborted. RAM=%p, Dev=0x%08X", dramAddr, devAddr);
-        return -1;
-    }
+    if (!host_dram || !host_dev) return -1;
 
-    void* src_ptr = nullptr;
-    void* dest_ptr = nullptr;
+    void* src_ptr = (direction == OS_READ) ? reinterpret_cast<void*>(host_dev) : reinterpret_cast<void*>(host_dram);
+    void* dest_ptr = (direction == OS_READ) ? reinterpret_cast<void*>(host_dram) : reinterpret_cast<void*>(host_dev);
 
-    if (direction == OS_READ) { // Cartridge ROM to Main System RDRAM
-        src_ptr  = reinterpret_cast<void*>(host_dev);
-        dest_ptr = reinterpret_cast<void*>(host_dram);
-    } else { // Main System RDRAM back to Cartridge SRAM/Save-space
-        src_ptr  = reinterpret_cast<void*>(host_dram);
-        dest_ptr = reinterpret_cast<void*>(host_dev);
-    }
-
-    // Safety Bounds Verification to guard against memory fault overruns
     uint8_t* ram_base = __atomic_load_n(&gN64_RDRAM, __ATOMIC_ACQUIRE);
     if (dest_ptr >= ram_base && dest_ptr < (ram_base + BKA_RDRAM_ALLOC_SIZE)) {
         size_t space_remaining = (ram_base + BKA_RDRAM_ALLOC_SIZE) - reinterpret_cast<uint8_t*>(dest_ptr);
-        if (size > space_remaining) {
-            LOGW("BKA-DMA: Size limit truncated to fit memory frame allocation allocation! Size=%u, Max=%zu", size, space_remaining);
-            size = space_remaining;
-        }
+        if (size > space_remaining) size = space_remaining;
     }
 
-    // Execute the direct synchronous engine transaction
     memcpy(dest_ptr, src_ptr, size);
     return 0;
 }
@@ -300,7 +278,52 @@ s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramA
 }
 
 /* ============================================================
-   5. GAME ENTRY POINTS & ENGINE DRIVER
+   5. PHASE 8: SAFE AUDIO/VIDEO ENDPOINTS (DROP LOGIC)
+   Prevents queue stagnation by faking instant hardware passes.
+   ============================================================ */
+
+void osSpTaskLoad(OSTask *tp) {
+    // Drop execution payload but preserve validation paths
+}
+
+void osSpTaskStartGo(OSTask *tp) {
+    if (tp == nullptr) return;
+
+    // Extract structural context identifier matching PR/sptask.h rules
+    // M_GFXTASK = 1 (Graphics Display List Processing)
+    // M_AUDTASK = 2 (Audio Command Buffer Processing)
+    if (tp->t.type == M_GFXTASK) {
+        // Echo-signal native scheduler components that rendering completed safely
+        HLE_TriggerN64Event(1); // OS_EVENT_SP (Signal Processor Clean)
+        HLE_TriggerN64Event(3); // OS_EVENT_DP (Display Processor Sync Clean)
+    } 
+    else if (tp->t.type == M_AUDTASK) {
+        HLE_TriggerN64Event(1); // OS_EVENT_SP (Audio Synthesis Pipeline Clean)
+    }
+}
+
+void osSpTaskYield(void) {}
+void* osSpTaskYielded(OSTask *tp) { return nullptr; }
+
+s32 osAiSetNextBuffer(void *bufPtr, u32 size) {
+    if (size == 0 || bufPtr == nullptr) return 0;
+    
+    // Drop the audio bytes into the void for now, but immediately trigger 
+    // OS_EVENT_AI (9) so the libultra Audio Thread continues streaming uninterrupted.
+    HLE_TriggerN64Event(9); 
+    return 0;
+}
+
+u32 osAiGetLength(void) {
+    return 0; // Reports buffer as consumed, allowing immediate feed loops
+}
+
+s32 osAiSetFrequency(u32 frequency) {
+    return 0;
+}
+
+/* ============================================================
+   6. GAME ENTRY POINTS & ENGINE DRIVER
    ============================================================ */
 
 extern void func_80000450(int32_t arg0); 
@@ -324,7 +347,6 @@ void mainLoop(void) {
     LOGI("BKA-STUBS: mainLoop starting.");
     core1_reset();
     static const uint32_t TARGET_FRAME_US = 33333u; 
-    uint32_t frameCount = 0;
 
     while (true) {
         struct timespec ts_start, ts_end;
@@ -341,7 +363,7 @@ void mainLoop(void) {
 }
 
 /* ============================================================
-   6. MISC FALLBACKS
+   7. MISC FALLBACKS
    ============================================================ */
 
 void core1_loadOTR(uint8_t* data, size_t size) {}
