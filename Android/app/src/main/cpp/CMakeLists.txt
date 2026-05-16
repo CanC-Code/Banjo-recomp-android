@@ -37,9 +37,20 @@ if(NOT EXCLUDE_GAME_SRC)
         "${REPO_ROOT}/src/*.cpp"
     )
 
+    # Completely filter out raw MIPS hardware, threading, and message queue implementations.
+    # This forces the linker to use our HLE fiber wrappers.
     set(EXCLUSION_LIST
+        # Hardware & DMA
         "pirawdma.c" "epirawdma.c" "pimgr.c" "vi.c" "vicurrent.c" 
-        "osYield.c" "recvmesg.c" "sendmesg.c" "jammesg.c"
+        
+        # Message Queues & Events
+        "recvmesg.c" "sendmesg.c" "jammesg.c" 
+        "createmesgqueue.c" "seteventmesg.c"
+        
+        # Low-Level OS Threading (MIPS Context Switches)
+        "osYield.c" "createthread.c" "startthread.c" 
+        "stopthread.c" "destroythread.c" "thread.c" 
+        "yieldthread.c" "setthreadpri.c" "getthreadpri.c"
     )
 
     foreach(FILE_PATH ${ALL_GAME_FILES})
