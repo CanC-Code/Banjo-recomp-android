@@ -44,15 +44,14 @@ extern "C" {
     void InitN64Registers(void);
     void HardwareRegs_Shutdown(void);
 
-    // Redirect Target: Secure engine ignition wrapper from emulator/stubs.cpp
+    // Secure engine ignition entry point from emulator/stubs.cpp
     void BKA_StartEngine(void);
     
-    // Core GIL lock cycle hooks exposed from emulator/stubs.cpp
+    // Core GIL scheduler lock context operators from emulator/stubs.cpp
     void BKA_DropEngineLock(void);
     void BKA_ClaimEngineLock(void);
 
-    // Updated signature: The engine dynamically builds assets from the target directory 
-    // without requiring a static manifest buffer.
+    // High-Level Emulation Asset Interface
     void ResourceMgr_Init(const char* assetDir);
 
     // Core engine registration symbols located in the recompiled binary target
@@ -63,13 +62,12 @@ extern "C" {
     void VideoPlugin_OutputFrameTexture(uint32_t hostTextureId);
 
     // Intercept loop inside the game cycle to regulate execution steps
-    // MUST have C linkage to be called from the recompiled MIPS-to-C game thread
     void BKA_FrameSyncHook(void) {
         pthread_mutex_lock(&g_vblankMutex);
         g_vblankRequested = true;
 
         // 1. RELEASE THE ENGINE LOCK before going to sleep.
-        // This unblocks the HLE PI Manager and Audio threads to run on other cores.
+        // This unblocks the background HLE PI Subsystem and Audio workers.
         BKA_DropEngineLock();
 
         // Block the recompiled game thread until the Android screen tick/render swap occurs
@@ -78,7 +76,7 @@ extern "C" {
         }
 
         // 2. RE-ACQUIRE THE ENGINE LOCK immediately upon waking up.
-        // Ensures the main thread safely holds exclusive access to RDRAM once more.
+        // Guarantees this thread regains exclusive access to RDRAM memory mappings.
         BKA_ClaimEngineLock();
 
         pthread_mutex_unlock(&g_vblankMutex);
@@ -102,7 +100,7 @@ void* game_thread_fn(void* arg) {
         }
     }
 
-    // Execute core recompiled engine game logic loops inside the GIL safe-zone
+    // Launch core recompiled game engine inside the GIL safe-zone
     BKA_StartEngine();
 
     LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
@@ -127,15 +125,10 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     g_otrPath = otrPath;
     env->ReleaseStringUTFChars(otrPathStr, otrPath);
 
-    // 1. Initialize N64 Virtual Memory Pools
     InitN64Registers();
-
-    // 2. Initialize Resource Manager for Self-Building OTR Pipeline
-    // No static manifest is passed; the engine scans and builds dynamically.
     ResourceMgr_Init(g_otrPath.c_str());
     LOGI("NativeBridge: Resource Manager activated in Self-Building mode at: %s", g_otrPath.c_str());
 
-    // 3. Spin up the recompiled engine asynchronously on a dedicated runtime thread.
     pthread_t gameThread;
     if (pthread_create(&gameThread, nullptr, game_thread_fn, nullptr) == 0) {
         pthread_detach(gameThread);
@@ -157,7 +150,11 @@ JNIEXPORT void JNICALL
 Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint textureId) {
     if (gN64_RDRAM == nullptr || gN64_Reg_Base == nullptr) return;
 
-    // A: Thread-Safe Controller Mutation Pass
+    // 1. CLAIM THE ENGINE LOCK. 
+    // Freezes the game core instantly to eliminate multi-core data races during sync.
+    BKA_ClaimEngineLock();
+
+    // A: Thread-Safe Controller Mutation Pass under complete GIL coverage
     pthread_mutex_lock(&g_inputMutex);
     gN64_ControllerData[0] = g_inputMirror;
     pthread_mutex_unlock(&g_inputMutex);
@@ -165,7 +162,7 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint t
     // B: Step Engine Clock Signal
     pthread_mutex_lock(&g_vblankMutex);
     if (g_vblankRequested) {
-        // Trigger the internal recompiled microcode scheduler interrupt
+        // Assert register interrupt flags safely
         N64_TriggerVirtualVBlankInterrupt();
         g_vblankRequested = false;
         pthread_cond_signal(&g_vblankCond);
@@ -173,7 +170,12 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint t
     pthread_mutex_unlock(&g_vblankMutex);
 
     // C: Modern Native GPU Buffer Intercept
+    // Guaranteed tear-free because the recompiled engine is stationary during read back.
     VideoPlugin_OutputFrameTexture((uint32_t)textureId);
+
+    // 2. RELEASE THE ENGINE LOCK.
+    // Unblocks the core game engine to resume executing instructions.
+    BKA_DropEngineLock();
 }
 
 // --- 3. Input Conversion Bridge ---
@@ -182,8 +184,6 @@ Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* env, jclass clazz, ji
     pthread_mutex_lock(&g_inputMutex);
 
     g_inputMirror.button = (uint16_t)buttons;
-
-    // Scale input to match the true physical constraints expected by the game logic (Range: -80 to 80)
     g_inputMirror.stick_x = (int8_t)(stickX * 80.0f);
     g_inputMirror.stick_y = (int8_t)(stickY * 80.0f);
     g_inputMirror.errno_val = 0;
