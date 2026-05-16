@@ -67,6 +67,7 @@ extern "C" {
 
 #define LOG_TAG "BKA_STUBS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 
 /* ============================================================
@@ -259,7 +260,14 @@ s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
     uintptr_t host_dram = BKA_TRANSLATE_ADDR((uintptr_t)dramAddr);
     uintptr_t host_dev  = BKA_TRANSLATE_ADDR((uintptr_t)devAddr);
 
-    if (!host_dram || !host_dev) return -1;
+    if (!host_dram || !host_dev) {
+        LOGE("BKA-HLE: FATAL DMA TRAP! Failed to map devAddr: 0x%08X to dramAddr: %p.", devAddr, dramAddr);
+        // Security fallback: Prevent the engine from parsing random host garbage memory
+        if (direction == OS_READ && host_dram) {
+            memset(reinterpret_cast<void*>(host_dram), 0, size);
+        }
+        return -1;
+    }
 
     void* src_ptr = (direction == OS_READ) ? reinterpret_cast<void*>(host_dev) : reinterpret_cast<void*>(host_dram);
     void* dest_ptr = (direction == OS_READ) ? reinterpret_cast<void*>(host_dram) : reinterpret_cast<void*>(host_dev);
@@ -285,19 +293,23 @@ static void* HLE_PiManagerWorker(void* arg) {
     while (true) {
         OSMesg msg = nullptr;
         s32 ret = osRecvMesg(s_hlePiCmdQueue, &msg, OS_MESG_BLOCK);
-        if (ret != 0 || msg == nullptr) continue;
+        
+        // Critical Fix: Prevent absolute GIL starvation if the queue yields errors
+        if (ret != 0 || msg == nullptr) {
+            s_n64_gil.unlock();
+            usleep(1000); // 1ms backoff allows the master game thread to recover
+            s_n64_gil.lock();
+            continue;
+        }
 
         OSIoMesg* ioMsg = reinterpret_cast<OSIoMesg*>(msg);
 
-        // FIX: Map OS_MESG_TYPE values back to hardware OS_READ/OS_WRITE signals.
-        // Prevents the DMA from evaluating all loads as writes and zeroing the ROM buffer.
         s32 direction = OS_READ;
 #ifdef OS_MESG_TYPE_DMAWRITE
         if (ioMsg->hdr.type == OS_MESG_TYPE_DMAWRITE) {
             direction = OS_WRITE;
         }
 #else
-        // Common fallback values for write operations across various Libultra headers
         if (ioMsg->hdr.type == 16 || ioMsg->hdr.type == 2) {
             direction = OS_WRITE;
         }
