@@ -106,17 +106,13 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         return;
     }
 
-    // FIXED: Corrected alignment to 48 bytes to safely absorb 'char type[8]' metadata block.
-    // Prevents severe out-of-bounds shifting across structural layers.
-    const uint32_t RECORD_SIZE = 48; 
-
-    const uint32_t maxPossible = (manifestSize - 4) / RECORD_SIZE;
     uint32_t entryCount = read_u32_le(manifestPtr);
     bool isLittleEndian = true;
 
-    if (entryCount > maxPossible) {
+    // Safety fallback to Big-Endian count detection
+    if (entryCount > (manifestSize - 4) / 40) {
         uint32_t beCount = read_u32_be(manifestPtr);
-        if (beCount <= maxPossible) {
+        if (beCount <= (manifestSize - 4) / 40) {
             entryCount = beCount;
             isLittleEndian = false;
         } else {
@@ -125,10 +121,27 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         }
     }
 
-    // Open a dynamic index registry to completely untether the Resource Manager from static files
+    // Dynamic Structure Stride Detection
+    // Automatically resolves alignment conflicts between 40-byte and 48-byte manifest formats.
+    uint32_t RECORD_SIZE = 40; 
+    if ((manifestSize - 4) == entryCount * 48) {
+        RECORD_SIZE = 48;
+    } else if ((manifestSize - 4) == entryCount * 40) {
+        RECORD_SIZE = 40;
+    } else {
+        // Fallback mathematically deduced stride
+        RECORD_SIZE = (manifestSize - 4) / entryCount;
+    }
+
+    // Guarantee the base target directory tree exists before file handlers are opened
     char idxPath[512];
     snprintf(idxPath, sizeof(idxPath), "%s/assets.idx", outDirPath);
+    ensure_directories(idxPath); 
+    
     FILE* idxFile = fopen(idxPath, "wb");
+    if (!idxFile) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "FATAL: Could not create assets.idx registry file.");
+    }
 
     uint8_t* recordStart = manifestPtr + 4;
     uint32_t successCount = 0;
@@ -156,7 +169,8 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         }
         fileName[32] = '\0';
 
-        if (fileName[0] == '\0' || fileSize == 0) {
+        // Allowed fileSize == 0 to pass through so empty/placeholder assets are mapped.
+        if (fileName[0] == '\0') {
             env->PopLocalFrame(NULL);
             continue;
         }
@@ -184,29 +198,38 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         }
 
         if ((uint64_t)romOffset + (uint64_t)fileSize <= (uint64_t)romData.size()) {
-            uint8_t* assetPtr = romData.data() + romOffset;
-            uint32_t decompressedSize = 0;
+            
+            // Only process extraction physics if the file holds actual byte weight
+            if (fileSize > 0) {
+                uint8_t* assetPtr = romData.data() + romOffset;
+                uint32_t decompressedSize = 0;
 
-            uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
+                uint8_t* finalBuffer = decompress_rare_asset(assetPtr, fileSize, &decompressedSize);
 
-            uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
-            uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
+                uint8_t* writePtr = (finalBuffer != nullptr) ? finalBuffer : assetPtr;
+                uint32_t writeSize = (finalBuffer != nullptr) ? decompressedSize : fileSize;
 
-            int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            if (outFd != -1) {
-                write(outFd, writePtr, writeSize);
-                close(outFd);
-                successCount++;
-
-                // Seamlessly build the map file for the Resource Manager runtime mapping
-                if (idxFile) {
-                    fwrite(&romOffset, 4, 1, idxFile);
-                    uint8_t nameLen = (uint8_t)strlen(fileName);
-                    fwrite(&nameLen, 1, 1, idxFile);
-                    fwrite(fileName, 1, nameLen, idxFile);
+                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                if (outFd != -1) {
+                    write(outFd, writePtr, writeSize);
+                    close(outFd);
                 }
+                if (finalBuffer) ::free(finalBuffer);
+            } else {
+                // Generate blank touch file for 0-byte assets to fulfill engine requirements
+                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                if (outFd != -1) close(outFd);
             }
-            if (finalBuffer) ::free(finalBuffer);
+
+            successCount++;
+
+            // Seamlessly build the map file for the Resource Manager runtime mapping
+            if (idxFile) {
+                fwrite(&romOffset, 4, 1, idxFile);
+                uint8_t nameLen = (uint8_t)strlen(fileName);
+                fwrite(&nameLen, 1, 1, idxFile);
+                fwrite(fileName, 1, nameLen, idxFile);
+            }
         }
 
         int percentage = (int)(((i + 1) * 100) / entryCount);
