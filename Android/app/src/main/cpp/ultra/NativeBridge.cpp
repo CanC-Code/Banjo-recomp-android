@@ -3,7 +3,6 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <string>
-#include <vector>
 #include <cstdio>
 #include <pthread.h>
 #include <unistd.h>
@@ -16,7 +15,6 @@
 
 static JavaVM* g_jvm = nullptr;
 static std::string g_otrPath;
-static std::vector<uint8_t> g_manifestBuf;
 
 // Layout constraints for display sizing
 static int g_surfaceWidth = 320;
@@ -42,16 +40,19 @@ static pthread_mutex_t g_vblankMutex = PTHREAD_MUTEX_INITIALIZER;
 extern "C" {
     extern uint8_t* gN64_RDRAM;
     extern uint32_t* gN64_Reg_Base;
-    
+
     void InitN64Registers(void);
     void HardwareRegs_Shutdown(void);
     void func_80000450(int32_t arg0);
-    void ResourceMgr_Init(const char* assetDir, uint8_t* manifestBuf, uint32_t manifestSize);
     
+    // Updated signature: The engine dynamically builds assets from the target directory 
+    // without requiring a static manifest buffer.
+    void ResourceMgr_Init(const char* assetDir);
+
     // Core engine registration symbols located in the recompiled binary target
     extern BKA_ControllerPad gN64_ControllerData[4];
     void N64_TriggerVirtualVBlankInterrupt(void);
-    
+
     // Modern hardware RDP hook provided by the recompiled rendering plugin wrapper
     void VideoPlugin_OutputFrameTexture(uint32_t hostTextureId);
 
@@ -60,7 +61,7 @@ extern "C" {
     void BKA_FrameSyncHook(void) {
         pthread_mutex_lock(&g_vblankMutex);
         g_vblankRequested = true;
-        
+
         // Block the recompiled game thread until the Android screen tick/render swap occurs
         while (g_vblankRequested) {
             pthread_cond_wait(&g_vblankCond, &g_vblankMutex);
@@ -91,7 +92,6 @@ void* game_thread_fn(void* arg) {
 
     LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
     HardwareRegs_Shutdown();
-    g_manifestBuf.clear();
 
     if (attached && g_jvm != nullptr) {
         g_jvm->DetachCurrentThread();
@@ -112,32 +112,22 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     g_otrPath = otrPath;
     env->ReleaseStringUTFChars(otrPathStr, otrPath);
 
-    std::string mPath = g_otrPath + "/manifest_us.bin";
-    if (access(mPath.c_str(), F_OK) != 0) {
-        mPath = g_otrPath + "/manifest_pal.bin";
-    }
-
-    FILE* f = fopen(mPath.c_str(), "rb");
-    if (!f) {
-        LOGE("NativeBridge: Failed to locate resource asset manifest tracking profiles.");
-        return;
-    }
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    rewind(f);
-
-    g_manifestBuf.resize((size_t)size);
-    fread(g_manifestBuf.data(), 1, (size_t)size, f);
-    fclose(f);
-
+    // 1. Initialize N64 Virtual Memory Pools
     InitN64Registers();
-    ResourceMgr_Init(g_otrPath.c_str(), g_manifestBuf.data(), (uint32_t)size);
 
+    // 2. Initialize Resource Manager for Self-Building OTR Pipeline
+    // No static manifest is passed; the engine scans and builds dynamically.
+    ResourceMgr_Init(g_otrPath.c_str());
+    LOGI("NativeBridge: Resource Manager activated in Self-Building mode at: %s", g_otrPath.c_str());
+
+    // 3. Spin up the recompiled engine asynchronously on a dedicated runtime thread.
     pthread_t gameThread;
     if (pthread_create(&gameThread, nullptr, game_thread_fn, nullptr) == 0) {
         pthread_detach(gameThread);
         LOGI("NativeBridge: Standalone engine thread generated safely.");
+    } else {
+        LOGE("NativeBridge: Failed to create game thread.");
+        HardwareRegs_Shutdown();
     }
 }
 
@@ -177,14 +167,14 @@ Java_com_bkawrapper_NativeBridge_updateTexture(JNIEnv* env, jclass clazz, jint t
 JNIEXPORT void JNICALL 
 Java_com_bkawrapper_NativeBridge_nativeUpdateInput(JNIEnv* env, jclass clazz, jint buttons, jfloat stickX, jfloat stickY) {
     pthread_mutex_lock(&g_inputMutex);
-    
+
     g_inputMirror.button = (uint16_t)buttons;
-    
+
     // Scale input to match the true physical constraints expected by the game logic (Range: -80 to 80)
     g_inputMirror.stick_x = (int8_t)(stickX * 80.0f);
     g_inputMirror.stick_y = (int8_t)(stickY * 80.0f);
     g_inputMirror.errno_val = 0;
-    
+
     pthread_mutex_unlock(&g_inputMutex);
 }
 
