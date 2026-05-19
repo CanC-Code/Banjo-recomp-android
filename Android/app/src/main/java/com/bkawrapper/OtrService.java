@@ -1,4 +1,3 @@
-// File: Android/app/src/main/java/com/bkawrapper/OtrService.java
 package com.bkawrapper;
 
 import android.app.Notification;
@@ -16,10 +15,6 @@ import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 
 public class OtrService extends Service {
 
@@ -54,12 +49,6 @@ public class OtrService extends Service {
 
         String uriString = intent.getStringExtra("uri");
         String outDir    = intent.getStringExtra("outDir");
-        String version   = intent.getStringExtra("version");
-
-        if (version == null || version.isEmpty()) {
-            version = "us"; 
-        }
-        final String finalVersion = version;
 
         startForeground(NOTIFICATION_ID,
             new NotificationCompat.Builder(this, CHANNEL_ID)
@@ -72,7 +61,7 @@ public class OtrService extends Service {
             // Using try-with-resources ensures the ParcelFileDescriptor is closed automatically,
             // preventing memory and file descriptor leaks.
             try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(Uri.parse(uriString), "r")) {
-                
+
                 if (pfd == null) {
                     throw new Exception("Could not open ROM file descriptor.");
                 }
@@ -81,11 +70,8 @@ public class OtrService extends Service {
                 int fd = pfd.getFd();
                 Log.i(TAG, "ROM fd established: " + fd);
 
-                String manifestName = "manifest_" + finalVersion + ".bin";
-                File internalManifest = new File(getFilesDir(), manifestName);
-                copyAssetToDisk(manifestName, internalManifest);
-
-                runNativeOtrGeneration(this, fd, outDir, internalManifest.getAbsolutePath());
+                // Pass an empty string for the manifest path to route strictly into the self-building pipeline.
+                runNativeOtrGeneration(this, fd, outDir, "");
 
                 writeSentinel(outDir);
                 Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
@@ -132,24 +118,6 @@ public class OtrService extends Service {
 
             NotificationManager mgr = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
-        }
-    }
-
-    private void copyAssetToDisk(String assetName, File outFile) throws IOException {
-        // Force delete the old manifest if it exists to ensure the engine always uses 
-        // the correct data from the newly installed APK update.
-        if (outFile.exists()) {
-            outFile.delete();
-        }
-
-        try (InputStream in = getAssets().open(assetName);
-             OutputStream out = new FileOutputStream(outFile)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
-            }
-            Log.i(TAG, "Manifest extracted to filesystem: " + outFile.getAbsolutePath());
         }
     }
 
