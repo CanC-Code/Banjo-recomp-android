@@ -254,38 +254,6 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag) {
    4. HLE DMA REDIRECTION & AUTOMATED PI MANAGER
    ============================================================ */
 
-s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
-    if (size == 0) return 0;
-
-    uintptr_t host_dram = BKA_TRANSLATE_ADDR((uintptr_t)dramAddr);
-    uintptr_t host_dev  = BKA_TRANSLATE_ADDR((uintptr_t)devAddr);
-
-    if (!host_dram || !host_dev) {
-        LOGE("BKA-HLE: FATAL DMA TRAP! Failed to map devAddr: 0x%08X to dramAddr: %p.", devAddr, dramAddr);
-        // Security fallback: Prevent the engine from parsing random host garbage memory
-        if (direction == OS_READ && host_dram) {
-            memset(reinterpret_cast<void*>(host_dram), 0, size);
-        }
-        return -1;
-    }
-
-    void* src_ptr = (direction == OS_READ) ? reinterpret_cast<void*>(host_dev) : reinterpret_cast<void*>(host_dram);
-    void* dest_ptr = (direction == OS_READ) ? reinterpret_cast<void*>(host_dram) : reinterpret_cast<void*>(host_dev);
-
-    uint8_t* ram_base = __atomic_load_n(&gN64_RDRAM, __ATOMIC_ACQUIRE);
-    if (dest_ptr >= ram_base && dest_ptr < (ram_base + BKA_RDRAM_ALLOC_SIZE)) {
-        size_t space_remaining = (ram_base + BKA_RDRAM_ALLOC_SIZE) - reinterpret_cast<uint8_t*>(dest_ptr);
-        if (size > space_remaining) size = space_remaining;
-    }
-
-    memcpy(dest_ptr, src_ptr, size);
-    return 0;
-}
-
-s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramAddr, u32 size) {
-    return osPiRawStartDma(direction, devAddr, dramAddr, size);
-}
-
 static void* HLE_PiManagerWorker(void* arg) {
     LOGI("BKA-HLE: Peripheral Interface (PI) Async Manager Thread Engaged.");
     s_n64_gil.lock();
@@ -293,7 +261,7 @@ static void* HLE_PiManagerWorker(void* arg) {
     while (true) {
         OSMesg msg = nullptr;
         s32 ret = osRecvMesg(s_hlePiCmdQueue, &msg, OS_MESG_BLOCK);
-        
+
         // Critical Fix: Prevent absolute GIL starvation if the queue yields errors
         if (ret != 0 || msg == nullptr) {
             s_n64_gil.unlock();
