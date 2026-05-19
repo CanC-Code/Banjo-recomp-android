@@ -19,6 +19,9 @@ static std::string g_assetDir;
 
 extern "C" {
 
+// CRITICAL FIX: Import the global ROM pointer established by lowlevel_bridge.cpp
+extern uint8_t* gN64_ROM_Base;
+
 /**
  * Initializes the Resource Manager in Absolute Self-Building Mode.
  * No static manifest mapping arrays are required.
@@ -38,7 +41,7 @@ void ResourceMgr_Init(const char* assetDir) {
  * Handles N64 DMA requests by intercepting decompressed targets or falling back to raw ROM.
  */
 void ResourceMgr_HandleDma(void* dramAddr, uint32_t devAddr, uint32_t size) {
-    // CRITICAL CORRECTION: Map using raw addresses first before stripping bits
+    // Mask off the PI domain identifier (0x10000000) to get the absolute ROM offset
     uint32_t relativeRomOffset = devAddr & 0x0FFFFFFF;
 
     char path[512];
@@ -48,7 +51,7 @@ void ResourceMgr_HandleDma(void* dramAddr, uint32_t devAddr, uint32_t size) {
     // Direct match pass (Standard absolute tracking alignment used by extractor)
     snprintf(path, sizeof(path), "%sasset_%08X.bin", g_assetDir.c_str(), relativeRomOffset);
     f = fopen(path, "rb");
-    
+
     if (!f) {
         // Safe secondary check using alternative mapping bounds 
         snprintf(path, sizeof(path), "%sasset_%08X.bin", g_assetDir.c_str(), devAddr);
@@ -67,15 +70,18 @@ void ResourceMgr_HandleDma(void* dramAddr, uint32_t devAddr, uint32_t size) {
     }
 
     if (!fileFound) {
-        // CRITICAL CORRECTION: Clean physical range tracking configuration fallback.
-        // Strip out the base index boundary mask prior to pushing through the address macro translator.
-        uintptr_t cleanRomOffset = (uintptr_t)(devAddr & 0x03FFFFFF);
-        uintptr_t host_dev = BKA_TRANSLATE_ADDR(cleanRomOffset);
-        
-        if (host_dev) {
-            memcpy(dramAddr, reinterpret_cast<void*>(host_dev), size);
+        // CRITICAL CORRECTION: Bypass BKA_TRANSLATE_ADDR for Cartridge reads.
+        // bka_safe_base maps low addresses to RDRAM. We must pull directly from the ROM pool.
+        if (gN64_ROM_Base != nullptr) {
+            // Ensure the DMA request doesn't bleed past the 64MB virtual cartridge limit
+            if (relativeRomOffset + size <= 0x04000000) {
+                memcpy(dramAddr, gN64_ROM_Base + relativeRomOffset, size);
+            } else {
+                LOGE("DMA OOB: Attempted to read past ROM boundary at offset 0x%08X", relativeRomOffset);
+                memset(dramAddr, 0, size);
+            }
         } else {
-            LOGE("DMA FATAL: Asset at absolute address 0x%08X (offset: 0x%08X) missing from storage and memory mapping bounds failed.", devAddr, relativeRomOffset);
+            LOGE("DMA FATAL: rom_base.bin is not mapped, and asset is missing.");
             memset(dramAddr, 0, size);
         }
     }
