@@ -29,7 +29,6 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG              = "BKA-MainActivity";
     private static final int    PICK_ROM_REQUEST = 1001;
 
-    // Name of a sentinel file we write when extraction finishes successfully.
     private static final String SENTINEL_FILENAME = "extraction_complete";
 
     private View        menuOverlay;
@@ -40,14 +39,10 @@ public class MainActivity extends AppCompatActivity {
 
     private GLSurfaceView glSurfaceView;
 
-    // Load native library early to prevent UnsatisfiedLinkError during boot sequence
     static {
         System.loadLibrary("bkawrapper");
     }
 
-    // -----------------------------------------------------------------------
-    // Broadcast receiver – listens for progress/completion from OtrService
-    // -----------------------------------------------------------------------
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -74,23 +69,15 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    // -----------------------------------------------------------------------
-    // Activity lifecycle
-    // -----------------------------------------------------------------------
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         if (hasExtractionCompleted()) {
-            // Assets are already on disk — go straight to the game
-            Log.i(TAG, "Extraction sentinel found — skipping ROM selection");
+            Log.i(TAG, "Extraction sentinel and base ROM verified — skipping ROM selection");
             bootGameEngine();
         } else {
-            // First run: show ROM selection menu
             setContentView(R.layout.activity_main);
-
-            // Neutralize any uninitialized GLSurfaceView in the XML to prevent surfaceCreated crashes
             neutralizeXmlGLSurfaceView((ViewGroup) findViewById(android.R.id.content));
 
             menuOverlay         = findViewById(R.id.menu_overlay);
@@ -110,36 +97,32 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(OtrService.ACTION_OTR_PROGRESS);
         filter.addAction(OtrService.ACTION_OTR_COMPLETE);
         filter.addAction(OtrService.ACTION_OTR_ERROR);
-        LocalBroadcastManager.getInstance(this)
-                             .registerReceiver(progressReceiver, filter);
+        LocalBroadcastManager.getInstance(this).registerReceiver(progressReceiver, filter);
 
-        if (glSurfaceView != null) {
-            glSurfaceView.onResume();
-        }
+        if (glSurfaceView != null) glSurfaceView.onResume();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        LocalBroadcastManager.getInstance(this)
-                             .unregisterReceiver(progressReceiver);
-        if (glSurfaceView != null) {
-            glSurfaceView.onPause();
-        }
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(progressReceiver);
+        if (glSurfaceView != null) glSurfaceView.onPause();
     }
 
-    // -----------------------------------------------------------------------
-    // Extraction-complete sentinel
-    // -----------------------------------------------------------------------
-
+    // CRITICAL CORRECTION: Do not trust the sentinel file alone. Verify the C++ 
+    // engine actually dropped the required physical payload.
     private boolean hasExtractionCompleted() {
         File sentinel = new File(getFilesDir(), SENTINEL_FILENAME);
-        return sentinel.exists();
+        File romBase  = new File(getFilesDir(), "rom_base.bin");
+        
+        if (sentinel.exists() && (!romBase.exists() || romBase.length() < 4096)) {
+            Log.w(TAG, "False sentinel detected (Silent Abort). Wiping corrupt state.");
+            sentinel.delete();
+            romBase.delete();
+            return false;
+        }
+        return sentinel.exists() && romBase.exists();
     }
-
-    // -----------------------------------------------------------------------
-    // UI safeguards
-    // -----------------------------------------------------------------------
 
     private void neutralizeXmlGLSurfaceView(ViewGroup group) {
         if (group == null) return;
@@ -147,15 +130,11 @@ public class MainActivity extends AppCompatActivity {
             View child = group.getChildAt(i);
             if (child instanceof GLSurfaceView) {
                 GLSurfaceView dummy = (GLSurfaceView) child;
-                // Upgraded to 3 to match engine expectations and avoid mixed-context states
                 dummy.setEGLContextClientVersion(3);
                 dummy.setRenderer(new GLSurfaceView.Renderer() {
-                    @Override
-                    public void onSurfaceCreated(GL10 gl, EGLConfig config) {}
-                    @Override
-                    public void onSurfaceChanged(GL10 gl, int width, int height) {}
-                    @Override
-                    public void onDrawFrame(GL10 gl) {}
+                    @Override public void onSurfaceCreated(GL10 gl, EGLConfig config) {}
+                    @Override public void onSurfaceChanged(GL10 gl, int width, int height) {}
+                    @Override public void onDrawFrame(GL10 gl) {}
                 });
                 dummy.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
             } else if (child instanceof ViewGroup) {
@@ -163,10 +142,6 @@ public class MainActivity extends AppCompatActivity {
             }
         }
     }
-
-    // -----------------------------------------------------------------------
-    // ROM picker
-    // -----------------------------------------------------------------------
 
     public void openFilePicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -178,21 +153,15 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PICK_ROM_REQUEST
-                && resultCode == RESULT_OK
-                && data != null) {
-
+        if (requestCode == PICK_ROM_REQUEST && resultCode == RESULT_OK && data != null) {
             Uri romUri = data.getData();
             if (romUri != null) {
-                // Grant persistable permissions to prevent security exception when backgrounding app
-                final int takeFlags = data.getFlags()
-                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                final int takeFlags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                 try {
                     getContentResolver().takePersistableUriPermission(romUri, takeFlags);
                 } catch (SecurityException e) {
                     Log.w(TAG, "Could not take persistable permissions, proceeding with temporary", e);
                 }
-
                 startExtraction(romUri);
             }
         }
@@ -205,13 +174,8 @@ public class MainActivity extends AppCompatActivity {
         Intent serviceIntent = new Intent(this, OtrService.class);
         serviceIntent.putExtra("uri",    romUri.toString());
         serviceIntent.putExtra("outDir", getFilesDir().getAbsolutePath());
-        // Can add version parameter here if UI supports it, defaults to "us" in service
         startService(serviceIntent);
     }
-
-    // -----------------------------------------------------------------------
-    // UI helpers
-    // -----------------------------------------------------------------------
 
     private void updateUI(int percent, String fileName) {
         if (progressBar         != null) progressBar.setProgress(percent);
@@ -220,12 +184,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleExtractionComplete() {
-        // The service now handles writing the sentinel file natively once successful.
-        // This prevents the application from entering a crash loop if it fails midway.
-        if (currentArtifactText != null) {
-            currentArtifactText.setText("Booting Banjo-Kazooie...");
-        }
-
+        if (currentArtifactText != null) currentArtifactText.setText("Booting Banjo-Kazooie...");
         if (otrContainer != null) {
             otrContainer.postDelayed(() -> {
                 otrContainer.setVisibility(View.GONE);
@@ -239,30 +198,18 @@ public class MainActivity extends AppCompatActivity {
     private void handleExtractionError(String message) {
         if (otrContainer  != null) otrContainer.setVisibility(View.GONE);
         if (menuOverlay   != null) menuOverlay.setVisibility(View.VISIBLE);
-        Toast.makeText(this,
-                       "Extraction failed: " + message,
-                       Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Extraction failed: " + message, Toast.LENGTH_LONG).show();
     }
-
-    // -----------------------------------------------------------------------
-    // Game boot
-    // -----------------------------------------------------------------------
 
     private void bootGameEngine() {
         final String assetDir    = getFilesDir().getAbsolutePath();
         final AssetManager mgr   = getAssets();
 
         glSurfaceView = new GLSurfaceView(this);
-        
-        // 1. Upgrade to OpenGL ES 3.0 context for modern shader support
         glSurfaceView.setEGLContextClientVersion(3);
-        
-        // 2. Explicitly define Red, Green, Blue, Alpha (8 bits each), Depth (24 bits), and Stencil (8 bits)
         glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 24, 8);
-        
-        // 3. Prevent the mobile OS from destroying the EGL context when backgrounded
         glSurfaceView.setPreserveEGLContextOnPause(true);
-        
+
         glSurfaceView.setRenderer(new GLRenderer(this, assetDir, mgr));
         glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
 
