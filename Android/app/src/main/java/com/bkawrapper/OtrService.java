@@ -15,10 +15,6 @@ import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 
 public class OtrService extends Service {
 
@@ -52,12 +48,6 @@ public class OtrService extends Service {
 
         String uriString = intent.getStringExtra("uri");
         String outDir    = intent.getStringExtra("outDir");
-        String version   = intent.getStringExtra("version");
-
-        if (version == null || version.isEmpty()) {
-            version = "us"; 
-        }
-        final String finalVersion = version;
 
         startForeground(NOTIFICATION_ID,
             new NotificationCompat.Builder(this, CHANNEL_ID)
@@ -76,13 +66,9 @@ public class OtrService extends Service {
                 int fd = pfd.getFd();
                 Log.i(TAG, "ROM fd established: " + fd);
 
-                String manifestName = "manifest_" + finalVersion + ".bin";
-                File internalManifest = new File(getFilesDir(), manifestName);
-                copyAssetToDisk(manifestName, internalManifest);
-
-                // Run C++ generator. If it fails, onProgressUpdate will throw a RuntimeException 
-                // and break us out of this try-block before writeSentinel executes.
-                runNativeOtrGeneration(this, fd, outDir, internalManifest.getAbsolutePath());
+                // The architecture is absolutely self-building. We no longer rely on 
+                // a manifest.bin map from the assets folder. Pass an empty string.
+                runNativeOtrGeneration(this, fd, outDir, "");
 
                 writeSentinel(outDir);
                 Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
@@ -91,7 +77,6 @@ public class OtrService extends Service {
             } catch (Exception e) {
                 Log.e(TAG, "Extraction failed", e);
                 
-                // Scrub any partial state so the user can cleanly retry
                 File sentinel = new File(outDir, SENTINEL_FILENAME);
                 if (sentinel.exists()) sentinel.delete();
 
@@ -108,7 +93,6 @@ public class OtrService extends Service {
     }
 
     public void onProgressUpdate(int percent, String status) {
-        // CRITICAL CORRECTION: Bridge C++ logic failures to hard Java aborts.
         if (status != null && status.startsWith("ERROR")) {
             throw new RuntimeException("C++ Pipeline Abort: " + status);
         }
@@ -136,22 +120,6 @@ public class OtrService extends Service {
 
             NotificationManager mgr = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
-        }
-    }
-
-    private void copyAssetToDisk(String assetName, File outFile) throws IOException {
-        if (outFile.exists()) {
-            outFile.delete();
-        }
-
-        try (InputStream in = getAssets().open(assetName);
-             OutputStream out = new FileOutputStream(outFile)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
-            }
-            Log.i(TAG, "Manifest extracted to filesystem: " + outFile.getAbsolutePath());
         }
     }
 
