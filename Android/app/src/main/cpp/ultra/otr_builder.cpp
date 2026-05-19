@@ -92,21 +92,30 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     normalize_entire_rom(romData, format);
     ensure_directories(outDirPath);
 
-    // Dynamic ASetup Pattern Scanner
-    uint32_t tableOffset = 0x5E98; // Default US 1.0 Table
+    // CRITICAL CORRECTION: Robust identification pattern scanner loop
+    uint32_t tableOffset = 0x5E98; // Fallback hard baseline for US v1.0
     uint32_t firstAssetOffset = 0x10CD0; 
+    bool foundTable = false;
 
-    for (uint32_t i = 0x5000; i < 0x8000; i += 4) {
-        uint32_t v1 = read_u32_be(romData.data() + i);
-        uint32_t v2 = read_u32_be(romData.data() + i + 4);
-        if (v1 >= 0x10000 && v1 <= 0x12000 && v2 > v1 && v2 < 0x15000) {
+    for (uint32_t i = 0x5000; i < 0xA000; i += 4) {
+        uint32_t entry1 = read_u32_be(romData.data() + i);
+        uint32_t entry2 = read_u32_be(romData.data() + i + 4);
+        uint32_t entry3 = read_u32_be(romData.data() + i + 8);
+        
+        // Validate sequential strict progression bounds unique to asset tables
+        if (entry1 >= 0x10000 && entry2 > entry1 && entry3 > entry2 && entry3 < 0x20000) {
             tableOffset = i;
-            firstAssetOffset = 0x10CD0; 
+            firstAssetOffset = entry1;
+            foundTable = true;
             break;
         }
     }
 
-    // Measure table length bounds
+    if (!foundTable) {
+        __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "Scanner missed valid structure bounds. Relying on default offsets.");
+    }
+
+    // Measure table length bounds cleanly
     uint32_t entryCount = 0;
     uint32_t lastOffset = firstAssetOffset;
     while (tableOffset + (entryCount * 4) < romData.size()) {
@@ -133,22 +142,24 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         uint32_t nextOffset = read_u32_be(romData.data() + tableOffset + (i * 4));
         uint32_t fileSize = nextOffset - currentOffset;
 
-        // Only decompress and extract if the file holds the Rare 1172 compression magic.
-        // Uncompressed files are safely ignored here to be natively piped by the Resource Manager later.
-        if (fileSize >= 2 && romData[currentOffset] == 0x11 && romData[currentOffset + 1] == 0x72) {
-            uint32_t decompressedSize = 0;
-            uint8_t* outBuf = decompress_rare_asset(romData.data() + currentOffset, fileSize, &decompressedSize);
-            
-            if (outBuf) {
-                char fullPath[512];
-                snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, currentOffset);
-                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                if (outFd != -1) {
-                    write(outFd, outBuf, decompressedSize);
-                    close(outFd);
-                    successCount++;
+        // Ensure current offset doesn't exceed array index boundaries
+        if (currentOffset + fileSize <= romData.size() && fileSize >= 2) {
+            // Only decompress and extract if the file holds the Rare 1172 compression magic.
+            if (romData[currentOffset] == 0x11 && romData[currentOffset + 1] == 0x72) {
+                uint32_t decompressedSize = 0;
+                uint8_t* outBuf = decompress_rare_asset(romData.data() + currentOffset, fileSize, &decompressedSize);
+
+                if (outBuf) {
+                    char fullPath[512];
+                    snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, currentOffset);
+                    int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                    if (outFd != -1) {
+                        write(outFd, outBuf, decompressedSize);
+                        close(outFd);
+                        successCount++;
+                    }
+                    free(outBuf);
                 }
-                free(outBuf);
             }
         }
 
@@ -180,12 +191,11 @@ Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz,
                                                       jstring outDir, jstring manifestPath) {
 
     const char* cOutDir = env->GetStringUTFChars(outDir, nullptr);
-    
+
     jclass callbackClass = env->GetObjectClass(callback);
     jmethodID progressMid = env->GetMethodID(callbackClass, "onProgressUpdate", "(ILjava/lang/String;)V");
 
     if (progressMid != nullptr) {
-        // Ignored manifestPath completely. The engine relies solely on the internal ROM filesystem.
         run_native_otr_generation_internal(env, callback, progressMid, romFd, cOutDir);
     }
 
