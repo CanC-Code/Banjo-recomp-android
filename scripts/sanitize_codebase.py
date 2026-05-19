@@ -185,7 +185,7 @@ extern uint8_t* gN64_RDRAM;
 extern uint32_t* gN64_Reg_Base;
 extern uint32_t* gN64_PIF_Base;
 
-extern void InitN64Registers(void);
+extern void InitN64Registers(const char* assetDir);
 
 #ifdef __cplusplus
 }
@@ -756,7 +756,7 @@ def apply_android_memory_routing(content: str, filename: str) -> str:
         # Scope Detection: Block modifications inside global array initialization maps
         if '=' in line and '{' in line and not any(k in line for k in ['if', 'for', 'while']):
             in_global_array = True
-        
+
         if in_global_array:
             patched_lines.append(line)
             if '}' in line and ';' in line:
