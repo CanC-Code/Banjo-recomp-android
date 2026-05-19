@@ -46,7 +46,7 @@ extern "C" {
 
     // Secure engine ignition entry point from emulator/stubs.cpp
     void BKA_StartEngine(void);
-    
+
     // Core GIL scheduler lock context operators from emulator/stubs.cpp
     void BKA_DropEngineLock(void);
     void BKA_ClaimEngineLock(void);
@@ -100,8 +100,15 @@ void* game_thread_fn(void* arg) {
         }
     }
 
+    // CRITICAL CORRECTION: Secure the global engine lock BEFORE engine ignition.
+    // This protects sub-allocations and startup procedures from immediate GL data races.
+    BKA_ClaimEngineLock();
+
     // Launch core recompiled game engine inside the GIL safe-zone
     BKA_StartEngine();
+
+    // Release the engine synchronization lock post-execution loop exit
+    BKA_DropEngineLock();
 
     LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
     HardwareRegs_Shutdown();
