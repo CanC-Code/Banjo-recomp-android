@@ -76,12 +76,12 @@ public class OtrService extends Service {
                 int fd = pfd.getFd();
                 Log.i(TAG, "ROM fd established: " + fd);
 
-                // RESTORED: Move the manifest out of the APK assets folder into internal storage for C++ to read
                 String manifestName = "manifest_" + finalVersion + ".bin";
                 File internalManifest = new File(getFilesDir(), manifestName);
                 copyAssetToDisk(manifestName, internalManifest);
 
-                // Pass the actual file path into the native generator
+                // Run C++ generator. If it fails, onProgressUpdate will throw a RuntimeException 
+                // and break us out of this try-block before writeSentinel executes.
                 runNativeOtrGeneration(this, fd, outDir, internalManifest.getAbsolutePath());
 
                 writeSentinel(outDir);
@@ -90,6 +90,11 @@ public class OtrService extends Service {
 
             } catch (Exception e) {
                 Log.e(TAG, "Extraction failed", e);
+                
+                // Scrub any partial state so the user can cleanly retry
+                File sentinel = new File(outDir, SENTINEL_FILENAME);
+                if (sentinel.exists()) sentinel.delete();
+
                 Intent err = new Intent(ACTION_OTR_ERROR);
                 err.putExtra("message", e.getMessage());
                 LocalBroadcastManager.getInstance(this).sendBroadcast(err);
@@ -103,6 +108,10 @@ public class OtrService extends Service {
     }
 
     public void onProgressUpdate(int percent, String status) {
+        // CRITICAL CORRECTION: Bridge C++ logic failures to hard Java aborts.
+        if (status != null && status.startsWith("ERROR")) {
+            throw new RuntimeException("C++ Pipeline Abort: " + status);
+        }
         updateOtrProgress(percent, status);
     }
 
