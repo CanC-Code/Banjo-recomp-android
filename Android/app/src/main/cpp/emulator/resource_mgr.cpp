@@ -7,7 +7,6 @@
 #include <android/log.h>
 #include <string>
 
-// Correctly include the macro and inline functions for memory translation
 #include "bka_safe_base.h"
 
 #define LOG_TAG "ResourceMgr"
@@ -19,12 +18,11 @@ static std::string g_assetDir;
 
 extern "C" {
 
-// CRITICAL FIX: Import the global ROM pointer established by lowlevel_bridge.cpp
-extern uint8_t* gN64_ROM_Base;
+// CRITICAL FIX: Define the ROM pointer here. It will be dynamically populated on boot.
+uint8_t* gN64_ROM_Base = nullptr;
 
 /**
  * Initializes the Resource Manager in Absolute Self-Building Mode.
- * No static manifest mapping arrays are required.
  */
 void ResourceMgr_Init(const char* assetDir) {
     if (!assetDir) return;
@@ -35,6 +33,33 @@ void ResourceMgr_Init(const char* assetDir) {
     }
 
     LOGI("ResourceMgr: Activated in Absolute Self-Building Mode at %s", g_assetDir.c_str());
+
+    // Dynamically allocate and load the raw ROM so fallback DMA has real data to read
+    char romPath[512];
+    snprintf(romPath, sizeof(romPath), "%srom_base.bin", g_assetDir.c_str());
+    FILE* f = fopen(romPath, "rb");
+    
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        size_t romSize = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        // Prevent memory leaks if the Activity restarts and re-initializes the bridge
+        if (gN64_ROM_Base) {
+            free(gN64_ROM_Base);
+        }
+
+        gN64_ROM_Base = static_cast<uint8_t*>(malloc(romSize));
+        if (gN64_ROM_Base) {
+            fread(gN64_ROM_Base, 1, romSize, f);
+            LOGI("ResourceMgr: Successfully loaded rom_base.bin (%zu bytes) into contiguous memory.", romSize);
+        } else {
+            LOGE("ResourceMgr: FATAL - Memory allocation failed for ROM buffer.");
+        }
+        fclose(f);
+    } else {
+        LOGE("ResourceMgr: FATAL - Could not find rom_base.bin at %s", romPath);
+    }
 }
 
 /**
@@ -48,7 +73,7 @@ void ResourceMgr_HandleDma(void* dramAddr, uint32_t devAddr, uint32_t size) {
     bool fileFound = false;
     FILE* f = nullptr;
 
-    // Direct match pass (Standard absolute tracking alignment used by extractor)
+    // Direct match pass
     snprintf(path, sizeof(path), "%sasset_%08X.bin", g_assetDir.c_str(), relativeRomOffset);
     f = fopen(path, "rb");
 
@@ -70,8 +95,6 @@ void ResourceMgr_HandleDma(void* dramAddr, uint32_t devAddr, uint32_t size) {
     }
 
     if (!fileFound) {
-        // CRITICAL CORRECTION: Bypass BKA_TRANSLATE_ADDR for Cartridge reads.
-        // bka_safe_base maps low addresses to RDRAM. We must pull directly from the ROM pool.
         if (gN64_ROM_Base != nullptr) {
             // Ensure the DMA request doesn't bleed past the 64MB virtual cartridge limit
             if (relativeRomOffset + size <= 0x04000000) {
