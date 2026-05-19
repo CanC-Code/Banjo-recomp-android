@@ -100,7 +100,6 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     normalize_entire_rom(romData, format);
     ensure_directories(outDirPath);
 
-    // Read the Python-generated Binary Manifest
     FILE* manifestFile = fopen(manifestPath, "rb");
     if (!manifestFile) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Failed to open manifest at %s", manifestPath);
@@ -129,41 +128,58 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             break;
         }
 
-        // CRITICAL FIX: Force strict null-termination to prevent JNI garbage string crashes
         entry.name[31] = '\0';
         entry.type[7]  = '\0';
 
-        // CRITICAL FIX: ONLY attempt decompression if Splat flagged this file as a raw binary asset ('bin')
-        if (strncmp(entry.type, "bin", 3) == 0 && entry.offset + entry.size <= romData.size() && entry.size >= 2) {
+        // Process only if the offset falls safely within the loaded ROM buffer boundaries
+        if (entry.offset + entry.size <= romData.size() && entry.size > 0) {
             
-            // Check for Rare 1172 magic bytes
-            if (romData[entry.offset] == 0x11 && romData[entry.offset + 1] == 0x72) {
-                uint32_t decompressedSize = 0;
-                uint8_t* outBuf = decompress_rare_asset(romData.data() + entry.offset, entry.size, &decompressedSize);
+            uint32_t outputSize = 0;
+            uint8_t* outBuf = nullptr;
+            bool isCompressed = false;
 
-                if (outBuf) {
-                    char fullPath[512];
-                    snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, entry.offset);
-                    
-                    int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                    if (outFd != -1) {
-                        write(outFd, outBuf, decompressedSize);
-                        close(outFd);
-                        successCount++;
-                    } else {
-                        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "File Write Failed: %s (%s)", fullPath, strerror(errno));
-                    }
-                    free(outBuf);
+            // Strict Filter: Prevent the Rare LZ77 decompressor from attacking C/Assembly machine code
+            if (strncmp(entry.type, "c", 1) != 0 && strncmp(entry.type, "s", 1) != 0 && strncmp(entry.type, "bss", 3) != 0) {
+                if (entry.size >= 2 && romData[entry.offset] == 0x11 && romData[entry.offset + 1] == 0x72) {
+                    isCompressed = true;
                 }
+            }
+
+            if (isCompressed) {
+                outBuf = decompress_rare_asset(romData.data() + entry.offset, entry.size, &outputSize);
+            }
+
+            // Fallback: If it's an uncompressed .bin or the decompression pipeline failed, extract the raw bytes.
+            // This is required to populate the disk for ResourceMgr since the in-memory gN64_ROM_Base is voided.
+            if (!outBuf) {
+                outputSize = entry.size;
+                outBuf = (uint8_t*)malloc(outputSize);
+                if (outBuf) {
+                    memcpy(outBuf, romData.data() + entry.offset, outputSize);
+                }
+            }
+
+            if (outBuf) {
+                char fullPath[512];
+                snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, entry.offset);
+                
+                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                if (outFd != -1) {
+                    write(outFd, outBuf, outputSize);
+                    close(outFd);
+                    successCount++;
+                } else {
+                    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "File Write Failed: %s (%s)", fullPath, strerror(errno));
+                }
+                free(outBuf);
             }
         }
 
-        // Updated string to "Processed" since we actively skip saving non-bin files to save space
         int percentage = (int)(((i + 1) * 100) / entryCount);
         if (percentage > lastPercentage || i == entryCount - 1) {
             lastPercentage = percentage;
             char uiMsg[64];
-            snprintf(uiMsg, sizeof(uiMsg), "Processed %s", entry.name);
+            snprintf(uiMsg, sizeof(uiMsg), "Extracted %s", entry.name);
             
             jstring jName = env->NewStringUTF(uiMsg);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
@@ -175,7 +191,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     }
 
     fclose(manifestFile);
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u compressed assets.", successCount);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Written %u assets to disk.", successCount);
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
 }
 
