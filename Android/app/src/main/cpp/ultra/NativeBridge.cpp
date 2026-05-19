@@ -37,7 +37,6 @@ extern "C" {
     extern uint8_t* gN64_RDRAM;
     extern uint32_t* gN64_Reg_Base;
 
-    // Modified signature to pass asset path to memory allocator
     void InitN64Registers(const char* assetDir);
     void HardwareRegs_Shutdown(void);
 
@@ -83,9 +82,16 @@ void* game_thread_fn(void* arg) {
         }
     }
 
-    BKA_ClaimEngineLock();
+    // CRITICAL FIX: Do not double-lock here. BKA_StartEngine handles the GIL itself.
     BKA_StartEngine();
-    BKA_DropEngineLock();
+
+    // CRITICAL FIX: The Banjo-Kazooie bootloader spawns POSIX threads for the OS and 
+    // then returns. We MUST prevent this master thread from advancing and destroying the 
+    // memory mappings while the spawned game threads are actively trying to run.
+    LOGI("NativeBridge: Boot sequence complete. Entering background suspension.");
+    while (true) {
+        usleep(100000); // 100ms idle sleep to keep memory mappings alive indefinitely
+    }
 
     LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
     HardwareRegs_Shutdown();
@@ -109,7 +115,6 @@ Java_com_bkawrapper_NativeBridge_nativeGameBoot(JNIEnv* env, jclass clazz, jstri
     g_otrPath = otrPath;
     env->ReleaseStringUTFChars(otrPathStr, otrPath);
 
-    // CRITICAL CORRECTION: Pass the extraction path to the memory initializer
     InitN64Registers(g_otrPath.c_str());
     ResourceMgr_Init(g_otrPath.c_str());
     LOGI("NativeBridge: Resource Manager activated at: %s", g_otrPath.c_str());
