@@ -15,6 +15,10 @@ import androidx.core.app.NotificationCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 public class OtrService extends Service {
 
@@ -28,7 +32,6 @@ public class OtrService extends Service {
     public static final String ACTION_OTR_COMPLETE = "OTR_COMPLETE";
     public static final String ACTION_OTR_ERROR    = "OTR_ERROR";
 
-    // Throttle mechanism to prevent Android OS from killing the app due to notification spam
     private long lastNotificationTime = 0;
 
     static {
@@ -49,6 +52,12 @@ public class OtrService extends Service {
 
         String uriString = intent.getStringExtra("uri");
         String outDir    = intent.getStringExtra("outDir");
+        String version   = intent.getStringExtra("version");
+
+        if (version == null || version.isEmpty()) {
+            version = "us"; 
+        }
+        final String finalVersion = version;
 
         startForeground(NOTIFICATION_ID,
             new NotificationCompat.Builder(this, CHANNEL_ID)
@@ -58,20 +67,22 @@ public class OtrService extends Service {
                 .build());
 
         new Thread(() -> {
-            // Using try-with-resources ensures the ParcelFileDescriptor is closed automatically,
-            // preventing memory and file descriptor leaks.
             try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(Uri.parse(uriString), "r")) {
 
                 if (pfd == null) {
                     throw new Exception("Could not open ROM file descriptor.");
                 }
 
-                // Use getFd() instead of detachFd() so Java retains ownership and closes it safely.
                 int fd = pfd.getFd();
                 Log.i(TAG, "ROM fd established: " + fd);
 
-                // Pass an empty string for the manifest path to route strictly into the self-building pipeline.
-                runNativeOtrGeneration(this, fd, outDir, "");
+                // RESTORED: Move the manifest out of the APK assets folder into internal storage for C++ to read
+                String manifestName = "manifest_" + finalVersion + ".bin";
+                File internalManifest = new File(getFilesDir(), manifestName);
+                copyAssetToDisk(manifestName, internalManifest);
+
+                // Pass the actual file path into the native generator
+                runNativeOtrGeneration(this, fd, outDir, internalManifest.getAbsolutePath());
 
                 writeSentinel(outDir);
                 Log.i(TAG, "Extraction complete — broadcasting OTR_COMPLETE");
@@ -96,13 +107,11 @@ public class OtrService extends Service {
     }
 
     public void updateOtrProgress(int percent, String status) {
-        // Always broadcast to the UI immediately (this is lightweight and safe)
         Intent intent = new Intent(ACTION_OTR_PROGRESS);
         intent.putExtra("percent", percent);
         intent.putExtra("status",  status);
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
 
-        // Throttle the heavy OS Notification to update only once every 500ms
         long now = System.currentTimeMillis();
         if (now - lastNotificationTime >= 500 || percent == 100 || percent == 0) {
             lastNotificationTime = now;
@@ -118,6 +127,22 @@ public class OtrService extends Service {
 
             NotificationManager mgr = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (mgr != null) mgr.notify(NOTIFICATION_ID, notification);
+        }
+    }
+
+    private void copyAssetToDisk(String assetName, File outFile) throws IOException {
+        if (outFile.exists()) {
+            outFile.delete();
+        }
+
+        try (InputStream in = getAssets().open(assetName);
+             OutputStream out = new FileOutputStream(outFile)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            Log.i(TAG, "Manifest extracted to filesystem: " + outFile.getAbsolutePath());
         }
     }
 
