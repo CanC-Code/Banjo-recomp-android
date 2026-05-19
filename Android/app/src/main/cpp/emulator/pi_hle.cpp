@@ -19,12 +19,19 @@ s32 osPiRawStartDma(s32 direction, u32 devAddr, void *dramAddr, u32 size) {
 }
 
 /**
+ * Extended Raw PI DMA
+ */
+s32 osEPiRawStartDma(OSPiHandle *handle, s32 direction, u32 devAddr, void *dramAddr, u32 size) {
+    return osPiRawStartDma(direction, devAddr, dramAddr, size);
+}
+
+/**
  * Standard PI DMA
  * Uses the explicit message queue passed by the game.
  */
 s32 osPiStartDma(OSIoMesg *mb, s32 priority, s32 direction, 
                  u32 devAddr, void *dramAddr, u32 size, OSMesgQueue *mq) {
-    
+
     osPiRawStartDma(direction, devAddr, dramAddr, size);
 
     // Notify the game thread that data is ready
