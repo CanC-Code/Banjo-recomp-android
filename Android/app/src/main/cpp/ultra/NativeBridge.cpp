@@ -82,12 +82,18 @@ void* game_thread_fn(void* arg) {
         }
     }
 
-    // CRITICAL FIX: Removed BKA_ClaimEngineLock() & BKA_DropEngineLock()
-    // BKA_StartEngine() already claims the GIL internally. Doubling it caused a recursive 
-    // deadlock that permanently froze the Android OpenGL thread during VBlank.
     BKA_StartEngine();
 
-    LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
+    // CRITICAL FIX: The bootloader has returned, but the asynchronous game threads 
+    // are now alive in the background. We must block this host thread forever 
+    // to prevent it from reaching HardwareRegs_Shutdown() and wiping the RDRAM.
+    LOGI("NativeBridge: Bootloader finished. Engine is now alive. Securing runtime environment...");
+    
+    while (true) {
+        sleep(1000); // Sleep indefinitely (Android will safely claim memory when the app process is closed)
+    }
+
+    // Unreachable Code
     HardwareRegs_Shutdown();
 
     if (attached && g_jvm != nullptr) {
