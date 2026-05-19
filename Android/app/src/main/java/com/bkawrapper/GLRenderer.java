@@ -23,12 +23,7 @@ public class GLRenderer implements GLSurfaceView.Renderer {
     private final String assetDir;
     private final AssetManager mgr;
 
-    // CRITICAL FIX: Make this static. C++ game engines typically cannot survive 
-    // a second boot in the same process memory space. This prevents double-booting 
-    // when Android recreates the Activity (e.g., on screen rotation).
     private static boolean engineBooted = false;
-    
-    // Gatekeeper to prevent native rendering before the viewport is established
     private boolean isSurfaceReady = false;
 
     public GLRenderer(Context context, String assetDir, AssetManager mgr) {
@@ -37,19 +32,10 @@ public class GLRenderer implements GLSurfaceView.Renderer {
         this.mgr = mgr;
     }
 
-    // -----------------------------------------------------------------------
-    // GLSurfaceView.Renderer callbacks — all called on the GL thread
-    // -----------------------------------------------------------------------
-
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         Log.i(TAG, "onSurfaceCreated: GL context ready");
-
-        // Set a black clear colour so we don't get garbage on first frame
         GLES20.glClearColor(0f, 0f, 0f, 1f);
-        
-        // Note: NativeBridge.surfaceReady is deferred to onSurfaceChanged 
-        // to ensure the C++ engine receives the true device resolution.
     }
 
     @Override
@@ -61,15 +47,15 @@ public class GLRenderer implements GLSurfaceView.Renderer {
         NativeBridge.surfaceReady(width, height);
         isSurfaceReady = true;
 
-        // Run the blocking game loop on a dedicated background thread.
         // Protected by the static flag so it only runs once per app process.
         if (!engineBooted) {
             engineBooted = true;
-            new Thread(() -> {
-                Log.i(TAG, "Game thread starting — assetDir=" + assetDir);
-                NativeBridge.nativeGameBoot(assetDir, mgr);
-                Log.w(TAG, "nativeGameBoot returned — game has exited");
-            }, "BKA-GameThread").start();
+            Log.i(TAG, "Game thread starting — assetDir=" + assetDir);
+            
+            // CRITICAL FIX: Removed the unnecessary Java Thread wrapper. 
+            // nativeGameBoot safely spawns its own detached C++ pthread, so calling 
+            // it here is perfectly non-blocking and prevents transient thread GC crashes.
+            NativeBridge.nativeGameBoot(assetDir, mgr);
         }
     }
 
