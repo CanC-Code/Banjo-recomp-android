@@ -129,9 +129,14 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             break;
         }
 
-        // Safety bound check
-        if (entry.offset + entry.size <= romData.size() && entry.size >= 2) {
-            // Only decompress files that have the Rare 1172 magic header
+        // CRITICAL FIX: Force strict null-termination to prevent JNI garbage string crashes
+        entry.name[31] = '\0';
+        entry.type[7]  = '\0';
+
+        // CRITICAL FIX: ONLY attempt decompression if Splat flagged this file as a raw binary asset ('bin')
+        if (strncmp(entry.type, "bin", 3) == 0 && entry.offset + entry.size <= romData.size() && entry.size >= 2) {
+            
+            // Check for Rare 1172 magic bytes
             if (romData[entry.offset] == 0x11 && romData[entry.offset + 1] == 0x72) {
                 uint32_t decompressedSize = 0;
                 uint8_t* outBuf = decompress_rare_asset(romData.data() + entry.offset, entry.size, &decompressedSize);
@@ -153,11 +158,13 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
             }
         }
 
+        // Updated string to "Processed" since we actively skip saving non-bin files to save space
         int percentage = (int)(((i + 1) * 100) / entryCount);
         if (percentage > lastPercentage || i == entryCount - 1) {
             lastPercentage = percentage;
             char uiMsg[64];
-            snprintf(uiMsg, sizeof(uiMsg), "Extracted %s", entry.name);
+            snprintf(uiMsg, sizeof(uiMsg), "Processed %s", entry.name);
+            
             jstring jName = env->NewStringUTF(uiMsg);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
             if (env->ExceptionCheck()) env->ExceptionClear();
