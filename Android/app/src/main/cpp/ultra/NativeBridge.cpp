@@ -82,16 +82,10 @@ void* game_thread_fn(void* arg) {
         }
     }
 
-    // CRITICAL FIX: Do not double-lock here. BKA_StartEngine handles the GIL itself.
+    // CRITICAL FIX: Removed BKA_ClaimEngineLock() & BKA_DropEngineLock()
+    // BKA_StartEngine() already claims the GIL internally. Doubling it caused a recursive 
+    // deadlock that permanently froze the Android OpenGL thread during VBlank.
     BKA_StartEngine();
-
-    // CRITICAL FIX: The Banjo-Kazooie bootloader spawns POSIX threads for the OS and 
-    // then returns. We MUST prevent this master thread from advancing and destroying the 
-    // memory mappings while the spawned game threads are actively trying to run.
-    LOGI("NativeBridge: Boot sequence complete. Entering background suspension.");
-    while (true) {
-        usleep(100000); // 100ms idle sleep to keep memory mappings alive indefinitely
-    }
 
     LOGI("NativeBridge: Core engine closed cleanly. Releasing runtime memory tables.");
     HardwareRegs_Shutdown();
