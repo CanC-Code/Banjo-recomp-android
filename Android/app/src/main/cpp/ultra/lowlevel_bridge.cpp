@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <android/log.h>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <stdint.h>
 
@@ -20,17 +21,18 @@
 #define MI_INTR_VI            0x08
 
 // Instantiate the global translation pointers defined as externs by the sanitizer
-uint8_t*  gN64_RDRAM    = nullptr;
+uint8_t* gN64_RDRAM    = nullptr;
 uint32_t* gN64_Reg_Base = nullptr;
 uint32_t* gN64_PIF_Base = nullptr;
-uint8_t*  gN64_ROM_Base = nullptr;
+uint8_t* gN64_ROM_Base = nullptr;
 
 extern "C" {
 
     // Forward declaration of the native event routing bridge from emulator/stubs.cpp
     void HLE_TriggerN64Event(int event_id);
 
-    void InitN64Registers() {
+    // Signature updated to capture the dynamic asset path string
+    void InitN64Registers(const char* assetDir) {
         // Idempotency guard: Prevent double allocation if called repeatedly
         if (gN64_RDRAM != nullptr && gN64_Reg_Base != nullptr && 
             gN64_PIF_Base != nullptr && gN64_ROM_Base != nullptr) {
@@ -98,17 +100,24 @@ extern "C" {
         memset(gN64_PIF_Base, 0, N64_PIF_SPACE_SIZE);
         memset(gN64_ROM_Base, 0, N64_ROM_SPACE_SIZE);
 
-        // Mock Cartridge Header Injection: 
-        // Banjo-Kazooie bootloader validates the Game ID at offset 0x3B.
-        // 'N', 'B', 'K', 'E' (US version identity).
-        gN64_ROM_Base[0x3B] = 'N';
-        gN64_ROM_Base[0x3C] = 'B';
-        gN64_ROM_Base[0x3D] = 'K';
-        gN64_ROM_Base[0x3E] = 'E';
-
-        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, 
-            "Memory Engine Stabilized: RDRAM=%p, Reg=%p, PIF=%p, ROM=%p", 
-            gN64_RDRAM, gN64_Reg_Base, gN64_PIF_Base, gN64_ROM_Base);
+        // CRITICAL CORRECTION: Map the physical ROM base dumped by the OTR Builder directly 
+        // into the emulated cartridge memory block so raw PI Subsystem reads succeed.
+        char romPath[512];
+        snprintf(romPath, sizeof(romPath), "%s/rom_base.bin", assetDir);
+        
+        FILE* f = fopen(romPath, "rb");
+        if (f) {
+            fread(gN64_ROM_Base, 1, N64_ROM_SPACE_SIZE, f);
+            fclose(f);
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Memory Engine Stabilized: physical ROM mapped from %s.", romPath);
+        } else {
+            // Safe fallback if the dump is somehow missing or unreadable
+            __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "WARNING: rom_base.bin missing, fallback memory will be zeroed.");
+            gN64_ROM_Base[0x3B] = 'N';
+            gN64_ROM_Base[0x3C] = 'B';
+            gN64_ROM_Base[0x3D] = 'K';
+            gN64_ROM_Base[0x3E] = 'E';
+        }
     }
 
     void HardwareRegs_Shutdown() {
