@@ -84,7 +84,7 @@ uint8_t* gN64_RDRAM    = s_N64_RDRAM;
 uint32_t* gN64_Reg_Base = (uint32_t*)s_N64_Reg_Memory;
 uint32_t* gN64_PIF_Base = (uint32_t*)s_N64_PIF_Memory;
 
-void InitN64Registers() {
+void InitN64Registers(const char* /*assetDir*/) {
     // Already initialized via static assignment above.
 }
 
