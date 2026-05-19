@@ -11,7 +11,6 @@
 
 #define LOG_TAG "BKA_OTR"
 
-// --- 1. Manifest Struct matching Python Generator ---
 #pragma pack(push, 1)
 struct ManifestEntry {
     uint32_t offset;
@@ -21,7 +20,6 @@ struct ManifestEntry {
 };
 #pragma pack(pop)
 
-// --- 2. Endianness Window Logic ---
 enum RomFormat { FORMAT_Z64, FORMAT_N64, FORMAT_V64, FORMAT_UNKNOWN };
 
 static RomFormat detect_format_from_buffer(const uint8_t* magic) {
@@ -45,7 +43,6 @@ static void normalize_entire_rom(std::vector<uint8_t>& data, RomFormat format) {
     }
 }
 
-// --- 3. Visual Debugger Helper ---
 void debug_ui(JNIEnv* env, jobject callbackObj, jmethodID progressMid, const char* msg) {
     if (!env || !callbackObj || !progressMid) return;
     jstring jMsg = env->NewStringUTF(msg);
@@ -70,7 +67,6 @@ void ensure_directories(const char* path) {
     }
 }
 
-// --- 4. Manifest-Driven Extraction Engine ---
 void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmethodID progressMid,
                                         int romFd, const char* outDirPath, const char* manifestPath) {
 
@@ -99,6 +95,16 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
 
     normalize_entire_rom(romData, format);
     ensure_directories(outDirPath);
+
+    // CRITICAL CORRECTION: Dump the normalized base ROM to the asset directory.
+    // This allows the runtime engine to map the file into gN64_ROM_Base for physical boot DMA requests.
+    char romOutPath[512];
+    snprintf(romOutPath, sizeof(romOutPath), "%s/rom_base.bin", outDirPath);
+    int rFd = open(romOutPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (rFd != -1) {
+        write(rFd, romData.data(), romData.size());
+        close(rFd);
+    }
 
     FILE* manifestFile = fopen(manifestPath, "rb");
     if (!manifestFile) {
@@ -131,47 +137,26 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         entry.name[31] = '\0';
         entry.type[7]  = '\0';
 
-        // Process only if the offset falls safely within the loaded ROM buffer boundaries
-        if (entry.offset + entry.size <= romData.size() && entry.size > 0) {
+        if (strncmp(entry.type, "bin", 3) == 0 && entry.offset + entry.size <= romData.size() && entry.size >= 2) {
             
-            uint32_t outputSize = 0;
-            uint8_t* outBuf = nullptr;
-            bool isCompressed = false;
+            if (romData[entry.offset] == 0x11 && romData[entry.offset + 1] == 0x72) {
+                uint32_t decompressedSize = 0;
+                uint8_t* outBuf = decompress_rare_asset(romData.data() + entry.offset, entry.size, &decompressedSize);
 
-            // Strict Filter: Prevent the Rare LZ77 decompressor from attacking C/Assembly machine code
-            if (strncmp(entry.type, "c", 1) != 0 && strncmp(entry.type, "s", 1) != 0 && strncmp(entry.type, "bss", 3) != 0) {
-                if (entry.size >= 2 && romData[entry.offset] == 0x11 && romData[entry.offset + 1] == 0x72) {
-                    isCompressed = true;
-                }
-            }
-
-            if (isCompressed) {
-                outBuf = decompress_rare_asset(romData.data() + entry.offset, entry.size, &outputSize);
-            }
-
-            // Fallback: If it's an uncompressed .bin or the decompression pipeline failed, extract the raw bytes.
-            // This is required to populate the disk for ResourceMgr since the in-memory gN64_ROM_Base is voided.
-            if (!outBuf) {
-                outputSize = entry.size;
-                outBuf = (uint8_t*)malloc(outputSize);
                 if (outBuf) {
-                    memcpy(outBuf, romData.data() + entry.offset, outputSize);
+                    char fullPath[512];
+                    snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, entry.offset);
+                    
+                    int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                    if (outFd != -1) {
+                        write(outFd, outBuf, decompressedSize);
+                        close(outFd);
+                        successCount++;
+                    } else {
+                        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "File Write Failed: %s (%s)", fullPath, strerror(errno));
+                    }
+                    free(outBuf);
                 }
-            }
-
-            if (outBuf) {
-                char fullPath[512];
-                snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, entry.offset);
-                
-                int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                if (outFd != -1) {
-                    write(outFd, outBuf, outputSize);
-                    close(outFd);
-                    successCount++;
-                } else {
-                    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "File Write Failed: %s (%s)", fullPath, strerror(errno));
-                }
-                free(outBuf);
             }
         }
 
@@ -179,7 +164,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         if (percentage > lastPercentage || i == entryCount - 1) {
             lastPercentage = percentage;
             char uiMsg[64];
-            snprintf(uiMsg, sizeof(uiMsg), "Extracted %s", entry.name);
+            snprintf(uiMsg, sizeof(uiMsg), "Processed %s", entry.name);
             
             jstring jName = env->NewStringUTF(uiMsg);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
@@ -191,11 +176,10 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     }
 
     fclose(manifestFile);
-    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Written %u assets to disk.", successCount);
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Extraction complete. Processed %u compressed assets.", successCount);
     debug_ui(env, callbackObj, progressMid, "Extraction Complete! Booting...");
 }
 
-// --- 5. The JNI Bridge ---
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_bkawrapper_OtrService_runNativeOtrGeneration(JNIEnv* env, jobject thiz, 
