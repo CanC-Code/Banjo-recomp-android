@@ -52,13 +52,23 @@ static uint32_t read_u32_be(const uint8_t* ptr) {
             (uint32_t)ptr[3];
 }
 
+// CRITICAL CORRECTION: Robust path building ensuring the final leaf node is always created
 void ensure_directories(const char* path) {
     char tmp[512];
-    int i = 0;
-    while(path[i] != '\0' && i < 511) { tmp[i] = path[i]; i++; }
-    tmp[i] = '\0';
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    size_t len = strlen(tmp);
+    
+    // Append a trailing slash if missing so the tokenizer catches the final directory
+    if (len > 0 && tmp[len - 1] != '/') {
+        strncat(tmp, "/", sizeof(tmp) - len - 1);
+    }
+    
     for (char* p = tmp + 1; *p; p++) {
-        if (*p == '/') { *p = 0; mkdir(tmp, 0777); *p = '/'; }
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0777); // EEXIST is safely ignored natively
+            *p = '/';
+        }
     }
 }
 
@@ -92,7 +102,7 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
     normalize_entire_rom(romData, format);
     ensure_directories(outDirPath);
 
-    // CRITICAL CORRECTION: Robust identification pattern scanner loop
+    // Dynamic ASetup Pattern Scanner
     uint32_t tableOffset = 0x5E98; // Fallback hard baseline for US v1.0
     uint32_t firstAssetOffset = 0x10CD0; 
     bool foundTable = false;
@@ -115,12 +125,16 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
         __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "Scanner missed valid structure bounds. Relying on default offsets.");
     }
 
-    // Measure table length bounds cleanly
+    // CRITICAL CORRECTION: Correct table measurement algorithm starting at zero.
     uint32_t entryCount = 0;
-    uint32_t lastOffset = firstAssetOffset;
+    uint32_t lastOffset = 0; // Fixed: Do not initialize to firstAssetOffset
+    
     while (tableOffset + (entryCount * 4) < romData.size()) {
         uint32_t nextOffset = read_u32_be(romData.data() + tableOffset + (entryCount * 4));
-        if (nextOffset <= lastOffset || nextOffset > romData.size()) break;
+        
+        // Table ends when padding begins or pointers regress backwards
+        if (nextOffset < lastOffset || nextOffset > romData.size() || nextOffset == 0) break;
+        
         lastOffset = nextOffset;
         entryCount++;
     }
@@ -132,44 +146,51 @@ void run_native_otr_generation_internal(JNIEnv* env, jobject callbackObj, jmetho
 
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Found BK Asset Table at 0x%X. Total Files: %u", tableOffset, entryCount);
 
-    uint32_t currentOffset = firstAssetOffset;
     uint32_t successCount = 0;
     int lastPercentage = -1;
 
-    for (uint32_t i = 0; i < entryCount; i++) {
+    // CRITICAL CORRECTION: Iterate to entryCount - 1 so we can peek ahead at the next pointer
+    // This accurately dictates the fileSize constraint for the current offset pointer.
+    for (uint32_t i = 0; i < entryCount - 1; i++) {
         if (env->PushLocalFrame(16) < 0) break;
 
-        uint32_t nextOffset = read_u32_be(romData.data() + tableOffset + (i * 4));
-        uint32_t fileSize = nextOffset - currentOffset;
+        uint32_t currentAssetOffset = read_u32_be(romData.data() + tableOffset + (i * 4));
+        uint32_t nextAssetOffset    = read_u32_be(romData.data() + tableOffset + ((i + 1) * 4));
+        
+        if (nextAssetOffset < currentAssetOffset) {
+            env->PopLocalFrame(NULL);
+            break; 
+        }
 
-        // Ensure current offset doesn't exceed array index boundaries
-        if (currentOffset + fileSize <= romData.size() && fileSize >= 2) {
-            // Only decompress and extract if the file holds the Rare 1172 compression magic.
-            if (romData[currentOffset] == 0x11 && romData[currentOffset + 1] == 0x72) {
+        uint32_t fileSize = nextAssetOffset - currentAssetOffset;
+
+        if (currentAssetOffset + fileSize <= romData.size() && fileSize >= 2) {
+            if (romData[currentAssetOffset] == 0x11 && romData[currentAssetOffset + 1] == 0x72) {
                 uint32_t decompressedSize = 0;
-                uint8_t* outBuf = decompress_rare_asset(romData.data() + currentOffset, fileSize, &decompressedSize);
+                uint8_t* outBuf = decompress_rare_asset(romData.data() + currentAssetOffset, fileSize, &decompressedSize);
 
                 if (outBuf) {
                     char fullPath[512];
-                    snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, currentOffset);
+                    snprintf(fullPath, sizeof(fullPath), "%s/asset_%08X.bin", outDirPath, currentAssetOffset);
+                    
                     int outFd = open(fullPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                     if (outFd != -1) {
                         write(outFd, outBuf, decompressedSize);
                         close(outFd);
                         successCount++;
+                    } else {
+                        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "File Write Failed: %s (%s)", fullPath, strerror(errno));
                     }
                     free(outBuf);
                 }
             }
         }
 
-        currentOffset = nextOffset;
-
-        int percentage = (int)(((i + 1) * 100) / entryCount);
-        if (percentage > lastPercentage || i == entryCount - 1) {
+        int percentage = (int)(((i + 1) * 100) / (entryCount - 1));
+        if (percentage > lastPercentage || i == entryCount - 2) {
             lastPercentage = percentage;
             char uiMsg[64];
-            snprintf(uiMsg, sizeof(uiMsg), "Extracted asset_%08X.bin", currentOffset);
+            snprintf(uiMsg, sizeof(uiMsg), "Extracted asset_%08X.bin", currentAssetOffset);
             jstring jName = env->NewStringUTF(uiMsg);
             env->CallVoidMethod(callbackObj, progressMid, percentage, jName);
             if (env->ExceptionCheck()) env->ExceptionClear();
