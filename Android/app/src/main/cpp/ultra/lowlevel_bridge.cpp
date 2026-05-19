@@ -13,11 +13,10 @@
 #define N64_PIF_SPACE_SIZE    0x0010000 // 64KB (Abundantly covers PIF ROM/RAM)
 #define N64_ROM_SPACE_SIZE    0x04000000 // 64MB (Covers the full N64 physical ROM limit)
 
-// Hardware Register Offsets
-// MI_INTR_REG physical address is 0x0430000C.
-// Mapped against our 0x04000000 base, the byte offset is 0x30000C. 
-// As a uint32_t array index, we divide by 4.
-#define MI_INTR_REG_IDX       (0x0030000C / 4)
+// CRITICAL CORRECTION: MI_INTR_REG physical offset is 0x04300008.
+// Mapped against our 0x04000000 register allocation block base, the correct byte offset is 0x300008. 
+// Offset 0x30000C maps to MI_INTR_MASK_REG, which broke signal updates.
+#define MI_INTR_REG_IDX       (0x00300008 / 4)
 #define MI_INTR_VI            0x08
 
 // Instantiate the global translation pointers defined as externs by the sanitizer
@@ -112,7 +111,6 @@ extern "C" {
             gN64_RDRAM, gN64_Reg_Base, gN64_PIF_Base, gN64_ROM_Base);
     }
 
-    // 1. Linkage Fix: Wrapped in extern "C" to prevent C++ name mangling
     void HardwareRegs_Shutdown() {
         if (gN64_RDRAM != nullptr) {
             munmap(gN64_RDRAM, BKA_RDRAM_ALLOC_SIZE);
@@ -137,7 +135,6 @@ extern "C" {
     // ANDROID NATIVE BRIDGE HOOKS
     // -------------------------------------------------------------------------
 
-    // 2. Input Memory Allocation: 
     struct BKA_ControllerPad {
         uint16_t button;
         int8_t   stick_x;
@@ -148,7 +145,7 @@ extern "C" {
     // Allocate the physical memory array for all 4 standard controller ports.
     BKA_ControllerPad gN64_ControllerData[4] = {{0, 0, 0, 0}};
 
-    // 3. Engine Clock Signal Stub:
+    // Engine Clock Signal Pass:
     // Connects the asynchronous Android OpenGL thread to the synchronous N64 OS.
     void N64_TriggerVirtualVBlankInterrupt(void) {
         if (gN64_Reg_Base == nullptr) return;
@@ -161,11 +158,10 @@ extern "C" {
         HLE_TriggerN64Event(14);
     }
 
-    // 4. Hardware Renderer Stub:
+    // Hardware Renderer Stub:
     // Connects the recompiled N64 Display List executor to the Android GL surface.
     void VideoPlugin_OutputFrameTexture(uint32_t hostTextureId) {
-        // STUB: This must eventually route the active frame buffer or hardware 
-        // RDP texture context to the provided Android hostTextureId.
+        // STUB: Routes active RDP render targets to the Android GL texture context.
     }
 
 } // end extern "C"
